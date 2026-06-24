@@ -24,26 +24,21 @@ import {
   TableCell,
   TableHead,
   TableRow,
+  TablePagination,
   Typography,
   TextField,
   LinearProgress,
-  Drawer,
-  IconButton,
-  Divider,
-  Tooltip,
-  Switch,
-  FormControlLabel,
 } from "@mui/material";
 import {
   Activity,
   Layers,
   Coins,
   TrendingUp,
+  ArrowUp,
+  ArrowDown,
   Wallet,
   History,
   Sliders,
-  Radar,
-  X,
   RefreshCw,
   Zap,
 } from "lucide-react";
@@ -67,6 +62,7 @@ type Position = {
   price_current: number;
   profit: number;
   magic: number;
+  contract_size?: number;
 };
 
 type HistoryDeal = {
@@ -96,6 +92,18 @@ type ScanResult = {
   confidence: number;
   price: number;
   summary: string;
+};
+
+type Recommendation = {
+  symbol: string;
+  timeframe: string;
+  price: number;
+  action: string;
+  confidence: number;
+  stop_loss?: number | null;
+  take_profit?: number | null;
+  suggested_lot?: number | null;
+  summary?: string;
 };
 
 async function api(path: string, opts?: RequestInit) {
@@ -130,7 +138,7 @@ const actionColor = (a?: string): "success" | "error" | "default" =>
   a === "BUY" ? "success" : a === "SELL" ? "error" : "default";
 
 const actionLabel = (a?: string) =>
-  a === "BUY" ? "ซื้อ" : a === "SELL" ? "ขาย" : a || "รอ";
+  a === "BUY" ? "Long" : a === "SELL" ? "Short" : a || "รอ";
 
 const entryLabel = (entry?: string) =>
   entry === "IN" ? "เข้า" : entry === "OUT" ? "ออก" : entry || "—";
@@ -154,72 +162,22 @@ function SectionTitle({ icon, children }: { icon: React.ReactNode; children: Rea
   );
 }
 
-const TRADINGVIEW_USD_CRYPTO: Record<string, string> = {
-  BTC: "COINBASE:BTCUSD",
-  ETH: "COINBASE:ETHUSD",
-  SOL: "COINBASE:SOLUSD",
-  XRP: "COINBASE:XRPUSD",
-  LTC: "COINBASE:LTCUSD",
-  DOGE: "COINBASE:DOGEUSD",
+
+
+
+const isCryptoSymbol = (sym: string) => {
+  const s = sym.toUpperCase();
+  return /BTC|ETH|SOL|XRP|LTC|DOGE|ADA|DOT|LINK|AVAX|SHIB|UNI|LUNA|ALGO|BCH|XLM|ATOM|ICP|FIL|HBAR|XTZ|GRT|AAVE|MKR|THETA|FTM|BNB|DYDX|OP|ARB|NEAR|TIA|SUI|SEI|APT|RNDR|INJ|FET|AGIX|OCEAN|JUP|WIF|BONK|FLOKI|PEPE/i.test(s)
+    || ((s.endsWith("USD") || s.endsWith("USDT")) && s.length >= 6 && !/^(EUR|GBP|AUD|NZD|CAD|CHF|HKD|SGD|ZAR|MXN|NOK|SEK|DKK|TRY|CNH|RUB|XAU|XAG|XPD|XPT)/.test(s));
 };
 
-const CRYPTO_BASES = [
-  "BTC", "ETH", "SOL", "XRP", "LTC", "DOGE", "ADA", "DOT", "LINK", "AVAX",
-  "SHIB", "UNI", "ALGO", "BCH", "XLM", "ATOM", "ICP", "FIL", "HBAR", "XTZ",
-  "GRT", "AAVE", "MKR", "THETA", "FTM", "BNB", "DYDX", "OP", "ARB", "NEAR",
-  "TIA", "SUI", "SEI", "APT", "RNDR", "INJ", "FET", "AGIX", "OCEAN", "JUP",
-  "WIF", "BONK", "FLOKI", "PEPE",
-];
+const isMetalSymbol = (sym: string) => {
+  return /GOLD|SILVER|XAU|XAG|PLATINUM|PALLADIUM/i.test(sym);
+};
 
-function tradingViewCryptoSymbol(symbol: string) {
-  const clean = symbol.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  const base = CRYPTO_BASES.find((asset) => clean.startsWith(asset) || clean.includes(asset));
-  if (!base) return `BINANCE:${clean}`;
-  return TRADINGVIEW_USD_CRYPTO[base] ?? `BINANCE:${base}USDT`;
-}
-
-function TradingViewWidget({ symbol }: { symbol: string }) {
-  const container = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!container.current) return;
-    
-    container.current.innerHTML = "";
-
-    const script = document.createElement("script");
-    script.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
-    script.type = "text/javascript";
-    script.async = true;
-
-    const tvSymbol = tradingViewCryptoSymbol(symbol);
-
-    script.innerHTML = JSON.stringify({
-      width: "100%",
-      height: 540,
-      symbol: tvSymbol,
-      interval: "15",
-      timezone: "Etc/UTC",
-      theme: "dark",
-      style: "1",
-      locale: "th_TH",
-      enable_publishing: false,
-      allow_symbol_change: false,
-      calendar: false,
-      support_host: "https://www.tradingview.com"
-    });
-    
-    container.current.appendChild(script);
-  }, [symbol]);
-
-  return (
-    <Box
-      ref={container}
-      className="tradingview-widget-container"
-      sx={{ height: 540, width: "100%", overflow: "hidden", border: "1px solid rgba(255, 255, 255, 0.05)" }}
-    />
-  );
-}
-
+const isForexSymbol = (sym: string) => {
+  return /^[A-Z]{6}$/i.test(sym) && !isCryptoSymbol(sym) && !isMetalSymbol(sym);
+};
 
 export default function CryptoPage() {
   const toastr = useToastr();
@@ -229,45 +187,47 @@ export default function CryptoPage() {
   const [positions, setPositions] = useState<Position[]>([]);
   const [symbols, setSymbols] = useState<string[]>([]);
   const [cryptoSymbol, setCryptoSymbol] = useState("");
-  const [cryptoTick, setCryptoTick] = useState<{ bid: number; ask: number; last: number; time: number } | null>(null);
-  const [cryptoTickLoading, setCryptoTickLoading] = useState(false);
-  const [cryptoTickError, setCryptoTickError] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [ticks, setTicks] = useState<Record<string, { bid: number; ask: number; last: number; time: number; error?: string }>>({});
+  const [tickDirections, setTickDirections] = useState<Record<string, { bid: "up" | "down" | "flat"; ask: "up" | "down" | "flat"; lastUpdated: number }>>({});
   const [closingTicket, setClosingTicket] = useState<number | null>(null);
   const [closeCandidate, setCloseCandidate] = useState<Position | null>(null);
   const [settingsData, setSettingsData] = useState<any>(null);
   const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // Coin screener drawer
-  const [scanOpen, setScanOpen] = useState(false);
+  // Coin screener scores
   const [scanResults, setScanResults] = useState<ScanResult[]>([]);
   const [scanLoading, setScanLoading] = useState(false);
-  const [scanShowAll, setScanShowAll] = useState(false);
-  const [scanAt, setScanAt] = useState<Date | null>(null);
 
-  // Manual "analyze & trade" flow (stage via /api/analyze, confirm via /api/confirm)
+  // Manual "analyze & trade" flow
   const [tradeStagingSymbol, setTradeStagingSymbol] = useState<string | null>(null);
-  const [tradeCandidate, setTradeCandidate] = useState<{ rec: any; pending: any } | null>(null);
-  const [tradeConfirming, setTradeConfirming] = useState(false);
+  const [tradeConfirm, setTradeConfirm] = useState<Recommendation | null>(null);
+  const [tradeExecuting, setTradeExecuting] = useState(false);
 
-  // Advanced Crypto-specific settings form
   const [settingsForm, setSettingsForm] = useState<any>({
     position_sizing_mode: "risk_pct",
     max_open_trades: 5,
     stake_amount: 0.0,
     atr_sl_mult: 1.5,
     default_rr: 2.0,
-    require_confirm: true,
+    bot_enabled: true,
     use_ai: false,
     auto_trade_interval: 60,
     strategy: "ema_macd_rsi",
     magic: 556677
   });
   const [savingSettings, setSavingSettings] = useState(false);
+  const [cryptoInput, setCryptoInput] = useState("");
+  const [nonCryptoInput, setNonCryptoInput] = useState("");
+  const [detectingCryptoSymbols, setDetectingCryptoSymbols] = useState(false);
 
   // Realized Transaction History
   const [tradeHistory, setTradeHistory] = useState<HistoryDeal[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyPage, setHistoryPage] = useState(0);
+  const [historyRowsPerPage, setHistoryRowsPerPage] = useState(10);
 
   const connectedRef = useRef<boolean | null>(null);
   useEffect(() => {
@@ -317,13 +277,16 @@ export default function CryptoPage() {
     api("settings")
       .then((data) => {
         setSettingsData(data);
+        const allSyms = data.symbols ? data.symbols.split(",").map((s: string) => s.trim().toUpperCase()).filter(Boolean) : [];
+        setCryptoInput(allSyms.filter(isCryptoSymbol).join(", "));
+        setNonCryptoInput(allSyms.filter((s: string) => !isCryptoSymbol(s)).join(", "));
         setSettingsForm({
           position_sizing_mode: data.position_sizing_mode || "risk_pct",
           max_open_trades: data.max_open_trades ?? 5,
           stake_amount: data.stake_amount ?? 0.0,
           atr_sl_mult: data.atr_sl_mult ?? 1.5,
           default_rr: data.default_rr ?? 2.0,
-          require_confirm: data.require_confirm ?? true,
+          bot_enabled: data.bot_enabled ?? true,
           use_ai: data.use_ai ?? false,
           auto_trade_interval: data.auto_trade_interval ?? 60,
           strategy: data.strategy || "ema_macd_rsi",
@@ -357,66 +320,140 @@ export default function CryptoPage() {
     return () => clearInterval(id);
   }, [refresh, fetchHistory, toastr]);
 
-  // Poll crypto tick price when symbol changes
+  const cryptoSymbols = symbols.filter(isCryptoSymbol);
+
+  // Reset pagination page if symbols list updates
   useEffect(() => {
-    if (!cryptoSymbol) {
-      setCryptoTickError(null);
+    setPage(0);
+  }, [cryptoSymbols.length]);
+
+  // Poll ticks for all crypto symbols in bulk every 3 seconds
+  useEffect(() => {
+    if (cryptoSymbols.length === 0) {
       return;
     }
 
     let active = true;
-    setCryptoTickError(null);
 
-    const fetchTick = async () => {
+    const fetchAllTicks = async () => {
       try {
-        setCryptoTickLoading(true);
-        const data = await api(`symbols/${cryptoSymbol}/tick`);
-        if (active) {
-          setCryptoTick(data);
-          setCryptoTickError(null);
-        }
+        const querySymbols = cryptoSymbols.join(",");
+        const data = await api(`ticks?symbols=${querySymbols}`);
+        if (!active) return;
+
+        const now = Date.now();
+        setTicks((prevTicks) => {
+          const nextDirections: Record<string, { bid: "up" | "down" | "flat"; ask: "up" | "down" | "flat"; lastUpdated: number }> = {};
+          
+          for (const sym of cryptoSymbols) {
+            const newTick = data[sym];
+            const prevTick = prevTicks[sym];
+            
+            if (newTick && !newTick.error) {
+              let bidDir: "up" | "down" | "flat" = "flat";
+              let askDir: "up" | "down" | "flat" = "flat";
+              
+              if (prevTick && !prevTick.error) {
+                if (newTick.bid > prevTick.bid) bidDir = "up";
+                else if (newTick.bid < prevTick.bid) bidDir = "down";
+                
+                if (newTick.ask > prevTick.ask) askDir = "up";
+                else if (newTick.ask < prevTick.ask) askDir = "down";
+              }
+              
+              const prevDir = tickDirections[sym];
+              if (bidDir === "flat" && prevDir && prevDir.bid !== "flat" && now - prevDir.lastUpdated < 1000) {
+                bidDir = prevDir.bid;
+              }
+              if (askDir === "flat" && prevDir && prevDir.ask !== "flat" && now - prevDir.lastUpdated < 1000) {
+                askDir = prevDir.ask;
+              }
+              
+              const updatedLastUpdated = (bidDir !== "flat" || askDir !== "flat") 
+                ? ((bidDir !== (prevDir?.bid ?? "flat") || askDir !== (prevDir?.ask ?? "flat")) ? now : (prevDir?.lastUpdated ?? now))
+                : now;
+
+              nextDirections[sym] = {
+                bid: bidDir,
+                ask: askDir,
+                lastUpdated: updatedLastUpdated,
+              };
+            }
+          }
+
+          setTickDirections((prevDirs) => {
+            const merged = { ...prevDirs };
+            for (const sym of Object.keys(nextDirections)) {
+              merged[sym] = nextDirections[sym];
+            }
+            return merged;
+          });
+
+          return data;
+        });
       } catch (e: any) {
-        if (active) {
-          console.warn("โหลดราคาล่าสุดของเหรียญไม่สำเร็จ:", e.message);
-          setCryptoTick(null);
-          setCryptoTickError(e.message);
-        }
-      } finally {
-        if (active) setCryptoTickLoading(false);
+        console.warn("โหลดราคาล่าสุดของเหรียญไม่สำเร็จ:", e.message);
       }
     };
 
-    fetchTick();
-    const intervalId = setInterval(fetchTick, 3000);
+    fetchAllTicks();
+    const intervalId = setInterval(fetchAllTicks, 2000);
 
     return () => {
       active = false;
       clearInterval(intervalId);
     };
-  }, [cryptoSymbol]);
+  }, [JSON.stringify(cryptoSymbols)]);
 
-  const isCryptoSymbol = (sym: string) => {
-    const s = sym.toUpperCase();
-    return /BTC|ETH|SOL|XRP|LTC|DOGE|ADA|DOT|LINK|AVAX|SHIB|UNI|LUNA|ALGO|BCH|XLM|ATOM|ICP|FIL|HBAR|XTZ|GRT|AAVE|MKR|THETA|FTM|BNB|DYDX|OP|ARB|NEAR|TIA|SUI|SEI|APT|RNDR|INJ|FET|AGIX|OCEAN|JUP|WIF|BONK|FLOKI|PEPE/i.test(s)
-      || ((s.endsWith("USD") || s.endsWith("USDT")) && s.length >= 6 && !/^(EUR|GBP|AUD|NZD|CAD|CHF|HKD|SGD|ZAR|MXN|NOK|SEK|DKK|TRY|CNH|RUB|XAU|XAG|XPD|XPT)/.test(s));
-  };
+  // Reset flashing directions back to flat after 1 second
+  useEffect(() => {
+    const activeDirs = Object.entries(tickDirections).filter(
+      ([, dir]) => dir.bid !== "flat" || dir.ask !== "flat"
+    );
+    if (activeDirs.length === 0) return;
 
-  const isMetalSymbol = (sym: string) => {
-    return /GOLD|SILVER|XAU|XAG|PLATINUM|PALLADIUM/i.test(sym);
-  };
+    const timer = setTimeout(() => {
+      const now = Date.now();
+      setTickDirections((prevDirs) => {
+        const nextDirs = { ...prevDirs };
+        let changed = false;
+        for (const [sym, dir] of Object.entries(nextDirs)) {
+          if (now - dir.lastUpdated >= 1000) {
+            if (dir.bid !== "flat" || dir.ask !== "flat") {
+              nextDirs[sym] = {
+                bid: "flat",
+                ask: "flat",
+                lastUpdated: dir.lastUpdated,
+              };
+              changed = true;
+            }
+          }
+        }
+        return changed ? nextDirs : prevDirs;
+      });
+    }, 200);
 
-  const isForexSymbol = (sym: string) => {
-    return /^[A-Z]{6}$/i.test(sym) && !isCryptoSymbol(sym) && !isMetalSymbol(sym);
-  };
-
-  const cryptoSymbols = symbols.filter(isCryptoSymbol);
+    return () => clearTimeout(timer);
+  }, [tickDirections]);
   // Filter active positions managed by this bot
   const cryptoPositions = positions.filter((p) => isCryptoSymbol(p.symbol) && p.magic === settingsForm.magic);
   const ccy = account?.currency ?? "";
   const openPl = cryptoPositions.reduce((acc, curr) => acc + curr.profit, 0);
+  const totalOpenPlPct = account && account.balance > 0 ? (openPl / account.balance) * 100 : 0;
+  const totalOpenPlPctString = account && account.balance > 0
+    ? ` (${totalOpenPlPct >= 0 ? "+" : ""}${totalOpenPlPct.toFixed(2)}%)`
+    : "";
 
   // Filter transaction history log for bot's crypto deals
   const cryptoHistory = tradeHistory.filter((d) => isCryptoSymbol(d.symbol) && d.magic === settingsForm.magic);
+  const scanBySymbol = new Map(scanResults.map((r) => [r.symbol, r]));
+  const historyPageStart = historyPage * historyRowsPerPage;
+  const paginatedCryptoHistory = cryptoHistory.slice(historyPageStart, historyPageStart + historyRowsPerPage);
+  useEffect(() => {
+    const maxPage = Math.max(0, Math.ceil(cryptoHistory.length / historyRowsPerPage) - 1);
+    setHistoryPage((current) => Math.min(current, maxPage));
+  }, [cryptoHistory.length, historyRowsPerPage]);
+
   // Realized profit calculation based on exits (entry="OUT")
   const realizedPl = cryptoHistory
     .filter((d) => d.entry === "OUT")
@@ -436,7 +473,6 @@ export default function CryptoPage() {
         body: JSON.stringify({ symbols: cryptoSymbols, strategy: settingsForm.strategy }),
       });
       setScanResults(data.results ?? []);
-      setScanAt(new Date());
     } catch (e: any) {
       toastr.error(`สแกนเหรียญไม่สำเร็จ: ${e.message}`);
     } finally {
@@ -444,74 +480,83 @@ export default function CryptoPage() {
     }
   }
 
-  function openScanDrawer() {
-    setScanOpen(true);
-    if (scanResults.length === 0 && !scanLoading) runScan();
-  }
+  // Auto-scan trade scores separately from fast price ticks.
+  useEffect(() => {
+    if (cryptoSymbols.length === 0) return;
+    let active = true;
+    let inFlight = false;
 
-  // Analyze a symbol and stage a trade. Opens the confirm dialog when the trade
-  // needs confirmation; toasts when there is no signal or it auto-executed.
+    const refreshScores = async () => {
+      if (!active || inFlight) return;
+      inFlight = true;
+      try {
+        await runScan();
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    refreshScores();
+    const intervalId = setInterval(refreshScores, 30000);
+
+    return () => {
+      active = false;
+      clearInterval(intervalId);
+    };
+  }, [cryptoSymbols.join(","), settingsForm.strategy]);
+
+  // Analyze a symbol, then ask for confirmation before placing the order.
   async function stageTrade(symbol: string) {
     setTradeStagingSymbol(symbol);
     try {
       const data = await api("analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol, strategy: settingsForm.strategy, use_ai: settingsForm.use_ai }),
+        body: JSON.stringify({
+          symbol,
+          strategy: settingsForm.strategy,
+          use_ai: settingsForm.use_ai,
+          preview: true,
+        }),
       });
-      const rec = data.recommendation;
-      const pending = data.pending;
-      if (!pending) {
-        toastr.warning(rec?.summary || `ยังไม่มีสัญญาณให้เทรด ${symbol} ตอนนี้`);
+      const rec = data.recommendation as Recommendation | undefined;
+      if (!rec || rec.action === "HOLD") {
+        toastr.warning(rec?.summary || `No trade signal for ${symbol} right now`);
         return;
       }
-      if (pending.status === "executed") {
-        toastr.success(`เปิดเทรด ${symbol} อัตโนมัติแล้ว (โหมดไม่ต้องยืนยัน)`);
-        refresh();
-        fetchHistory();
-        return;
-      }
-      setTradeCandidate({ rec, pending });
+      setTradeConfirm(rec);
     } catch (e: any) {
-      toastr.error(`วิเคราะห์/เปิดเทรดไม่สำเร็จ: ${e.message}`);
+      toastr.error(`Analyze failed: ${e.message}`);
     } finally {
       setTradeStagingSymbol(null);
     }
   }
 
   async function confirmTrade() {
-    if (!tradeCandidate) return;
-    setTradeConfirming(true);
+    if (!tradeConfirm) return;
+    const rec = tradeConfirm;
+    setTradeExecuting(true);
     try {
-      await api("confirm", {
+      const lot = rec.suggested_lot ?? 0.01;
+      await api("trade", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pending_id: tradeCandidate.pending.id }),
+        body: JSON.stringify({
+          symbol: rec.symbol,
+          action: rec.action,
+          lot,
+          sl: rec.stop_loss ?? null,
+          tp: rec.take_profit ?? null,
+        }),
       });
-      toastr.success(`เปิดเทรด ${tradeCandidate.rec.symbol} สำเร็จ`);
-      setTradeCandidate(null);
+      toastr.success(`Opened ${rec.symbol} ${actionLabel(rec.action)} trade`);
+      setTradeConfirm(null);
       refresh();
       fetchHistory();
     } catch (e: any) {
-      toastr.error(`ยืนยันเทรดไม่สำเร็จ: ${e.message}`);
+      toastr.error(`Trade failed: ${e.message}`);
     } finally {
-      setTradeConfirming(false);
-    }
-  }
-
-  // Cancel the staged-but-unconfirmed pending trade (so it doesn't linger).
-  async function cancelTrade() {
-    const pid = tradeCandidate?.pending?.id;
-    setTradeCandidate(null);
-    if (!pid) return;
-    try {
-      await api("cancel", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pending_id: pid }),
-      });
-    } catch {
-      /* best-effort cleanup */
+      setTradeExecuting(false);
     }
   }
 
@@ -542,19 +587,63 @@ export default function CryptoPage() {
     setCryptoSymbol(nextSymbol);
   };
 
+  // Auto-detect crypto symbols from MT5 broker
+  const autoDetectCryptoSymbols = async () => {
+    setDetectingCryptoSymbols(true);
+    try {
+      const data = await api("symbols/detect-crypto");
+      if (data.symbols && data.symbols.length > 0) {
+        setCryptoInput(data.symbols.join(", "));
+        toastr.success(`ตรวจพบสัญลักษณ์คริปโต ${data.symbols.length} รายการ`);
+      } else {
+        toastr.warning("ไม่พบสัญลักษณ์คริปโตบนโบรกเกอร์ MT5 ของคุณ");
+      }
+    } catch (e: any) {
+      toastr.error(`ตรวจหาเหรียญไม่สำเร็จ: ${e.message}`);
+    } finally {
+      setDetectingCryptoSymbols(false);
+    }
+  };
+
   // Save Settings directly on the page
   const handleSaveSettings = async () => {
     setSavingSettings(true);
     try {
-      await api("settings", {
+      const combined = [
+        ...cryptoInput.split(",").map(x => x.trim().toUpperCase()),
+        ...nonCryptoInput.split(",").map(x => x.trim().toUpperCase())
+      ].filter(Boolean).join(",");
+
+      const updatedForm = {
+        ...settingsForm,
+        symbols: combined
+      };
+
+      const res = await api("settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(settingsForm),
+        body: JSON.stringify(updatedForm),
       });
-      toastr.success("บันทึกการตั้งค่าสำเร็จ");
-      // Reload configurations
-      const data = await api("settings");
-      setSettingsData(data);
+      if (res && res.restarting) {
+        toastr.success("บันทึกการตั้งค่าสำเร็จ กำลังรีสตาร์ทเซิร์ฟเวอร์หลังบ้าน...");
+      } else {
+        toastr.success("บันทึกการตั้งค่าสำเร็จ");
+      }
+      
+      // Reload configurations (with safety check in case server is restarting)
+      try {
+        const data = await api("settings");
+        setSettingsData(data);
+  
+        const nextSyms = data.symbols ? data.symbols.split(",").map((s: string) => s.trim().toUpperCase()).filter(Boolean) : [];
+        setSymbols(nextSyms);
+        const nextCryptos = nextSyms.filter(isCryptoSymbol);
+        if (!nextCryptos.includes(cryptoSymbol)) {
+          setCryptoSymbol(nextCryptos[0] || "BTCUSD");
+        }
+      } catch (e) {
+        console.warn("เซิร์ฟเวอร์กำลังรีสตาร์ท จะโหลดการตั้งค่าใหม่โดยอัตโนมัติเมื่อระบบออนไลน์", e);
+      }
     } catch (e: any) {
       toastr.error(`บันทึกการตั้งค่าไม่สำเร็จ: ${e.message}`);
     } finally {
@@ -565,10 +654,63 @@ export default function CryptoPage() {
   const activeStrategy = strategies.find((s) => s.name === settingsForm.strategy);
   const strategyDescription = activeStrategy?.description ?? "";
   const selectedStrategyValue = activeStrategy ? settingsForm.strategy : "";
-  const cryptoSpread =
-    cryptoTick && Number.isFinite(cryptoTick.ask - cryptoTick.bid)
-      ? cryptoTick.ask - cryptoTick.bid
+  const getDecimals = (sym: string) => {
+    const s = sym.toUpperCase();
+    if (s.includes("BTC") || s.includes("ETH")) return 2;
+    if (s.includes("SOL") || s.includes("AVAX") || s.includes("LTC") || s.includes("BCH")) return 2;
+    if (s.includes("XRP") || s.includes("ADA") || s.includes("DOT") || s.includes("DOGE") || s.includes("XLM") || s.includes("ALGO")) return 4;
+    if (s.includes("SHIB") || s.includes("PEPE") || s.includes("BONK") || s.includes("FLOKI")) return 8;
+    return 5; // default fallback
+  };
+
+  const PriceDirection = ({
+    value,
+    direction,
+  }: {
+    value: string;
+    direction: "up" | "down" | "flat";
+  }) => {
+    const color = direction === "up" ? "#10b981" : direction === "down" ? "#ef4444" : "#cbd5e1";
+    const icon = direction === "up"
+      ? <ArrowUp size={13} strokeWidth={2.4} />
+      : direction === "down"
+      ? <ArrowDown size={13} strokeWidth={2.4} />
       : null;
+
+    return (
+      <Stack
+        component="span"
+        direction="row"
+        spacing={0.5}
+        sx={{
+          ...MONO,
+          alignItems: "center",
+          justifyContent: "flex-end",
+          color,
+          fontWeight: 700,
+          lineHeight: 1.2,
+          minWidth: 96,
+          transition: "color 0.2s ease-out",
+        }}
+      >
+        <Box component="span">{value}</Box>
+        <Box
+          component="span"
+          sx={{
+            width: 14,
+            height: 14,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color,
+            opacity: icon ? 1 : 0.35,
+          }}
+        >
+          {icon}
+        </Box>
+      </Stack>
+    );
+  };
 
   return (
     <Box sx={{ display: "flex", minHeight: "100vh", bgcolor: "#090d16", color: "#e2e8f0" }}>
@@ -680,193 +822,31 @@ export default function CryptoPage() {
             sx={{
               display: "grid",
               gap: 4,
-              gridTemplateColumns: { xs: "1fr", lg: "minmax(0, 1.45fr) minmax(420px, 1fr)" },
+              gridTemplateColumns: { xs: "1fr", lg: "minmax(0, 1.75fr) minmax(380px, 0.9fr)" },
               alignItems: "start",
             }}
           >
             {/* Left Column: Live Chart */}
             <Stack spacing={4}>
-              {/* Technical Chart */}
+              {/* Crypto Price Table */}
               <Card sx={{ bgcolor: "#0d1321", border: "1px solid rgba(255, 255, 255, 0.03)" }}>
-                <CardContent sx={{ p: 2 }}>
-                  <Box
-                    sx={{
-                      mb: 2,
-                      display: "grid",
-                      gap: 1.5,
-                      gridTemplateColumns: { xs: "1fr", md: "minmax(0, 1fr) auto" },
-                      alignItems: "center",
-                    }}
-                  >
-                    <Autocomplete
-                      size="small"
-                      fullWidth
-                      options={cryptoSymbols}
-                      value={cryptoSymbols.includes(cryptoSymbol) ? cryptoSymbol : null}
-                      onChange={(_event, value) => {
-                        if (value) handleCryptoSymbolChange(value);
-                      }}
-                      noOptionsText="ไม่พบเหรียญคริปโต"
-                      renderInput={(params) => (
-                        <TextField
-                          {...params}
-                          label="ค้นหาเหรียญ"
-                          placeholder="พิมพ์ BTC, ETH, SOL..."
-                        />
-                      )}
-                      slotProps={{
-                        paper: {
-                          sx: {
-                            bgcolor: "#0d1321",
-                            border: "1px solid rgba(59,130,246,0.18)",
-                            color: "#e2e8f0",
-                          },
-                        },
-                        listbox: {
-                          sx: {
-                            py: 0.5,
-                            "& .MuiAutocomplete-option": {
-                              minHeight: 36,
-                              fontWeight: 800,
-                            },
-                          },
-                        },
-                      }}
-                      sx={{
-                        "& .MuiInputBase-root": {
-                          height: 42,
-                          bgcolor: "rgba(9,13,22,0.85)",
-                          fontWeight: 800,
-                        },
-                        "& .MuiOutlinedInput-notchedOutline": {
-                          borderColor: "rgba(59,130,246,0.22)",
-                        },
-                        "& .MuiInputBase-input": {
-                          fontWeight: 800,
-                        },
-                      }}
-                    />
-
-                    {cryptoSymbols.length === 0 && (
-                      <Typography variant="caption" color="text.secondary" sx={{ display: { xs: "block", md: "none" } }}>
-                        เพิ่มสัญลักษณ์คริปโตในหน้าตั้งค่าเพื่อเลือกกราฟ
-                      </Typography>
-                    )}
-
-                    <Stack
-                      direction="row"
-                      sx={{
-                        minWidth: { xs: "100%", md: 340 },
-                        display: "grid",
-                        gridTemplateColumns: "1fr auto 1fr",
-                        gap: 0,
-                        alignItems: "stretch",
-                        borderRadius: 2,
-                        overflow: "hidden",
-                        bgcolor: "rgba(15, 23, 42, 0.45)",
-                        border: "1px solid rgba(148, 163, 184, 0.12)",
-                      }}
-                    >
-                      <Box
-                        sx={{
-                          px: 1.5,
-                          py: 0.75,
-                          bgcolor: "rgba(239, 68, 68, 0.035)",
-                          display: "flex",
-                          flexDirection: "column",
-                          justifyContent: "center",
-                        }}
-                      >
-                        <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 500, lineHeight: 1.1, fontSize: 10.5 }}>
-                          BID · ขาย
-                        </Typography>
-                        <Typography
-                          sx={{
-                            ...MONO,
-                            color: "#f87171",
-                            fontWeight: 600,
-                            lineHeight: 1.1,
-                            whiteSpace: "nowrap",
-                            fontSize: { xs: "1.2rem", md: "1.3rem" },
-                          }}
-                        >
-                          {cryptoTick ? fmt(cryptoTick.bid, 2) : "—"}
-                        </Typography>
-                      </Box>
-
-                      <Box
-                        sx={{
-                          minWidth: 62,
-                          px: 1,
-                          textAlign: "center",
-                          bgcolor: "rgba(2, 6, 23, 0.22)",
-                          borderLeft: "1px solid rgba(148, 163, 184, 0.1)",
-                          borderRight: "1px solid rgba(148, 163, 184, 0.1)",
-                          display: "grid",
-                          placeItems: "center",
-                        }}
-                      >
-                        <Box>
-                          <Typography variant="caption" sx={{ display: "block", color: "#64748b", lineHeight: 1.1, fontSize: 10 }}>
-                            spread
-                          </Typography>
-                          <Typography variant="caption" sx={{ ...MONO, display: "block", color: "#cbd5e1", lineHeight: 1.1, fontWeight: 500 }}>
-                            {cryptoSpread === null ? "—" : fmt(cryptoSpread, 2)}
-                          </Typography>
-                        </Box>
-                      </Box>
-
-                      <Box
-                        sx={{
-                          px: 1.5,
-                          py: 0.75,
-                          textAlign: "right",
-                          bgcolor: "rgba(16, 185, 129, 0.035)",
-                          display: "flex",
-                          flexDirection: "column",
-                          justifyContent: "center",
-                        }}
-                      >
-                        <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 500, lineHeight: 1.1, fontSize: 10.5 }}>
-                          ASK · ซื้อ
-                        </Typography>
-                        <Typography
-                          sx={{
-                            ...MONO,
-                            color: "#34d399",
-                            fontWeight: 600,
-                            lineHeight: 1.1,
-                            whiteSpace: "nowrap",
-                            fontSize: { xs: "1.2rem", md: "1.3rem" },
-                          }}
-                        >
-                          {cryptoTick ? fmt(cryptoTick.ask, 2) : "—"}
-                        </Typography>
-                      </Box>
-                    </Stack>
-                  </Box>
-
-                  {cryptoTickError && (
-                    <Alert severity="warning" sx={{ mb: 2, borderRadius: 2, bgcolor: "rgba(234,179,8,0.05)", color: "#eab308" }}>
-                      <Typography variant="caption" sx={{ fontWeight: 700 }}>{cryptoTickError}</Typography>
-                    </Alert>
-                  )}
-
-                  <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 2, px: 1 }}>
-                    <SectionTitle icon={<Activity size={16} color="#3b82f6" />}>
-                      กราฟเทคนิค {cryptoSymbol}
+                <CardContent sx={{ p: 3 }}>
+                  <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 3 }}>
+                    <SectionTitle icon={<Activity size={18} color="#3b82f6" />}>
+                      ราคารายเหรียญคริปโต Real-time
                     </SectionTitle>
-                    <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
+                    <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
                       <Button
                         size="small"
                         variant="outlined"
-                        onClick={openScanDrawer}
-                        startIcon={<Radar size={15} />}
+                        onClick={runScan}
+                        disabled={scanLoading || cryptoSymbols.length === 0}
+                        startIcon={scanLoading ? <CircularProgress size={13} color="inherit" /> : <RefreshCw size={14} />}
                         sx={{
-                          height: 28,
-                          borderRadius: 999,
+                          height: 30,
+                          borderRadius: 1,
                           px: 1.5,
-                          fontSize: "0.78rem",
+                          fontSize: "0.82rem",
                           fontWeight: 700,
                           borderColor: "rgba(59, 130, 246, 0.35)",
                           color: "#60a5fa",
@@ -874,51 +854,178 @@ export default function CryptoPage() {
                           "&:hover": { borderColor: "#3b82f6", bgcolor: "rgba(59, 130, 246, 0.12)" },
                         }}
                       >
-                        คัดเหรียญน่าเทรด
+                        Refresh score
                       </Button>
                       <Chip
                         size="small"
-                        label="ไทม์เฟรม: 15M"
-                        color="primary"
+                        label="Price 2s"
+                        color="success"
                         variant="outlined"
-                        sx={{ fontSize: 10, height: 20, px: 0.5, borderColor: "rgba(59, 130, 246, 0.3)", color: "#3b82f6" }}
+                        sx={{ fontSize: 10, height: 22, px: 0.5, borderColor: "rgba(16, 185, 129, 0.3)", color: "#10b981", bgcolor: "rgba(16, 185, 129, 0.04)" }}
+                      />
+                      <Chip
+                        size="small"
+                        label="Score 30s"
+                        variant="outlined"
+                        sx={{ fontSize: 10, height: 22, px: 0.5, borderColor: "rgba(59, 130, 246, 0.3)", color: "#60a5fa", bgcolor: "rgba(59, 130, 246, 0.04)" }}
                       />
                     </Stack>
                   </Stack>
-                  {cryptoSymbol ? (
-                    <TradingViewWidget symbol={cryptoSymbol} />
-                  ) : (
-                    <Box sx={{ height: 450, display: "grid", placeItems: "center", border: "1px dashed rgba(255,255,255,0.05)", borderRadius: 2 }}>
-                      <Typography color="text.secondary">ยังไม่ได้เลือกเหรียญ</Typography>
-                    </Box>
-                  )}
 
-                  {cryptoSymbol && (
-                    <Button
-                      fullWidth
-                      variant="contained"
-                      disabled={tradeStagingSymbol === cryptoSymbol}
-                      onClick={() => stageTrade(cryptoSymbol)}
-                      startIcon={
-                        tradeStagingSymbol === cryptoSymbol
-                          ? <CircularProgress size={16} color="inherit" />
-                          : <Zap size={16} />
-                      }
-                      sx={{
-                        mt: 2,
-                        height: 44,
-                        borderRadius: 2,
-                        fontWeight: 700,
-                        fontSize: "0.95rem",
-                        textTransform: "none",
-                        bgcolor: "#2563eb",
-                        "&:hover": { bgcolor: "#1d4ed8" },
-                      }}
-                    >
-                      {tradeStagingSymbol === cryptoSymbol
-                        ? `กำลังวิเคราะห์ ${cryptoSymbol}...`
-                        : `วิเคราะห์ & เทรด ${cryptoSymbol}`}
-                    </Button>
+                  {cryptoSymbols.length === 0 ? (
+                    <Box sx={{ py: 6, textAlign: "center", border: "1px dashed rgba(255,255,255,0.08)", borderRadius: 2.5 }}>
+                      <Typography color="text.secondary">กรุณาเพิ่มเหรียญคริปโตในหน้าตั้งค่าก่อน</Typography>
+                    </Box>
+                  ) : (
+                    <Box sx={{ overflowX: "auto" }}>
+                      <Table size="medium">
+                        <TableHead>
+                          <TableRow sx={{ "& th": { borderBottomColor: "rgba(255,255,255,0.08)", bgcolor: "#0d1321" } }}>
+                            <TableCell sx={{ fontWeight: 700, color: "#94a3b8" }}>เหรียญ</TableCell>
+                            <TableCell align="right" sx={{ fontWeight: 700, color: "#94a3b8" }}>BID (ขาย)</TableCell>
+                            <TableCell align="right" sx={{ fontWeight: 700, color: "#94a3b8" }}>ASK (ซื้อ)</TableCell>
+                            <TableCell align="right" sx={{ fontWeight: 700, color: "#94a3b8" }}>Spread</TableCell>
+                            <TableCell align="right" sx={{ fontWeight: 700, color: "#94a3b8" }}>Signal Score</TableCell>
+                            <TableCell align="right" sx={{ fontWeight: 700, color: "#94a3b8", pr: 2 }}>คำสั่ง</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {cryptoSymbols.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage).map((sym) => {
+                            const tick = ticks[sym];
+                            const dir = tickDirections[sym] || { bid: "flat", ask: "flat" };
+                            const decimals = getDecimals(sym);
+                            const bidVal = tick && !tick.error ? tick.bid : null;
+                            const askVal = tick && !tick.error ? tick.ask : null;
+                            const spreadVal = bidVal !== null && askVal !== null ? askVal - bidVal : null;
+                            const isSelected = cryptoSymbol === sym;
+                            const scan = scanBySymbol.get(sym);
+                            const scanScore = scan ? Math.round(scan.confidence * 100) : null;
+                            const scanColor = scan?.action === "BUY" ? "#10b981" : scan?.action === "SELL" ? "#ef4444" : "#64748b";
+                            return (
+                              <TableRow
+                                key={sym}
+                                hover
+                                onClick={() => handleCryptoSymbolChange(sym)}
+                                sx={{
+                                  cursor: "pointer",
+                                  borderLeft: isSelected ? "3px solid #3b82f6" : "3px solid transparent",
+                                  bgcolor: isSelected ? "rgba(59, 130, 246, 0.04)" : "transparent",
+                                  borderBottomColor: "rgba(255,255,255,0.03)",
+                                  transition: "background-color 0.15s, border-color 0.15s",
+                                  "&:hover": {
+                                    bgcolor: isSelected ? "rgba(59, 130, 246, 0.06)" : "rgba(255, 255, 255, 0.02)",
+                                  },
+                                }}
+                              >
+                                <TableCell sx={{ py: 1.75 }}>
+                                  <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
+                                    <Box>
+                                      <Typography sx={{ fontWeight: 700, color: isSelected ? "#60a5fa" : "#fff" }}>
+                                        {sym}
+                                      </Typography>
+                                      {isSelected && (
+                                        <Typography variant="caption" sx={{ color: "#3b82f6", display: "block", fontSize: "0.7rem", fontWeight: 700 }}>
+                                          SELECTED
+                                        </Typography>
+                                      )}
+                                    </Box>
+                                  </Stack>
+                                </TableCell>
+                                <TableCell align="right" sx={{ py: 1.5 }}>
+                                  <PriceDirection value={bidVal !== null ? bidVal.toFixed(decimals) : "—"} direction={dir.bid} />
+                                </TableCell>
+                                <TableCell align="right" sx={{ py: 1.5 }}>
+                                  <PriceDirection value={askVal !== null ? askVal.toFixed(decimals) : "—"} direction={dir.ask} />
+                                </TableCell>
+                                <TableCell align="right" sx={{ py: 1.5, ...MONO, fontWeight: 500, color: "#cbd5e1" }}>
+                                  {spreadVal !== null ? spreadVal.toFixed(decimals) : "—"}
+                                </TableCell>
+                                <TableCell align="right" sx={{ py: 1.25 }}>
+                                  <Stack spacing={0.5} sx={{ alignItems: "flex-end" }}>
+                                    <Chip
+                                      size="small"
+                                      label={scanScore !== null ? `${actionLabel(scan?.action)} ${scanScore}%` : scanLoading ? "Scanning" : "—"}
+                                      variant="outlined"
+                                      sx={{
+                                        height: 20,
+                                        borderRadius: 1,
+                                        fontSize: 10,
+                                        fontWeight: 800,
+                                        color: scanScore !== null ? scanColor : "#64748b",
+                                        borderColor: scanScore !== null ? scanColor : "rgba(148,163,184,0.25)",
+                                        bgcolor: scanScore !== null ? `${scanColor}14` : "transparent",
+                                        "& .MuiChip-label": { px: 0.75 },
+                                      }}
+                                    />
+                                    <LinearProgress
+                                      variant={scanScore !== null ? "determinate" : "indeterminate"}
+                                      value={scanScore ?? 0}
+                                      sx={{
+                                        width: 86,
+                                        height: 4,
+                                        borderRadius: 1,
+                                        bgcolor: "rgba(255,255,255,0.05)",
+                                        opacity: scanScore !== null || scanLoading ? 1 : 0.25,
+                                        "& .MuiLinearProgress-bar": { bgcolor: scanColor },
+                                      }}
+                                    />
+                                  </Stack>
+                                </TableCell>
+                                <TableCell align="right" sx={{ py: 1.5, pr: 2 }}>
+                                  <Button
+                                    size="small"
+                                    variant="contained"
+                                    disabled={tradeStagingSymbol === sym}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      stageTrade(sym);
+                                    }}
+                                    startIcon={
+                                      tradeStagingSymbol === sym ? (
+                                        <CircularProgress size={14} color="inherit" />
+                                      ) : (
+                                        <Zap size={14} />
+                                      )
+                                    }
+                                    sx={{
+                                      height: 32,
+                                      borderRadius: 1.5,
+                                      fontWeight: 700,
+                                      fontSize: "0.82rem",
+                                      textTransform: "none",
+                                      bgcolor: "#2563eb",
+                                      "&:hover": { bgcolor: "#1d4ed8" },
+                                    }}
+                                  >
+                                    {tradeStagingSymbol === sym ? "กำลังวิเคราะห์..." : "วิเคราะห์ & เทรด"}
+                                  </Button>
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                      <TablePagination
+                        rowsPerPageOptions={[5, 10, 20, 50]}
+                        component="div"
+                        count={cryptoSymbols.length}
+                        rowsPerPage={rowsPerPage}
+                        page={page}
+                        onPageChange={(_event, newPage) => setPage(newPage)}
+                        onRowsPerPageChange={(event) => {
+                          setRowsPerPage(parseInt(event.target.value, 10));
+                          setPage(0);
+                        }}
+                        labelRowsPerPage="เหรียญต่อหน้า:"
+                        sx={{
+                          color: "#cbd5e1",
+                          borderTop: "1px solid rgba(255,255,255,0.08)",
+                          "& .MuiTablePagination-selectIcon": { color: "#64748b" },
+                          "& .MuiIconButton-root": { color: "#cbd5e1" },
+                          "& .MuiIconButton-root.Mui-disabled": { color: "rgba(255,255,255,0.25)" }
+                        }}
+                      />
+                    </Box>
                   )}
                 </CardContent>
               </Card>
@@ -927,13 +1034,13 @@ export default function CryptoPage() {
             {/* Right Column: Active Positions sidebar */}
             <Stack spacing={4}>
               <Card sx={{ bgcolor: "#0d1321", border: "1px solid rgba(255, 255, 255, 0.03)", position: { lg: "sticky" }, top: { lg: 16 } }}>
-                <CardContent sx={{ p: 3 }}>
-                  <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 2.5 }}>
+                <CardContent sx={{ p: 2 }}>
+                  <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 1.25 }}>
                     <SectionTitle icon={<Layers size={16} color="#3b82f6" />}>ออเดอร์ที่บอทเปิดอยู่</SectionTitle>
                     {cryptoPositions.length > 0 && (
                       <Chip
                         size="small"
-                        label={`${openPl >= 0 ? "+" : ""}${fmt(openPl)} ${ccy}`}
+                        label={`${openPl >= 0 ? "+" : ""}${fmt(openPl)} ${ccy}${totalOpenPlPctString}`}
                         color={openPl >= 0 ? "success" : "error"}
                         sx={{ fontWeight: 800, px: 1 }}
                       />
@@ -946,84 +1053,108 @@ export default function CryptoPage() {
                       </Typography>
                     </Box>
                   ) : (
-                    <Stack spacing={1.5}>
-                      {cryptoPositions.map((p) => (
-                        <Box
-                          key={p.ticket}
-                          sx={{
-                            p: 1.75,
-                            borderRadius: 2.5,
-                            bgcolor: p.type === "BUY" ? "rgba(16, 185, 129, 0.04)" : "rgba(239, 68, 68, 0.04)",
-                            border: `1px solid ${p.type === "BUY" ? "rgba(16, 185, 129, 0.18)" : "rgba(239, 68, 68, 0.18)"}`,
-                          }}
-                        >
-                          <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "flex-start", mb: 1.25 }}>
-                            <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                              <Chip size="small" label={actionLabel(p.type)} color={actionColor(p.type)} variant="outlined" sx={{ fontWeight: 800, fontSize: 10, height: 20 }} />
-                              <Box>
-                                <Typography sx={{ fontWeight: 700, lineHeight: 1.2 }}>{p.symbol}</Typography>
-                                <Typography variant="caption" color="text.secondary" sx={{ ...MONO, display: "block", lineHeight: 1.2 }}>
-                                  #{p.ticket}
+                    <Stack spacing={1}>
+                      {cryptoPositions.map((p) => {
+                        const pct = p.price_open > 0
+                          ? (p.type === "BUY"
+                              ? ((p.price_current - p.price_open) / p.price_open) * 100
+                              : ((p.price_open - p.price_current) / p.price_open) * 100)
+                          : 0;
+                        const isProfit = p.profit >= 0;
+                        const invested = p.volume * p.price_open * (p.contract_size ?? 1.0);
+                        return (
+                          <Box
+                            key={p.ticket}
+                            sx={{
+                              p: 1.25,
+                              borderRadius: 1,
+                              bgcolor: p.type === "BUY" ? "rgba(16, 185, 129, 0.04)" : "rgba(239, 68, 68, 0.04)",
+                              border: `1px solid ${p.type === "BUY" ? "rgba(16, 185, 129, 0.18)" : "rgba(239, 68, 68, 0.18)"}`,
+                            }}
+                          >
+                            <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start", justifyContent: "space-between", mb: 1 }}>
+                              <Stack direction="row" spacing={1} sx={{ alignItems: "center", minWidth: 0 }}>
+                                <Chip
+                                  size="small"
+                                  label={actionLabel(p.type)}
+                                  color={actionColor(p.type)}
+                                  variant="outlined"
+                                  sx={{ flexShrink: 0, height: 22, borderRadius: 1, fontWeight: 800, fontSize: 10 }}
+                                />
+                                <Box sx={{ minWidth: 0 }}>
+                                  <Typography noWrap sx={{ fontWeight: 750, lineHeight: 1.15 }}>
+                                    {p.symbol}
+                                  </Typography>
+                                  <Typography variant="caption" color="text.secondary" sx={{ ...MONO, display: "block", lineHeight: 1.2 }}>
+                                    Ticket #{p.ticket}
+                                  </Typography>
+                                </Box>
+                              </Stack>
+                              <Box sx={{ textAlign: "right", flexShrink: 0 }}>
+                                <Typography sx={{ ...MONO, fontWeight: 850, lineHeight: 1.15, color: isProfit ? "#10b981" : "#ef4444" }}>
+                                  {isProfit ? "+" : ""}{fmt(p.profit)} {ccy}
+                                </Typography>
+                                <Typography variant="caption" sx={{ ...MONO, display: "block", lineHeight: 1.2, color: isProfit ? "#10b981" : "#ef4444", fontWeight: 700 }}>
+                                  {pct >= 0 ? "+" : ""}{pct.toFixed(2)}%
                                 </Typography>
                               </Box>
                             </Stack>
-                            <Box sx={{ textAlign: "right" }}>
-                              <Typography sx={{ ...MONO, fontWeight: 800, lineHeight: 1.2, color: p.profit >= 0 ? "#10b981" : "#ef4444" }}>
-                                {p.profit >= 0 ? "+" : ""}{fmt(p.profit)}
-                              </Typography>
-                              <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.2 }}>{ccy}</Typography>
+
+                            <Box
+                              sx={{
+                                display: "grid",
+                                gridTemplateColumns: { xs: "repeat(2, minmax(0, 1fr))", sm: "repeat(4, minmax(0, 1fr))" },
+                                gap: 0.75,
+                                p: 1,
+                                mb: 1,
+                                borderRadius: 1,
+                                bgcolor: "rgba(255,255,255,0.025)",
+                              }}
+                            >
+                              {[
+                                { label: "Lot", value: fmt(p.volume, 2) },
+                                { label: "เข้า", value: fmt(p.price_open, 2) },
+                                { label: "ปัจจุบัน", value: fmt(p.price_current, 2) },
+                                { label: "เงินทุน", value: fmt(invested, 2) },
+                              ].map((cell) => (
+                                <Box key={cell.label} sx={{ minWidth: 0 }}>
+                                  <Typography variant="caption" sx={{ display: "block", color: "#64748b", lineHeight: 1.2 }}>
+                                    {cell.label}
+                                  </Typography>
+                                  <Typography noWrap variant="caption" sx={{ ...MONO, display: "block", color: "#cbd5e1", fontWeight: 650, lineHeight: 1.25 }}>
+                                    {cell.value}
+                                  </Typography>
+                                </Box>
+                              ))}
                             </Box>
-                          </Stack>
 
-                          <Box
-                            sx={{
-                              display: "grid",
-                              gridTemplateColumns: "repeat(3, 1fr)",
-                              gap: 1,
-                              p: 1.25,
-                              mb: 1.25,
-                              borderRadius: 2,
-                              bgcolor: "rgba(255,255,255,0.02)",
-                            }}
-                          >
-                            {[
-                              { label: "ขนาด", value: fmt(p.volume, 2) },
-                              { label: "ทุน", value: fmt(p.price_open, 2) },
-                              { label: "ปัจจุบัน", value: fmt(p.price_current, 2) },
-                            ].map((cell) => (
-                              <Box key={cell.label}>
-                                <Typography variant="caption" sx={{ display: "block", color: "#64748b", lineHeight: 1.3 }}>{cell.label}</Typography>
-                                <Typography variant="caption" sx={{ ...MONO, display: "block", color: "#cbd5e1", fontWeight: 600, lineHeight: 1.3 }}>{cell.value}</Typography>
-                              </Box>
-                            ))}
+                            <Button
+                              size="small"
+                              color="error"
+                              variant="outlined"
+                              fullWidth
+                              disabled={closingTicket === p.ticket}
+                              onClick={() => setCloseCandidate(p)}
+                              startIcon={closingTicket === p.ticket ? <CircularProgress size={13} color="inherit" /> : undefined}
+                              sx={{
+                                height: 28,
+                                borderRadius: 1,
+                                fontSize: "0.78rem",
+                                fontWeight: 750,
+                                borderColor: "rgba(239, 68, 68, 0.35)",
+                                color: "#f87171",
+                                bgcolor: "rgba(239, 68, 68, 0.05)",
+                                "&:hover": {
+                                  borderColor: "#ef4444",
+                                  bgcolor: "rgba(239, 68, 68, 0.12)",
+                                },
+                              }}
+                            >
+                              ปิด slot
+                            </Button>
                           </Box>
-
-                          <Button
-                            size="small"
-                            color="error"
-                            variant="outlined"
-                            fullWidth
-                            disabled={closingTicket === p.ticket}
-                            onClick={() => setCloseCandidate(p)}
-                            startIcon={closingTicket === p.ticket ? <CircularProgress size={13} color="inherit" /> : undefined}
-                            sx={{
-                              height: 30,
-                              borderRadius: 999,
-                              fontSize: "0.82rem",
-                              fontWeight: 600,
-                              borderColor: "rgba(239, 68, 68, 0.35)",
-                              color: "#f87171",
-                              bgcolor: "rgba(239, 68, 68, 0.06)",
-                              "&:hover": {
-                                borderColor: "#ef4444",
-                                bgcolor: "rgba(239, 68, 68, 0.12)",
-                              },
-                            }}
-                          >
-                            ปิด slot
-                          </Button>
-                        </Box>
-                      ))}
+                        );
+                      })}
                     </Stack>
                   )}
                 </CardContent>
@@ -1046,7 +1177,8 @@ export default function CryptoPage() {
                       </Typography>
                     </Box>
                   ) : (
-                    <Box sx={{ overflowX: "auto", maxHeight: 350 }}>
+                    <>
+                    <Box sx={{ overflowX: "auto", maxHeight: "auto" }}>
                       <Table size="small" stickyHeader>
                         <TableHead>
                           <TableRow sx={{ "& th": { borderBottomColor: "rgba(255,255,255,0.05)", bgcolor: "#0d1321" } }}>
@@ -1056,7 +1188,7 @@ export default function CryptoPage() {
                           </TableRow>
                         </TableHead>
                         <TableBody>
-                          {cryptoHistory.map((h) => (
+                          {paginatedCryptoHistory.map((h) => (
                             <TableRow key={h.ticket} hover sx={{ borderBottomColor: "rgba(255,255,255,0.02)" }}>
                               <TableCell sx={{ ...MONO, fontSize: 11 }}>
                                 {h.time.replace("T", " ").substring(5, 16)}
@@ -1095,187 +1227,34 @@ export default function CryptoPage() {
                         </TableBody>
                       </Table>
                     </Box>
+                    <TablePagination
+                      rowsPerPageOptions={[5, 10, 25, 50]}
+                      component="div"
+                      count={cryptoHistory.length}
+                      rowsPerPage={historyRowsPerPage}
+                      page={historyPage}
+                      onPageChange={(_event, newPage) => setHistoryPage(newPage)}
+                      onRowsPerPageChange={(event) => {
+                        setHistoryRowsPerPage(parseInt(event.target.value, 10));
+                        setHistoryPage(0);
+                      }}
+                      labelRowsPerPage="Rows per page:"
+                      sx={{
+                        color: "#cbd5e1",
+                        borderTop: "1px solid rgba(255,255,255,0.08)",
+                        "& .MuiTablePagination-selectIcon": { color: "#64748b" },
+                        "& .MuiIconButton-root": { color: "#cbd5e1" },
+                        "& .MuiIconButton-root.Mui-disabled": { color: "rgba(255,255,255,0.25)" }
+                      }}
+                    />
+                    </>
                   )}
                 </CardContent>
               </Card>
           </Box>
         </Container>
       </Box>
-
-      {/* Coin screener drawer */}
-      <Drawer
-        anchor="right"
-        open={scanOpen}
-        onClose={() => setScanOpen(false)}
-        slotProps={{
-          paper: {
-            sx: {
-              width: { xs: "100%", sm: 380 },
-              bgcolor: "#0d1321",
-              color: "#e2e8f0",
-              borderLeft: "1px solid rgba(255,255,255,0.05)",
-              backgroundImage: "none",
-            },
-          },
-        }}
-      >
-        <Box sx={{ p: 2.5, display: "flex", flexDirection: "column", height: "100%" }}>
-          <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", mb: 0.5 }}>
-            <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
-              <Box sx={{ p: 1, borderRadius: 2, bgcolor: "rgba(59, 130, 246, 0.1)", display: "flex", color: "#3b82f6" }}>
-                <Radar size={20} />
-              </Box>
-              <Box>
-                <Typography sx={{ fontWeight: 700, lineHeight: 1.2 }}>คัดเหรียญน่าเทรด</Typography>
-                <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.2 }}>
-                  {scanAt ? `อัปเดต ${scanAt.toLocaleTimeString("th-TH")}` : "ยังไม่ได้สแกน"}
-                </Typography>
-              </Box>
-            </Stack>
-            <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
-              <Tooltip title="สแกนใหม่">
-                <span>
-                  <IconButton size="small" onClick={runScan} disabled={scanLoading} sx={{ color: "#94a3b8" }}>
-                    {scanLoading ? <CircularProgress size={16} color="inherit" /> : <RefreshCw size={16} />}
-                  </IconButton>
-                </span>
-              </Tooltip>
-              <IconButton size="small" onClick={() => setScanOpen(false)} sx={{ color: "#94a3b8" }}>
-                <X size={18} />
-              </IconButton>
-            </Stack>
-          </Stack>
-
-          <FormControlLabel
-            sx={{ mt: 1, mb: 0.5, ml: 0 }}
-            control={
-              <Switch
-                size="small"
-                checked={scanShowAll}
-                onChange={(e) => setScanShowAll(e.target.checked)}
-              />
-            }
-            label={<Typography variant="caption" color="text.secondary">แสดงเหรียญที่ไม่มีสัญญาณ (HOLD) ด้วย</Typography>}
-          />
-
-          {scanLoading && <LinearProgress sx={{ mb: 1, borderRadius: 2 }} />}
-          <Divider sx={{ borderColor: "rgba(255,255,255,0.05)", mb: 1.5 }} />
-
-          <Box sx={{ flexGrow: 1, overflowY: "auto", mx: -0.5, px: 0.5 }}>
-            {(() => {
-              const visible = scanShowAll
-                ? scanResults
-                : scanResults.filter((r) => r.action !== "HOLD");
-              if (!scanLoading && visible.length === 0) {
-                return (
-                  <Box sx={{ py: 6, textAlign: "center" }}>
-                    <Typography variant="body2" color="text.secondary">
-                      {scanResults.length === 0
-                        ? "ยังไม่มีผลการสแกน"
-                        : "ยังไม่มีเหรียญที่มีสัญญาณตอนนี้"}
-                    </Typography>
-                  </Box>
-                );
-              }
-              return (
-                <Stack spacing={1}>
-                  {visible.map((r) => {
-                    const conf = Math.round(r.confidence * 100);
-                    const barColor =
-                      r.action === "BUY" ? "#10b981" : r.action === "SELL" ? "#ef4444" : "#64748b";
-                    const isActive = r.symbol === cryptoSymbol;
-                    return (
-                      <Box
-                        key={r.symbol}
-                        onClick={() => {
-                          handleCryptoSymbolChange(r.symbol);
-                          setScanOpen(false);
-                        }}
-                        sx={{
-                          p: 1.5,
-                          borderRadius: 2.5,
-                          cursor: "pointer",
-                          bgcolor: isActive ? "rgba(59, 130, 246, 0.08)" : "rgba(255,255,255,0.015)",
-                          border: `1px solid ${isActive ? "rgba(59, 130, 246, 0.4)" : "rgba(255,255,255,0.05)"}`,
-                          transition: "background-color .15s, border-color .15s",
-                          "&:hover": { bgcolor: "rgba(255,255,255,0.04)", borderColor: "rgba(148,163,184,0.25)" },
-                        }}
-                      >
-                        <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", mb: 1 }}>
-                          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                            <Chip
-                              size="small"
-                              label={actionLabel(r.action)}
-                              color={actionColor(r.action)}
-                              variant="outlined"
-                              sx={{ fontWeight: 800, fontSize: 10, height: 20 }}
-                            />
-                            <Box>
-                              <Typography sx={{ fontWeight: 700, lineHeight: 1.2 }}>{r.symbol}</Typography>
-                              <Typography variant="caption" color="text.secondary" sx={{ ...MONO, display: "block", lineHeight: 1.2 }}>
-                                {fmt(r.price, 2)}
-                              </Typography>
-                            </Box>
-                          </Stack>
-                          <Box sx={{ textAlign: "right", minWidth: 64 }}>
-                            <Typography variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.2 }}>
-                              ความเชื่อมั่น
-                            </Typography>
-                            <Typography sx={{ ...MONO, fontWeight: 800, lineHeight: 1.2, color: barColor }}>
-                              {conf}%
-                            </Typography>
-                          </Box>
-                        </Stack>
-                        <LinearProgress
-                          variant="determinate"
-                          value={conf}
-                          sx={{
-                            height: 5,
-                            borderRadius: 3,
-                            bgcolor: "rgba(255,255,255,0.05)",
-                            "& .MuiLinearProgress-bar": { bgcolor: barColor },
-                          }}
-                        />
-                        {r.action !== "HOLD" && (
-                          <Button
-                            size="small"
-                            variant="contained"
-                            fullWidth
-                            disabled={tradeStagingSymbol === r.symbol}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              stageTrade(r.symbol);
-                            }}
-                            startIcon={
-                              tradeStagingSymbol === r.symbol
-                                ? <CircularProgress size={13} color="inherit" />
-                                : <Zap size={14} />
-                            }
-                            sx={{
-                              mt: 1.25,
-                              height: 30,
-                              borderRadius: 999,
-                              fontSize: "0.78rem",
-                              fontWeight: 700,
-                              textTransform: "none",
-                              bgcolor: r.action === "BUY" ? "#059669" : "#dc2626",
-                              "&:hover": { bgcolor: r.action === "BUY" ? "#047857" : "#b91c1c" },
-                            }}
-                          >
-                            {tradeStagingSymbol === r.symbol ? "กำลังวิเคราะห์..." : `เทรด ${actionLabel(r.action)}`}
-                          </Button>
-                        )}
-                      </Box>
-                    );
-                  })}
-                </Stack>
-              );
-            })()}
-          </Box>
-        </Box>
-      </Drawer>
-
-      <CryptoBotSettings
+<CryptoBotSettings
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         settingsForm={settingsForm}
@@ -1287,98 +1266,96 @@ export default function CryptoPage() {
         strategyLabel={strategyLabel}
         savingSettings={savingSettings}
         onSave={handleSaveSettings}
+        cryptoInput={cryptoInput}
+        setCryptoInput={setCryptoInput}
+        onDetectCryptoSymbols={autoDetectCryptoSymbols}
+        detectingCryptoSymbols={detectingCryptoSymbols}
+        allCryptoSymbols={cryptoSymbols}
       />
 
-      {/* Confirm staged trade */}
       <Dialog
-        open={Boolean(tradeCandidate)}
+        open={Boolean(tradeConfirm)}
         onClose={() => {
-          if (!tradeConfirming) cancelTrade();
+          if (!tradeExecuting) setTradeConfirm(null);
         }}
         slotProps={{
           paper: {
             sx: {
               bgcolor: "#0d1321",
-              border: "1px solid rgba(59, 130, 246, 0.25)",
+              border: `1px solid ${tradeConfirm?.action === "BUY" ? "rgba(16, 185, 129, 0.28)" : "rgba(239, 68, 68, 0.28)"}`,
               borderRadius: 3,
               minWidth: { xs: "calc(100vw - 32px)", sm: 460 },
             },
           },
         }}
       >
-        {tradeCandidate && (() => {
-          const rec = tradeCandidate.rec;
-          const lot = tradeCandidate.pending?.lot ?? rec.suggested_lot;
-          const entry = rec.price;
-          const sl = rec.stop_loss;
-          const tp = rec.take_profit;
-          const rr =
-            sl != null && tp != null && Math.abs(entry - sl) > 0
-              ? Math.abs(tp - entry) / Math.abs(entry - sl)
-              : null;
-          const isBuy = rec.action === "BUY";
-          return (
-            <>
-              <DialogTitle sx={{ color: "#fff", fontWeight: 650, display: "flex", alignItems: "center", gap: 1.25 }}>
-                <Chip
-                  size="small"
-                  label={actionLabel(rec.action)}
-                  color={actionColor(rec.action)}
-                  variant="outlined"
-                  sx={{ fontWeight: 800 }}
-                />
-                ยืนยันเปิดเทรด {rec.symbol}
-              </DialogTitle>
-              <DialogContent>
-                <Stack spacing={1.5}>
-                  <Typography variant="body2" color="text.secondary">
-                    {rec.summary || "ตรวจสอบรายละเอียดก่อนเปิดออเดอร์ด้วยราคาตลาด"}
-                  </Typography>
-                  <Box
-                    sx={{
-                      display: "grid",
-                      gridTemplateColumns: "1fr 1fr",
-                      gap: 1,
-                      p: 1.5,
-                      borderRadius: 2,
-                      bgcolor: "rgba(255,255,255,0.025)",
-                      border: "1px solid rgba(255,255,255,0.06)",
-                    }}
-                  >
-                    <Typography variant="caption" color="text.secondary">ราคาเข้า</Typography>
-                    <Typography variant="caption" sx={MONO}>{fmt(entry, 2)}</Typography>
-                    <Typography variant="caption" color="text.secondary">Stop Loss</Typography>
-                    <Typography variant="caption" sx={{ ...MONO, color: "#f87171" }}>{sl != null ? fmt(sl, 2) : "—"}</Typography>
-                    <Typography variant="caption" color="text.secondary">Take Profit</Typography>
-                    <Typography variant="caption" sx={{ ...MONO, color: "#34d399" }}>{tp != null ? fmt(tp, 2) : "—"}</Typography>
-                    <Typography variant="caption" color="text.secondary">ขนาด (lot)</Typography>
-                    <Typography variant="caption" sx={MONO}>{lot != null ? fmt(lot, 2) : "—"}</Typography>
-                    <Typography variant="caption" color="text.secondary">R:R</Typography>
-                    <Typography variant="caption" sx={MONO}>{rr != null ? `1 : ${fmt(rr, 2)}` : "—"}</Typography>
-                    <Typography variant="caption" color="text.secondary">ความเชื่อมั่น</Typography>
-                    <Typography variant="caption" sx={{ ...MONO, fontWeight: 700, color: isBuy ? "#34d399" : "#f87171" }}>
-                      {Math.round((rec.confidence ?? 0) * 100)}%
-                    </Typography>
-                  </Box>
-                </Stack>
-              </DialogContent>
-              <DialogActions sx={{ px: 3, pb: 2.5 }}>
-                <Button variant="text" color="inherit" disabled={tradeConfirming} onClick={cancelTrade}>
-                  ยกเลิก
-                </Button>
-                <Button
-                  variant="contained"
-                  color={isBuy ? "success" : "error"}
-                  disabled={tradeConfirming}
-                  onClick={confirmTrade}
-                  startIcon={tradeConfirming ? <CircularProgress size={16} color="inherit" /> : <Zap size={16} />}
+        <DialogTitle sx={{ color: "#fff", fontWeight: 650 }}>
+          Confirm {tradeConfirm ? actionLabel(tradeConfirm.action) : ""} Trade
+        </DialogTitle>
+        <DialogContent>
+          {tradeConfirm && (
+            <Stack spacing={1.25}>
+              <Typography variant="body2" color="text.secondary">
+                Open {tradeConfirm.symbol} as {actionLabel(tradeConfirm.action)} using the latest signal?
+              </Typography>
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 1,
+                  p: 1.5,
+                  borderRadius: 2,
+                  bgcolor: "rgba(255,255,255,0.025)",
+                  border: "1px solid rgba(255,255,255,0.06)",
+                }}
+              >
+                <Typography variant="caption" color="text.secondary">Symbol</Typography>
+                <Typography variant="caption" sx={{ fontWeight: 600 }}>{tradeConfirm.symbol}</Typography>
+                <Typography variant="caption" color="text.secondary">Side</Typography>
+                <Typography
+                  variant="caption"
+                  sx={{ fontWeight: 800, color: tradeConfirm.action === "BUY" ? "#10b981" : "#ef4444" }}
                 >
-                  ยืนยันเปิดเทรด
-                </Button>
-              </DialogActions>
-            </>
-          );
-        })()}
+                  {actionLabel(tradeConfirm.action)}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">Price</Typography>
+                <Typography variant="caption" sx={MONO}>{fmt(tradeConfirm.price, 2)}</Typography>
+                <Typography variant="caption" color="text.secondary">Lot</Typography>
+                <Typography variant="caption" sx={MONO}>{fmt(tradeConfirm.suggested_lot, 2)}</Typography>
+                <Typography variant="caption" color="text.secondary">Stop Loss</Typography>
+                <Typography variant="caption" sx={MONO}>{fmt(tradeConfirm.stop_loss, 2)}</Typography>
+                <Typography variant="caption" color="text.secondary">Take Profit</Typography>
+                <Typography variant="caption" sx={MONO}>{fmt(tradeConfirm.take_profit, 2)}</Typography>
+                <Typography variant="caption" color="text.secondary">Confidence</Typography>
+                <Typography variant="caption" sx={MONO}>{Math.round(tradeConfirm.confidence * 100)}%</Typography>
+              </Box>
+              {tradeConfirm.summary && (
+                <Typography variant="caption" color="text.secondary">
+                  {tradeConfirm.summary}
+                </Typography>
+              )}
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button
+            variant="text"
+            color="inherit"
+            disabled={tradeExecuting}
+            onClick={() => setTradeConfirm(null)}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color={tradeConfirm?.action === "BUY" ? "success" : "error"}
+            disabled={tradeExecuting}
+            onClick={confirmTrade}
+            startIcon={tradeExecuting ? <CircularProgress size={16} color="inherit" /> : undefined}
+          >
+            Confirm {tradeConfirm ? actionLabel(tradeConfirm.action) : ""}
+          </Button>
+        </DialogActions>
       </Dialog>
 
       <Dialog

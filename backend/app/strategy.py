@@ -59,6 +59,48 @@ class Strategy:
         )
 
     @staticmethod
+    def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
+        return max(low, min(high, value))
+
+    @classmethod
+    def _strength(cls, value: float, scale: float) -> float:
+        if scale <= 0:
+            return 0.0
+        return cls._clamp(abs(value) / scale)
+
+    @classmethod
+    def _weighted_signal(
+        cls,
+        bull_score: float,
+        bear_score: float,
+        max_score: float,
+        bull_reasons: List[str],
+        bear_reasons: List[str],
+        threshold: float = 0.22,
+    ) -> StrategySignal:
+        """Convert weighted indicator strength into a continuous signal score.
+
+        Confidence here is a signal-strength score, not a win probability. The
+        threshold prevents very small numerical tilts from becoming trades.
+        """
+        if max_score <= 0:
+            return StrategySignal(action=Action.HOLD, confidence=0.0)
+
+        net = (bull_score - bear_score) / max_score
+        strength = cls._clamp(abs(net))
+        if strength < threshold:
+            return StrategySignal(
+                action=Action.HOLD,
+                confidence=round(strength, 2),
+                reasons=bull_reasons + bear_reasons,
+            )
+
+        confidence = round(cls._clamp(0.35 + (0.65 * strength)), 2)
+        if net > 0:
+            return StrategySignal(action=Action.BUY, confidence=confidence, reasons=bull_reasons)
+        return StrategySignal(action=Action.SELL, confidence=confidence, reasons=bear_reasons)
+
+    @staticmethod
     def _vote(bull: List[str], bear: List[str]) -> StrategySignal:
         """Turn agreeing/disagreeing reason lists into a signal."""
         total = len(bull) + len(bear)
@@ -132,28 +174,47 @@ class EmaMacdRsiStrategy(Strategy):
     )
 
     def evaluate(self, df, snap):
+        bull_score = bear_score = max_score = 0.0
         bull: List[str] = []
         bear: List[str] = []
+        atr = snap.atr or (snap.price * 0.005)
 
         if snap.ema_fast is not None and snap.ema_slow is not None:
-            if snap.ema_fast > snap.ema_slow:
-                bull.append("EMA12 > EMA26 (uptrend)")
-            else:
-                bear.append("EMA12 < EMA26 (downtrend)")
+            weight = 0.40
+            spread = snap.ema_fast - snap.ema_slow
+            strength = self._strength(spread, atr)
+            max_score += weight
+            if spread > 0:
+                bull_score += weight * strength
+                bull.append(f"EMA trend +{strength:.0%}")
+            elif spread < 0:
+                bear_score += weight * strength
+                bear.append(f"EMA trend -{strength:.0%}")
 
         if snap.macd_hist is not None:
+            weight = 0.35
+            strength = self._strength(snap.macd_hist, atr * 0.35)
+            max_score += weight
             if snap.macd_hist > 0:
-                bull.append("MACD histogram positive")
-            else:
-                bear.append("MACD histogram negative")
+                bull_score += weight * strength
+                bull.append(f"MACD momentum +{strength:.0%}")
+            elif snap.macd_hist < 0:
+                bear_score += weight * strength
+                bear.append(f"MACD momentum -{strength:.0%}")
 
         if snap.rsi is not None:
-            if snap.rsi < 30:
-                bull.append(f"RSI oversold ({snap.rsi:.0f})")
-            elif snap.rsi > 70:
-                bear.append(f"RSI overbought ({snap.rsi:.0f})")
+            weight = 0.25
+            max_score += weight
+            if snap.rsi < 50:
+                strength = self._clamp((50 - snap.rsi) / 20)
+                bull_score += weight * strength
+                bull.append(f"RSI support {snap.rsi:.0f} ({strength:.0%})")
+            elif snap.rsi > 50:
+                strength = self._clamp((snap.rsi - 50) / 20)
+                bear_score += weight * strength
+                bear.append(f"RSI pressure {snap.rsi:.0f} ({strength:.0%})")
 
-        sig = self._vote(bull, bear)
+        sig = self._weighted_signal(bull_score, bear_score, max_score, bull, bear)
         sig.stop_loss, sig.take_profit = self.atr_levels(snap, sig.action)
         return sig
 
@@ -172,26 +233,44 @@ class TrendFollowStrategy(Strategy):
         close = df["close"]
         ema50 = close.ewm(span=50, adjust=False).mean()
         slope = ema50.iloc[-1] - ema50.iloc[-5] if len(ema50) >= 5 else 0.0
+        atr = snap.atr or (snap.price * 0.005)
+        bull_score = bear_score = max_score = 0.0
         bull: List[str] = []
         bear: List[str] = []
 
-        if snap.price > ema50.iloc[-1]:
-            bull.append("price above EMA50")
-        else:
-            bear.append("price below EMA50")
+        price_gap = snap.price - ema50.iloc[-1]
+        weight = 0.45
+        strength = self._strength(price_gap, atr * 1.5)
+        max_score += weight
+        if price_gap > 0:
+            bull_score += weight * strength
+            bull.append(f"price above EMA50 ({strength:.0%})")
+        elif price_gap < 0:
+            bear_score += weight * strength
+            bear.append(f"price below EMA50 ({strength:.0%})")
 
+        weight = 0.30
+        strength = self._strength(slope, atr * 0.35)
+        max_score += weight
         if slope > 0:
-            bull.append("EMA50 rising")
+            bull_score += weight * strength
+            bull.append(f"EMA50 rising ({strength:.0%})")
         elif slope < 0:
-            bear.append("EMA50 falling")
+            bear_score += weight * strength
+            bear.append(f"EMA50 falling ({strength:.0%})")
 
         if snap.macd_hist is not None:
-            (bull if snap.macd_hist > 0 else bear).append("MACD momentum")
+            weight = 0.25
+            strength = self._strength(snap.macd_hist, atr * 0.35)
+            max_score += weight
+            if snap.macd_hist > 0:
+                bull_score += weight * strength
+                bull.append(f"MACD momentum +{strength:.0%}")
+            elif snap.macd_hist < 0:
+                bear_score += weight * strength
+                bear.append(f"MACD momentum -{strength:.0%}")
 
-        sig = self._vote(bull, bear)
-        # Trend trades need agreement; require >=2/3 to act.
-        if sig.confidence < 0.66:
-            sig.action = Action.HOLD
+        sig = self._weighted_signal(bull_score, bear_score, max_score, bull, bear, threshold=0.28)
         sig.stop_loss, sig.take_profit = self.atr_levels(snap, sig.action)
         return sig
 
@@ -207,22 +286,38 @@ class MeanReversionStrategy(Strategy):
     )
 
     def evaluate(self, df, snap):
+        bull_score = bear_score = max_score = 0.0
         bull: List[str] = []
         bear: List[str] = []
+        atr = snap.atr or (snap.price * 0.005)
 
-        if snap.bb_lower is not None and snap.price <= snap.bb_lower:
-            bull.append("price at/below lower Bollinger band")
-        if snap.bb_upper is not None and snap.price >= snap.bb_upper:
-            bear.append("price at/above upper Bollinger band")
+        if snap.bb_lower is not None and snap.bb_upper is not None:
+            weight = 0.55
+            max_score += weight
+            band_width = max(snap.bb_upper - snap.bb_lower, atr)
+            mid = (snap.bb_upper + snap.bb_lower) / 2
+            if snap.price < mid:
+                strength = self._clamp((mid - snap.price) / (band_width / 2))
+                bull_score += weight * strength
+                bull.append(f"below Bollinger midpoint ({strength:.0%})")
+            elif snap.price > mid:
+                strength = self._clamp((snap.price - mid) / (band_width / 2))
+                bear_score += weight * strength
+                bear.append(f"above Bollinger midpoint ({strength:.0%})")
 
         if snap.rsi is not None:
-            if snap.rsi < 35:
-                bull.append(f"RSI low ({snap.rsi:.0f})")
-            elif snap.rsi > 65:
-                bear.append(f"RSI high ({snap.rsi:.0f})")
+            weight = 0.45
+            max_score += weight
+            if snap.rsi < 50:
+                strength = self._clamp((50 - snap.rsi) / 20)
+                bull_score += weight * strength
+                bull.append(f"RSI reversion support {snap.rsi:.0f} ({strength:.0%})")
+            elif snap.rsi > 50:
+                strength = self._clamp((snap.rsi - 50) / 20)
+                bear_score += weight * strength
+                bear.append(f"RSI reversion pressure {snap.rsi:.0f} ({strength:.0%})")
 
-        sig = self._vote(bull, bear)
-        # For mean reversion, target the middle band (price), stop beyond ATR.
+        sig = self._weighted_signal(bull_score, bear_score, max_score, bull, bear, threshold=0.32)
         if sig.action != Action.HOLD:
             atr = snap.atr or (snap.price * 0.005)
             dist = settings.atr_sl_mult * atr
@@ -254,19 +349,33 @@ class BreakoutStrategy(Strategy):
         window = df.iloc[-(self.lookback + 1) : -1]
         hi = window["high"].max()
         lo = window["low"].min()
+        atr = snap.atr or (snap.price * 0.005)
+        bull_score = bear_score = max_score = 0.0
         bull: List[str] = []
         bear: List[str] = []
 
+        weight = 0.65
+        max_score += weight
         if snap.price > hi:
-            bull.append(f"break above {self.lookback}-bar high {hi:.5f}")
+            strength = self._strength(snap.price - hi, atr)
+            bull_score += weight * strength
+            bull.append(f"break above {self.lookback}-bar high ({strength:.0%})")
         elif snap.price < lo:
-            bear.append(f"break below {self.lookback}-bar low {lo:.5f}")
+            strength = self._strength(lo - snap.price, atr)
+            bear_score += weight * strength
+            bear.append(f"break below {self.lookback}-bar low ({strength:.0%})")
 
-        if snap.macd_hist is not None and bull and snap.macd_hist > 0:
-            bull.append("momentum confirms")
-        if snap.macd_hist is not None and bear and snap.macd_hist < 0:
-            bear.append("momentum confirms")
+        if snap.macd_hist is not None:
+            weight = 0.35
+            strength = self._strength(snap.macd_hist, atr * 0.35)
+            max_score += weight
+            if snap.macd_hist > 0:
+                bull_score += weight * strength
+                bull.append(f"breakout momentum +{strength:.0%}")
+            elif snap.macd_hist < 0:
+                bear_score += weight * strength
+                bear.append(f"breakout momentum -{strength:.0%}")
 
-        sig = self._vote(bull, bear)
+        sig = self._weighted_signal(bull_score, bear_score, max_score, bull, bear, threshold=0.35)
         sig.stop_loss, sig.take_profit = self.atr_levels(snap, sig.action)
         return sig

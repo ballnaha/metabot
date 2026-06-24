@@ -41,16 +41,16 @@ def send_telegram_notification(text: str, reply_markup: dict = None):
     except Exception as e:
         log.error("Failed to send Telegram notification: %s", e)
 
-def format_telegram_rec(rec: Recommendation, pending_status: str, pending_id: str = None) -> str:
+def format_telegram_rec(rec: Recommendation, pending_status: str) -> str:
     """Format recommendation details cleanly for Telegram message."""
     emoji = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}.get(rec.action.value, "⚪")
     ind = rec.indicators
     
     status_suffix = ""
     if pending_status == "executed":
-        status_suffix = "\n\n⚡ *Auto-Executed (require_confirm=false)*"
-    elif pending_status == "pending":
-        status_suffix = f"\n\n⏳ *Awaiting Confirmation (id: {pending_id})*"
+        status_suffix = "\n\n⚡ *Auto-Executed*"
+    elif pending_status == "failed":
+        status_suffix = "\n\n❌ *Execution Failed*"
         
     lines = [
         f"🤖 *MetaBot Auto Scan*",
@@ -83,8 +83,18 @@ async def auto_trade_loop():
     # Wait a few seconds for initial MT5 startup and connection
     await asyncio.sleep(5)
     
+    # Track the last processed candle time per symbol and timeframe
+    # Format: { (symbol, timeframe): candle_open_time }
+    last_processed_candles = {}
+    
     while True:
         try:
+            from . import mt5_client
+            if not settings.bot_enabled:
+                log.info("Auto-trade loop: Bot is disabled. Skipping scan.")
+                await asyncio.sleep(max(10, settings.auto_trade_interval))
+                continue
+
             symbols = settings.symbol_list
             if not symbols:
                 log.info("Auto-trade loop: No symbols configured. Sleeping.")
@@ -92,30 +102,32 @@ async def auto_trade_loop():
                 log.info("Auto-trade loop: Scanning symbols: %s", symbols)
                 for symbol in symbols:
                     try:
+                        timeframe = settings.default_timeframe
+                        
+                        # Fetch the latest candle to check its open time
+                        df = mt5_client.get_rates(symbol, timeframe, 3)
+                        if df is not None and len(df) > 0:
+                            latest_candle_time = str(df["time"].iloc[-1])
+                            cache_key = (symbol.upper(), timeframe.upper())
+                            
+                            # If we've already scanned this candle, skip to prevent duplicate spam
+                            if last_processed_candles.get(cache_key) == latest_candle_time:
+                                continue
+                            
+                            # Mark this candle as processed
+                            last_processed_candles[cache_key] = latest_candle_time
+                        
                         # Scan and stage
                         rec, pending = await manager.analyze_and_stage(
                             symbol=symbol,
-                            timeframe=settings.default_timeframe,
+                            timeframe=timeframe,
                             strategy_name=settings.strategy,
                             use_ai=settings.use_ai
                         )
                         
                         if rec.action != Action.HOLD and pending:
-                            text = format_telegram_rec(rec, pending.status, pending.id)
-                            
-                            # Build interactive buttons if confirmation is needed
-                            reply_markup = None
-                            if pending.status == "pending":
-                                reply_markup = {
-                                    "inline_keyboard": [
-                                        [
-                                            {"text": "✅ Confirm", "callback_data": f"confirm:{pending.id}"},
-                                            {"text": "❌ Cancel", "callback_data": f"cancel:{pending.id}"}
-                                        ]
-                                    ]
-                                }
-                            
-                            send_telegram_notification(text, reply_markup)
+                            text = format_telegram_rec(rec, pending.status)
+                            send_telegram_notification(text)
                             log.info("Auto-trade loop: Signal generated for %s: %s (status: %s)", symbol, rec.action.value, pending.status)
                             
                     except Exception as e:

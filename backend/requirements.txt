@@ -1,5 +1,5 @@
 # MT5 connectivity (Windows only)
-MetaTrader5==5.0.45
+MetaTrader5==5.0.5735
 
 # Data & indicators
 pandas==2.2.2

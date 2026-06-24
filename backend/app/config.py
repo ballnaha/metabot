@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     magic: int = 556677
     atr_sl_mult: float = 1.5
     default_rr: float = 2.0
-    require_confirm: bool = True
+    bot_enabled: bool = True
     auto_trade_interval: int = 60
     position_sizing_mode: str = "risk_pct"
     max_open_trades: int = 5

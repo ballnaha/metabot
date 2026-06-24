@@ -1,11 +1,8 @@
-"""Trade orchestration: analysis -> recommendation -> (confirm) -> execution.
+"""Trade orchestration: analysis -> recommendation -> immediate execution.
 
-The confirm-gated flow lives here:
-  1. analyze()  builds a Recommendation and, if actionable, a PendingTrade.
-  2. The user reviews it (Telegram / web / API).
-  3. confirm() actually sends the order to MT5.
-
-When settings.require_confirm is False, analyze() can auto-execute instead.
+The flow lives here:
+  1. analyze() builds a Recommendation.
+  2. analyze_and_stage() stages the trade and immediately calls confirm() to send the order to MT5.
 """
 from __future__ import annotations
 
@@ -77,6 +74,15 @@ class TradeManager:
             rec.summary = f"Already holding an active position on {symbol}."
             return rec, None
 
+        # Check active pending trades for this symbol (prevent duplicate alerts/signals in pending state)
+        pending_trades = self.list_pending()
+        if any(p.recommendation.symbol.upper() == symbol.upper() for p in pending_trades):
+            log.info("Symbol %s already has an active pending trade. Skipping new trade signal.", symbol)
+            rec = await self.analyze(symbol, timeframe, bars, strategy_name, use_ai)
+            rec.action = Action.HOLD
+            rec.summary = f"Already have a pending trade for {symbol}."
+            return rec, None
+
         # 2. Prevent entry if maximum open trade slots are filled
         if len(bot_positions) >= settings.max_open_trades:
             log.info("Max open trades limit reached (%s/%s). Skipping new entry for %s.",
@@ -91,8 +97,7 @@ class TradeManager:
             return rec, None
 
         pending = self.stage(rec)
-        if not settings.require_confirm:
-            self.confirm(pending.id)
+        self.confirm(pending.id)
         return rec, self._pending.get(pending.id)
 
     # ------------------------------------------------------------------ #

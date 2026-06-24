@@ -197,24 +197,12 @@ async def cmd_analyze(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     text = _format_rec(rec)
-    if pending and pending.status == "pending":
-        kb = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        "✅ Confirm", callback_data=f"confirm:{pending.id}"
-                    ),
-                    InlineKeyboardButton(
-                        "❌ Cancel", callback_data=f"cancel:{pending.id}"
-                    ),
-                ]
-            ]
-        )
-        await msg.edit_text(text, parse_mode="Markdown", reply_markup=kb)
-    else:
-        if pending and pending.status == "executed":
-            text += "\n\n⚡ Auto-executed (require_confirm=false)."
-        await msg.edit_text(text, parse_mode="Markdown")
+    if pending:
+        if pending.status == "executed":
+            text += "\n\n⚡ Auto-executed."
+        elif pending.status == "failed":
+            text += "\n\n❌ Execution failed."
+    await msg.edit_text(text, parse_mode="Markdown")
 
 
 async def cmd_strategies(update: Update, _ctx: ContextTypes.DEFAULT_TYPE):
@@ -236,69 +224,6 @@ async def cmd_strategies(update: Update, _ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
-async def cmd_pending(update: Update, _ctx: ContextTypes.DEFAULT_TYPE):
-    if not await _guard(update):
-        return
-    try:
-        res = _api_request("GET", "pending")
-        items = [PendingTrade.model_validate(x) for x in res.get("pending", [])]
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ Failed to list pending: {e}")
-        return
-        
-    if not items:
-        await update.message.reply_text("No pending trades.")
-        return
-    for p in items:
-        kb = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton("✅ Confirm", callback_data=f"confirm:{p.id}"),
-                    InlineKeyboardButton("❌ Cancel", callback_data=f"cancel:{p.id}"),
-                ]
-            ]
-        )
-        await update.message.reply_text(
-            _format_rec(p.recommendation), parse_mode="Markdown", reply_markup=kb
-        )
-
-
-async def on_button(update: Update, _ctx: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if not _authorized(update):
-        await query.edit_message_text("⛔ Unauthorized.")
-        return
-
-    action, pending_id = query.data.split(":", 1)
-    if action == "cancel":
-        try:
-            _api_request("POST", "cancel", {"pending_id": pending_id})
-            await query.edit_message_text(query.message.text + "\n\n❌ Cancelled.")
-        except Exception as e:
-            await query.edit_message_text(query.message.text + f"\n\n⚠️ Cancel failed: {e}")
-        return
-
-    try:
-        res = _api_request("POST", "confirm", {"pending_id": pending_id})
-        p = PendingTrade.model_validate(res)
-    except Exception as e:
-        await query.edit_message_text(query.message.text + f"\n\n⚠️ {e}")
-        return
-
-    if p.status == "executed":
-        r = p.result or {}
-        await query.edit_message_text(
-            query.message.text
-            + f"\n\n✅ *Executed* — order `{r.get('order')}` @ `{r.get('price')}`",
-            parse_mode="Markdown",
-        )
-    else:
-        await query.edit_message_text(
-            query.message.text + f"\n\n⚠️ Failed: {p.result}"
-        )
-
-
 def build_application() -> Application:
     if not settings.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
@@ -309,8 +234,6 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("positions", cmd_positions))
     app.add_handler(CommandHandler("analyze", cmd_analyze))
     app.add_handler(CommandHandler("strategies", cmd_strategies))
-    app.add_handler(CommandHandler("pending", cmd_pending))
-    app.add_handler(CallbackQueryHandler(on_button))
     return app
 
 

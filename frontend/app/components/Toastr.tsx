@@ -125,7 +125,7 @@ function ToastItem({ toast, onClose }: { toast: Toast; onClose: () => void }) {
         alignItems: "center",
         gap: 2,
         p: 2,
-        borderRadius: 2.5,
+        borderRadius: 0.5,
         bgcolor: "rgba(15, 20, 28, 0.85)",
         backdropFilter: "blur(12px)",
         border: "1px solid",

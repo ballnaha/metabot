@@ -151,6 +151,12 @@ def positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     raw = raw or []
     out = []
     for p in raw:
+        try:
+            s_info = symbol_info(p.symbol)
+            contract_size = s_info.get("trade_contract_size", 1.0)
+        except Exception:
+            contract_size = 1.0
+
         out.append(
             {
                 "ticket": p.ticket,
@@ -163,6 +169,7 @@ def positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
                 "price_current": p.price_current,
                 "profit": p.profit,
                 "magic": p.magic,
+                "contract_size": contract_size,
                 "time": datetime.utcfromtimestamp(p.time).isoformat(),
             }
         )

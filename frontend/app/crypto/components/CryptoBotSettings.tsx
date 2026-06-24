@@ -1,8 +1,11 @@
 "use client";
 
+import React, { useState } from "react";
 import {
+  Autocomplete,
   Box,
   Button,
+  Chip,
   CircularProgress,
   Drawer,
   FormControl,
@@ -11,6 +14,7 @@ import {
   Select,
   Stack,
   Switch,
+  TextField,
   Typography,
 } from "@mui/material";
 import {
@@ -39,7 +43,7 @@ type BotSettingsForm = {
   strategy: string;
   auto_trade_interval: number;
   use_ai?: boolean;
-  require_confirm?: boolean;
+  bot_enabled: boolean;
 };
 
 type CryptoBotSettingsProps = {
@@ -54,6 +58,11 @@ type CryptoBotSettingsProps = {
   strategyLabel: (name: string) => string;
   savingSettings: boolean;
   onSave: () => void;
+  cryptoInput: string;
+  setCryptoInput: (val: string) => void;
+  onDetectCryptoSymbols: () => void;
+  detectingCryptoSymbols: boolean;
+  allCryptoSymbols: string[];
 };
 
 function QuickNumberInput({
@@ -189,7 +198,38 @@ export default function CryptoBotSettings({
   strategyLabel,
   savingSettings,
   onSave,
+  cryptoInput,
+  setCryptoInput,
+  onDetectCryptoSymbols,
+  detectingCryptoSymbols,
+  allCryptoSymbols,
 }: CryptoBotSettingsProps) {
+  const [newSymbolInput, setNewSymbolInput] = useState("");
+
+  const handleAddSymbol = () => {
+    const clean = newSymbolInput.trim().toUpperCase();
+    if (!clean) return;
+    const list = cryptoInput ? cryptoInput.split(",").map(x => x.trim().toUpperCase()).filter(Boolean) : [];
+    if (!list.includes(clean)) {
+      const updated = [...list, clean];
+      setCryptoInput(updated.join(", "));
+    }
+    setNewSymbolInput("");
+  };
+
+  const handleKeyDown = (e: any) => {
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      handleAddSymbol();
+    }
+  };
+
+  const handleRemoveSymbol = (sym: string) => {
+    const list = cryptoInput ? cryptoInput.split(",").map(x => x.trim().toUpperCase()).filter(Boolean) : [];
+    const updated = list.filter(x => x !== sym);
+    setCryptoInput(updated.join(", "));
+  };
+
   const patchSettings = (patch: Partial<BotSettingsForm>) => {
     setSettingsForm({ ...settingsForm, ...patch });
   };
@@ -202,7 +242,7 @@ export default function CryptoBotSettings({
       slotProps={{
         paper: {
           sx: {
-            width: { xs: "100vw", sm: 500, md: 540 },
+            width: { xs: "100vw", sm: 720, md: 800 },
             bgcolor: "#0d1321",
             color: "#e2e8f0",
             borderLeft: "1px solid rgba(59, 130, 246, 0.18)",
@@ -248,27 +288,167 @@ export default function CryptoBotSettings({
 
         <Box sx={{ flex: 1, overflowY: "auto", px: 3, py: 3 }}>
           <Stack spacing={2.5}>
-            <Box sx={{ p: 1.5, bgcolor: "rgba(16,185,129,0.045)", border: "1px solid rgba(16,185,129,0.12)", borderRadius: 2 }}>
-              <Stack direction="row" spacing={1.25} sx={{ alignItems: "center", justifyContent: "space-between" }}>
-                <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                  <Filter size={17} color="#34d399" />
+            <Box sx={{ p: 2, bgcolor: "rgba(59, 130, 246, 0.03)", border: "1px solid rgba(59, 130, 246, 0.1)", borderRadius: 1 }}>
+              <Stack spacing={1.5}>
+                <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
+                  <Filter size={18} color="#3b82f6" />
                   <Box>
-                    <Typography variant="body2" sx={{ fontWeight: 650, color: "#d1fae5" }}>
-                      คัดเหรียญน่าเทรด
+                    <Typography variant="body2" sx={{ fontWeight: 650, color: "#fff" }}>
+                      คัดเหรียญน่าเทรด (Crypto Symbols)
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
-                      อยู่ในตั้งค่าบอท เพื่อให้เลือกเหรียญก่อนเปิด Auto
+                      พิมพ์เหรียญแล้วกด Enter หรือกดปุ่ม สแกนเหรียญ เพื่อตรวจหาอัตโนมัติ
                     </Typography>
                   </Box>
                 </Stack>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  disabled
-                  sx={{ borderColor: "rgba(16,185,129,0.22)", color: "#86efac", flex: "0 0 auto" }}
-                >
-                  เตรียมใช้งาน
-                </Button>
+
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                  <Autocomplete
+                    freeSolo
+                    size="small"
+                    options={allCryptoSymbols || []}
+                    inputValue={newSymbolInput}
+                    onInputChange={(_event, newInputValue) => {
+                      setNewSymbolInput(newInputValue);
+                    }}
+                    onChange={(_event, value) => {
+                      if (value) {
+                        const clean = typeof value === "string" ? value.trim().toUpperCase() : "";
+                        if (clean) {
+                          const list = cryptoInput ? cryptoInput.split(",").map(x => x.trim().toUpperCase()).filter(Boolean) : [];
+                          if (!list.includes(clean)) {
+                            const updated = [...list, clean];
+                            setCryptoInput(updated.join(", "));
+                          }
+                          setNewSymbolInput("");
+                        }
+                      }
+                    }}
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        placeholder="พิมพ์ค้นหาเหรียญ เช่น BTCUSD"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            handleAddSymbol();
+                          }
+                        }}
+                        sx={{
+                          "& .MuiInputBase-root": {
+                            height: 40,
+                            bgcolor: "rgba(255,255,255,0.01)",
+                            color: "#fff",
+                            borderRadius: 1,
+                            "& fieldset": {
+                              borderColor: "rgba(255, 255, 255, 0.08)",
+                            },
+                            "&:hover fieldset": {
+                              borderColor: "rgba(255, 255, 255, 0.2) !important",
+                            },
+                            "&.Mui-focused fieldset": {
+                              borderColor: "#3b82f6 !important",
+                            }
+                          },
+                          "& .MuiInputBase-input": {
+                            color: "#fff",
+                            fontSize: "0.9rem",
+                          }
+                        }}
+                      />
+                    )}
+                    slotProps={{
+                      paper: {
+                        sx: {
+                          bgcolor: "#0d1321",
+                          border: "1px solid rgba(59,130,246,0.18)",
+                          color: "#e2e8f0",
+                          "& .MuiAutocomplete-option": {
+                            fontWeight: 700,
+                            fontSize: "0.9rem",
+                            "&[aria-selected='true']": {
+                              bgcolor: "rgba(59, 130, 246, 0.16)",
+                            },
+                            "&.Mui-focused": {
+                              bgcolor: "rgba(255, 255, 255, 0.04)",
+                            }
+                          }
+                        },
+                      },
+                    }}
+                    sx={{ flexGrow: 1 }}
+                  />
+                  <Button
+                    variant="contained"
+                    size="small"
+                    onClick={handleAddSymbol}
+                    sx={{
+                      height: 40,
+                      fontWeight: 600,
+                      px: 2,
+                      minWidth: "fit-content",
+                      bgcolor: "#3b82f6",
+                      "&:hover": { bgcolor: "#2563eb" },
+                      borderRadius: 1,
+                    }}
+                  >
+                    เพิ่ม
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={onDetectCryptoSymbols}
+                    disabled={detectingCryptoSymbols}
+                    sx={{
+                      height: 40,
+                      borderColor: "rgba(59, 130, 246, 0.25)",
+                      color: "#60a5fa",
+                      fontWeight: 600,
+                      px: 2,
+                      minWidth: "fit-content",
+                      bgcolor: "rgba(59, 130, 246, 0.04)",
+                      "&:hover": { borderColor: "#3b82f6", bgcolor: "rgba(59, 130, 246, 0.08)" },
+                      "&.Mui-disabled": { color: "rgba(255,255,255,0.2)" },
+                      borderRadius: 1,
+                    }}
+                  >
+                    {detectingCryptoSymbols ? <CircularProgress size={16} color="inherit" /> : "สแกนเหรียญ"}
+                  </Button>
+                </Stack>
+
+                {/* Render current tags (chips) */}
+                <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, pt: 0.5 }}>
+                  {(() => {
+                    const list = cryptoInput ? cryptoInput.split(",").map(x => x.trim().toUpperCase()).filter(Boolean) : [];
+                    if (list.length === 0) {
+                      return (
+                        <Typography variant="caption" color="text.secondary" sx={{ fontStyle: "italic", px: 0.5 }}>
+                          ยังไม่มีเหรียญในรายการสแกน
+                        </Typography>
+                      );
+                    }
+                    return list.map((sym) => (
+                      <Chip
+                        key={sym}
+                        label={sym}
+                        onDelete={() => handleRemoveSymbol(sym)}
+                        size="small"
+                        sx={{
+                          bgcolor: "rgba(59, 130, 246, 0.08)",
+                          color: "#fff",
+                          border: "1px solid rgba(59, 130, 246, 0.2)",
+                          fontWeight: 700,
+                          borderRadius: 1,
+                          "& .MuiChip-deleteIcon": {
+                            color: "rgba(255, 255, 255, 0.4)",
+                            transition: "color 0.2s",
+                            "&:hover": { color: "#ef4444" }
+                          }
+                        }}
+                      />
+                    ));
+                  })()}
+                </Box>
               </Stack>
             </Box>
 
@@ -398,7 +578,7 @@ export default function CryptoBotSettings({
             </Box>
 
             {activeStrategy && (
-              <Box sx={{ p: 1.5, bgcolor: "rgba(59, 130, 246, 0.06)", border: "1px solid rgba(59, 130, 246, 0.16)", borderRadius: 2 }}>
+              <Box sx={{ p: 1.5, bgcolor: "rgba(59, 130, 246, 0.06)", border: "1px solid rgba(59, 130, 246, 0.16)", borderRadius: 1 }}>
                 <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 0.75 }}>
                   <Layers size={14} color="#60a5fa" />
                   <Typography variant="caption" sx={{ color: "#bfdbfe", fontWeight: 650 }}>
@@ -428,17 +608,17 @@ export default function CryptoBotSettings({
 
             <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", px: 1.25, py: 1, bgcolor: "rgba(255,255,255,0.01)", border: "1px solid rgba(255,255,255,0.03)", borderRadius: 2 }}>
               <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                {settingsForm.require_confirm ? <ShieldCheck size={16} color="#eab308" /> : <Zap size={16} color="#10b981" />}
+                {settingsForm.bot_enabled ? <ShieldCheck size={16} color="#10b981" /> : <ShieldAlert size={16} color="#ef4444" />}
                 <Box>
                   <Typography variant="body2" sx={{ fontWeight: 650 }}>
-                    {settingsForm.require_confirm ? "รออนุมัติก่อนส่งออเดอร์" : "ส่งออเดอร์อัตโนมัติ"}
+                    {settingsForm.bot_enabled ? "เปิดการใช้งานบอท" : "ปิดการใช้งานบอท"}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
-                    {settingsForm.require_confirm ? "ต้องอนุมัติผ่าน Telegram ก่อน" : "ส่งเข้าตลาดทันทีโดยไม่รออนุมัติ"}
+                    {settingsForm.bot_enabled ? "บอทกำลังทำงาน สแกนและส่งออเดอร์อัตโนมัติ" : "หยุดการสแกนและซื้อขายอัตโนมัติชั่วคราว"}
                   </Typography>
                 </Box>
               </Stack>
-              <Switch checked={!settingsForm.require_confirm} onChange={(e) => patchSettings({ require_confirm: !e.target.checked })} color="success" />
+              <Switch checked={settingsForm.bot_enabled ?? false} onChange={(e) => patchSettings({ bot_enabled: e.target.checked })} color="success" />
             </Box>
           </Stack>
         </Box>

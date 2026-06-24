@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from . import mt5_client, strategy, worker
 from .config import settings
-from .models import AnalyzeRequest, ConfirmRequest
+from .models import AnalyzeRequest
 from .trader import manager
 
 logging.basicConfig(level=logging.INFO)
@@ -92,13 +92,18 @@ async def positions():
 @app.post("/api/analyze", dependencies=[Depends(require_key)])
 async def analyze(req: AnalyzeRequest):
     try:
+        if req.preview:
+            rec = await manager.analyze(
+                req.symbol, req.timeframe, req.bars, req.strategy, req.use_ai
+            )
+            return {"recommendation": rec.model_dump(), "pending": None}
+
         rec, pending = await manager.analyze_and_stage(
             req.symbol, req.timeframe, req.bars, req.strategy, req.use_ai
         )
         return {
             "recommendation": rec.model_dump(),
             "pending": pending.model_dump() if pending else None,
-            "require_confirm": settings.require_confirm,
         }
     except KeyError as e:  # unknown strategy name
         raise HTTPException(status_code=400, detail=str(e))
@@ -143,28 +148,7 @@ async def scan(req: ScanRequest):
     return {"results": items}
 
 
-@app.get("/api/pending", dependencies=[Depends(require_key)])
-async def pending():
-    return {"pending": [p.model_dump() for p in manager.list_pending()]}
-
-
-@app.post("/api/confirm", dependencies=[Depends(require_key)])
-async def confirm(req: ConfirmRequest):
-    try:
-        p = manager.confirm(req.pending_id, req.lot)
-        return p.model_dump()
-    except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-
-
-@app.post("/api/cancel", dependencies=[Depends(require_key)])
-async def cancel(req: ConfirmRequest):
-    p = manager.cancel(req.pending_id)
-    if p is None:
-        raise HTTPException(status_code=404, detail="Unknown pending trade")
-    return p.model_dump()
+# Pending, Confirm and Cancel endpoints removed as require_confirm has been deleted
 
 
 @app.post("/api/positions/{ticket}/close", dependencies=[Depends(require_key)])
@@ -195,8 +179,7 @@ class SettingsUpdateRequest(BaseModel):
     max_lot: float | None = None
     magic: int | None = None
     atr_sl_mult: float | None = None
-    default_rr: float | None = None
-    require_confirm: bool | None = None
+    bot_enabled: bool | None = None
     auto_trade_interval: int | None = None
     position_sizing_mode: str | None = None
     max_open_trades: int | None = None
@@ -227,7 +210,7 @@ async def get_settings_endpoint():
         "magic": settings.magic,
         "atr_sl_mult": settings.atr_sl_mult,
         "default_rr": settings.default_rr,
-        "require_confirm": settings.require_confirm,
+        "bot_enabled": settings.bot_enabled,
         "auto_trade_interval": settings.auto_trade_interval,
         "position_sizing_mode": settings.position_sizing_mode,
         "max_open_trades": settings.max_open_trades,
@@ -255,7 +238,8 @@ async def update_settings_endpoint(req: SettingsUpdateRequest):
             warning_msg = f"Settings saved, but MT5 reconnection failed: {e}"
             log.warning(warning_msg)
             
-    return {"status": "saved", "warning": warning_msg}
+    return {"status": "saved", "warning": warning_msg, "restarting": False}
+
 
 
 class DirectTradeRequest(BaseModel):
@@ -274,6 +258,21 @@ async def get_symbol_tick(symbol: str):
         raise HTTPException(status_code=503, detail=str(e))
 
 
+@app.get("/api/ticks", dependencies=[Depends(require_key)])
+async def get_bulk_ticks(symbols: str):
+    try:
+        sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+        results = {}
+        for sym in sym_list:
+            try:
+                results[sym] = mt5_client.get_tick(sym)
+            except Exception as e:
+                results[sym] = {"error": str(e)}
+        return results
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 @app.get("/api/symbols/detect-crypto", dependencies=[Depends(require_key)])
 async def detect_crypto_symbols():
     try:
@@ -286,27 +285,55 @@ async def detect_crypto_symbols():
             return {"symbols": []}
             
         def is_crypto(s) -> bool:
+            name_upper = s.name.upper()
             path_lower = getattr(s, 'path', '').lower()
-            if 'cryptocurrencies' in path_lower or 'crypto' in path_lower:
+            if 'cryptocurrencies' in path_lower or 'crypto' in path_lower or 'coin' in path_lower:
                 return True
+            
+            # General crypto naming pattern: ends with USD, USDT, or suffix (e.g. USDm)
+            if (name_upper.endswith("USD") or name_upper.endswith("USDT") or 
+                name_upper.endswith("USDm") or name_upper.endswith("USDTm") or
+                ".USD" in name_upper or "-USD" in name_upper):
+                
+                # Exclude forex
+                forex_prefixes = ("EUR", "GBP", "AUD", "NZD", "CAD", "CHF", "HKD", "SGD", "ZAR", "MXN", "NOK", "SEK", "DKK", "TRY", "CNH", "RUB")
+                if any(name_upper.startswith(prefix) for prefix in forex_prefixes):
+                    clean_name = name_upper.replace("m", "").replace(".ecn", "")
+                    if len(clean_name) == 6:
+                        return False
+                
+                # Exclude metals
+                metal_prefixes = ("XAU", "XAG", "XPD", "XPT", "GOLD", "SILVER")
+                if any(name_upper.startswith(prefix) for prefix in metal_prefixes):
+                    return False
+                
+                return True
+            
             crypto_pat = re.compile(
-                r'^(BTC|ETH|SOL|XRP|LTC|DOGE|ADA|DOT|LINK|AVAX|SHIB|UNI)USD', 
+                r'^(BTC|ETH|SOL|XRP|LTC|DOGE|ADA|DOT|LINK|AVAX|SHIB|UNI|GALA|LUNA|ALGO|BCH|XLM|ATOM|ICP|FIL|HBAR|XTZ|GRT|AAVE|MKR|THETA|FTM|BNB|DYDX|OP|ARB|NEAR|TIA|SUI|SEI|APT|RNDR|INJ|FET|AGIX|OCEAN|JUP|WIF|BONK|FLOKI|PEPE)', 
                 re.IGNORECASE
             )
-            return bool(crypto_pat.match(s.name))
+            return bool(crypto_pat.match(name_upper))
             
         detected = []
         for s in raw_symbols:
             if is_crypto(s) and getattr(s, 'trade_mode', 0) > 0:
-                if not any(x in s.name.upper() for x in ["EUR", "GBP", "JPY", "BTC", "ETH"]) or s.name.upper() in ["BTCUSD", "ETHUSD"]:
-                    if not s.name.upper().startswith("CRYPTO_") and "VAULT" not in s.name.upper():
-                        detected.append(s.name)
+                name_upper = s.name.upper()
+                # Exclude fiat cross rates (like BTCEUR, ETHGBP, BTCJPY) unless quoted in USD/USDT
+                if "EUR" in name_upper or "GBP" in name_upper or "JPY" in name_upper:
+                    if not (name_upper.endswith("USD") or name_upper.endswith("USDT") or name_upper.endswith("USDm") or name_upper.endswith("USDTm")):
+                        continue
+                if not name_upper.startswith("CRYPTO_") and "VAULT" not in name_upper:
+                    detected.append(s.name)
         
         popular = ["BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "LTCUSD", "DOGEUSD"]
-        sorted_detected = sorted(
-            detected, 
-            key=lambda x: (0, popular.index(x.upper())) if x.upper() in popular else (1, x)
-        )
+        def sort_key(x):
+            clean = x.upper().replace("M", "").replace(".ECN", "")
+            if clean in popular:
+                return (0, popular.index(clean))
+            return (1, x)
+            
+        sorted_detected = sorted(detected, key=sort_key)
         return {"symbols": sorted_detected}
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
@@ -414,7 +441,10 @@ async def detect_stock_symbols():
 async def direct_trade(req: DirectTradeRequest):
     try:
         from .models import Action
-        action_enum = Action.BUY if req.action.upper() == "BUY" else Action.SELL
+        action = req.action.upper()
+        if action not in {"BUY", "SELL"}:
+            raise HTTPException(status_code=400, detail="action must be BUY or SELL")
+        action_enum = Action.BUY if action == "BUY" else Action.SELL
         result = mt5_client.order_send(
             symbol=req.symbol.upper(),
             action=action_enum,
@@ -426,6 +456,8 @@ async def direct_trade(req: DirectTradeRequest):
         if not result.get("ok"):
             raise HTTPException(status_code=400, detail=result.get("comment", "Order failed"))
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
 

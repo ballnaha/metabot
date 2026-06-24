@@ -121,6 +121,9 @@ const MONO = { fontFamily: "ui-monospace, monospace", fontVariantNumeric: "tabul
 const actionColor = (a?: string): "success" | "error" | "default" =>
   a === "BUY" ? "success" : a === "SELL" ? "error" : "default";
 
+const actionLabel = (a?: string) =>
+  a === "BUY" ? "Long" : a === "SELL" ? "Short" : a || "Hold";
+
 const barColor = (a?: string): "success" | "error" | "primary" =>
   a === "BUY" ? "success" : a === "SELL" ? "error" : "primary";
 
@@ -349,7 +352,6 @@ export default function Dashboard() {
     magic: 556677,
     atr_sl_mult: 1.5,
     default_rr: 2.0,
-    require_confirm: true,
     api_key: "",
   });
   const [savingSettings, setSavingSettings] = useState(false);
@@ -499,37 +501,7 @@ export default function Dashboard() {
     }
   }
 
-  async function confirm() {
-    if (!pending) return;
-    try {
-      const p = await api("confirm", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pending_id: pending.id }),
-      });
-      setPending({ ...pending, status: p.status });
-      refresh();
-      toastr.success("Trade executed successfully!");
-    } catch (e: any) {
-      setError(e.message);
-      toastr.error(`Execution failed: ${e.message}`);
-    }
-  }
-
-  async function cancel() {
-    if (!pending) return;
-    try {
-      await api("cancel", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pending_id: pending.id }),
-      });
-      setPending({ ...pending, status: "cancelled" });
-      toastr.info("Staged trade cancelled");
-    } catch (e: any) {
-      toastr.error(`Cancel failed: ${e.message}`);
-    }
-  }
+  // (Manual confirm and cancel functions removed since require_confirm has been deleted)
 
   async function closePos(ticket: number) {
     try {
@@ -1366,7 +1338,7 @@ export default function Dashboard() {
                                 {rec.symbol}
                                 <Chip
                                   size="small"
-                                  label={rec.action}
+                                  label={actionLabel(rec.action)}
                                   color={actionColor(rec.action)}
                                   sx={{ fontWeight: 900, fontSize: "0.8rem", height: 24, px: 0.5 }}
                                 />
@@ -1410,7 +1382,7 @@ export default function Dashboard() {
                           {/* Stop Loss, Take profit, Suggested Lot Grid */}
                           <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr 1fr", sm: "repeat(4, 1fr)" } }}>
                             {[
-                              { k: "Strategy Bias", v: <Chip size="small" label={rec.indicators?.rule_bias} color={actionColor(rec.indicators?.rule_bias)} variant="outlined" sx={{ fontWeight: 700 }} /> },
+                              { k: "Strategy Bias", v: <Chip size="small" label={actionLabel(rec.indicators?.rule_bias)} color={actionColor(rec.indicators?.rule_bias)} variant="outlined" sx={{ fontWeight: 700 }} /> },
                               { k: "Stop Loss", v: rec.stop_loss ? <span style={MONO}>{fmt(rec.stop_loss, 5)}</span> : "None" },
                               { k: "Take Profit", v: rec.take_profit ? <span style={MONO}>{fmt(rec.take_profit, 5)}</span> : "None" },
                               { k: "Suggested Lot", v: rec.suggested_lot ? <span style={MONO}>{fmt(rec.suggested_lot)}</span> : "None" },
@@ -1446,34 +1418,7 @@ export default function Dashboard() {
                             </Typography>
                           </Stack>
 
-                          {/* Staged trade actions */}
-                          {pending && pending.status === "pending" && (
-                            <Stack
-                              direction="row"
-                              spacing={2}
-                              sx={{ mt: 1, pt: 3, borderTop: "1px solid", borderColor: "rgba(255,255,255,0.06)" }}
-                            >
-                              <Button
-                                variant="contained"
-                                color="success"
-                                startIcon={<Check size={16} />}
-                                onClick={confirm}
-                                sx={{
-                                  px: 4,
-                                  py: 1.25,
-                                  bgcolor: "success.main",
-                                  color: "#07090e",
-                                  fontWeight: 800,
-                                  "&:hover": { bgcolor: "success.dark" }
-                                }}
-                              >
-                                Confirm &amp; Execute · {pending.lot} lot
-                              </Button>
-                              <Button variant="outlined" color="inherit" startIcon={<X size={16} />} onClick={cancel} sx={{ px: 3, py: 1.25 }}>
-                                Cancel
-                              </Button>
-                            </Stack>
-                          )}
+                          {/* Staged trade actions (removed manual confirm/cancel buttons) */}
                           {pending && pending.status !== "pending" && (
                             <Box sx={{ mt: 1, p: 2, borderRadius: 2, bgcolor: "rgba(255, 255, 255, 0.02)", display: "inline-flex", alignItems: "center", gap: 1.5, border: "1px solid rgba(255,255,255,0.05)" }}>
                               <Typography variant="body2" sx={{ fontWeight: 700 }}>
@@ -1541,7 +1486,7 @@ export default function Dashboard() {
                                   <strong>{p.symbol}</strong>
                                 </TableCell>
                                 <TableCell>
-                                  <Chip size="small" label={p.type} color={actionColor(p.type)} variant="outlined" sx={{ fontWeight: 700 }} />
+                                  <Chip size="small" label={actionLabel(p.type)} color={actionColor(p.type)} variant="outlined" sx={{ fontWeight: 700 }} />
                                 </TableCell>
                                 <TableCell sx={MONO}>{p.volume}</TableCell>
                                 <TableCell sx={MONO}>{p.price_open}</TableCell>
@@ -1596,7 +1541,7 @@ export default function Dashboard() {
                                   </Typography>
                                   <Chip
                                     size="small"
-                                    label={`${o.action} ${Math.round(o.confidence * 100)}%`}
+                                    label={`${actionLabel(o.action)} ${Math.round(o.confidence * 100)}%`}
                                     color={actionColor(o.action)}
                                     variant="outlined"
                                     sx={{ fontWeight: 700, height: 20, fontSize: "0.7rem" }}
@@ -2712,15 +2657,7 @@ export default function Dashboard() {
                           onChange={(e) => setSettingsForm({ ...settingsForm, magic: parseInt(e.target.value) })}
                           fullWidth
                         />
-                        <Box sx={{ display: "flex", alignItems: "center", pl: 1 }}>
-                          <Switch
-                            checked={settingsForm.require_confirm ?? true}
-                            onChange={(e) => setSettingsForm({ ...settingsForm, require_confirm: e.target.checked })}
-                          />
-                          <Typography variant="body2" color="text.secondary">
-                            Require manual confirmation
-                          </Typography>
-                        </Box>
+                        {/* Remove manual confirmation toggle */}
                       </Box>
                     </CardContent>
                   </Card>

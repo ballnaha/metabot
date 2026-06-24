@@ -97,8 +97,4 @@ class AnalyzeRequest(BaseModel):
     bars: int = 200
     strategy: Optional[str] = None  # override the default strategy by name
     use_ai: Optional[bool] = None  # override AI filter on/off for this call
-
-
-class ConfirmRequest(BaseModel):
-    pending_id: str
-    lot: Optional[float] = None  # override suggested lot
+    preview: bool = False  # when true, analyze only and do not place a trade
