@@ -1,0 +1,29 @@
+{
+  "name": "metabot-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack -p 4016",
+    "build": "next build --turbopack",
+    "start": "next start -p 4016",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@emotion/cache": "11.14.0",
+    "@emotion/react": "11.14.0",
+    "@emotion/styled": "11.14.1",
+    "@fontsource/sarabun": "^5.0.20",
+    "@mui/material": "9.1.2",
+    "@mui/material-nextjs": "9.1.1",
+    "lucide-react": "1.21.0",
+    "next": "16.2.9",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.9",
+    "@types/react": "19.0.14",
+    "@types/react-dom": "19.0.6",
+    "typescript": "5.9.3"
+  }
+}

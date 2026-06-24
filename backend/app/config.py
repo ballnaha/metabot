@@ -1,0 +1,148 @@
+"""Central configuration loaded from environment / .env file."""
+from __future__ import annotations
+
+from functools import lru_cache
+from typing import List
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
+
+    # MT5
+    mt5_login: int | None = None
+    mt5_password: str | None = None
+    mt5_server: str | None = None
+    mt5_path: str | None = None
+
+    # AI providers
+    deepseek_api_key: str | None = None
+    deepseek_model: str = "deepseek-chat"
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-1.5-flash"
+    ai_providers: str = "deepseek,gemini"
+    # When True, AI opinions act as an extra confirmation filter on top of the
+    # strategy signal. When False, the strategy decides on its own.
+    use_ai: bool = False
+
+    # Telegram
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+
+    # Trading
+    symbols: str = "EURUSD,GOLD,BTCUSD"
+    default_timeframe: str = "M15"
+    strategy: str = "ema_macd_rsi"
+    risk_per_trade: float = 0.01
+    max_lot: float = 1.0
+    magic: int = 556677
+    atr_sl_mult: float = 1.5
+    default_rr: float = 2.0
+    require_confirm: bool = True
+    auto_trade_interval: int = 60
+    position_sizing_mode: str = "risk_pct"
+    max_open_trades: int = 5
+    stake_amount: float = 0.0
+
+    # API
+    api_host: str = "127.0.0.1"
+    api_port: int = 8383
+    api_key: str = "change-me-please"
+
+    @property
+    def provider_list(self) -> List[str]:
+        return [p.strip().lower() for p in self.ai_providers.split(",") if p.strip()]
+
+    @property
+    def symbol_list(self) -> List[str]:
+        return [s.strip().upper() for s in self.symbols.split(",") if s.strip()]
+
+    def update_settings(self, updates: dict) -> None:
+        import os
+        # 1. Update in-memory settings
+        for key, val in updates.items():
+            if hasattr(self, key):
+                # Handle correct type conversions
+                old_val = getattr(self, key)
+                if old_val is not None:
+                    try:
+                        if isinstance(old_val, bool):
+                            if isinstance(val, str):
+                                val = val.lower() in ("true", "1", "yes")
+                            else:
+                                val = bool(val)
+                        elif isinstance(old_val, int):
+                            val = int(val)
+                        elif isinstance(old_val, float):
+                            val = float(val)
+                    except (ValueError, TypeError):
+                        pass
+                setattr(self, key, val)
+
+        # 2. Update .env file
+        env_file = ".env"
+        possible_paths = [
+            env_file,
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"),
+            os.path.join(os.getcwd(), ".env"),
+            os.path.join(os.getcwd(), "backend", ".env")
+        ]
+        
+        target_path = None
+        for p in possible_paths:
+            if os.path.exists(p):
+                target_path = p
+                break
+        
+        if not target_path:
+            target_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+
+        if os.path.exists(target_path):
+            with open(target_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        else:
+            lines = []
+
+        for key, val in updates.items():
+            env_key = key.upper()
+            found = False
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if stripped.startswith(env_key + "=") or stripped.startswith(env_key + " ="):
+                    if isinstance(val, bool):
+                        val_str = "true" if val else "false"
+                    elif val is None:
+                        val_str = ""
+                    else:
+                        val_str = str(val)
+                    lines[i] = f"{env_key}={val_str}\n"
+                    found = True
+                    break
+            if not found:
+                if isinstance(val, bool):
+                    val_str = "true" if val else "false"
+                elif val is None:
+                    val_str = ""
+                else:
+                    val_str = str(val)
+                lines.append(f"{env_key}={val_str}\n")
+
+        with open(target_path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+
+
+
+@lru_cache
+def get_settings() -> Settings:
+    s = Settings()
+    if s.magic == 0:
+        import random
+        s.magic = random.randint(100000, 999999)
+        s.update_settings({"magic": s.magic})
+    return s
+
+
+settings = get_settings()
