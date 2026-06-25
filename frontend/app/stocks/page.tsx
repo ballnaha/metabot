@@ -9,7 +9,6 @@ import PnLChart from "../crypto/components/PnLChart";
 import StockBotSettings from "./components/StockBotSettings";
 import {
   Alert,
-  Autocomplete,
   Box,
   Button,
   Card,
@@ -134,6 +133,15 @@ async function api(path: string, opts?: RequestInit) {
 const MONO = { fontFamily: "ui-monospace, monospace", fontVariantNumeric: "tabular-nums" };
 const fmt = (n: number | null | undefined, d = 2) =>
   n === null || n === undefined || Number.isNaN(Number(n)) ? "-" : Number(n).toFixed(d);
+const formatBangkokTime = (value: string) => {
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(value);
+  const date = new Date(hasTimezone ? value : `${value}+07:00`);
+  return date.toLocaleString("th-TH", {
+    dateStyle: "short",
+    timeStyle: "short",
+    timeZone: "Asia/Bangkok",
+  });
+};
 
 const actionColor = (action?: string): "success" | "error" | "default" =>
   action === "BUY" ? "success" : action === "SELL" ? "error" : "default";
@@ -305,20 +313,10 @@ export default function StocksPage() {
   const [positions, setPositions] = useState<Position[]>([]);
   const [history, setHistory] = useState<HistoryDeal[]>([]);
   const [ticks, setTicks] = useState<Record<string, Tick>>({});
-  const [settings, setSettings] = useState<any>({
-    symbols: "AAPL,MSFT,TSLA,NVDA",
-    default_timeframe: "M15",
-    strategy: "ema_macd_rsi",
-    risk_per_trade: 0.01,
-    max_lot: 1,
-    magic: 112233,
-    max_open_trades: 3,
-    auto_trade_interval: 60,
-    bot_enabled: false,
-    use_ai: false,
-  });
+  const [settings, setSettings] = useState<any>({ symbols: "" });
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
-  const [stockInput, setStockInput] = useState("AAPL,MSFT,TSLA,NVDA");
+  const [stockInput, setStockInput] = useState("");
   const [selectedSymbol, setSelectedSymbol] = useState("");
   const [scanResults, setScanResults] = useState<ScanResult[]>([]);
   const [priceSearch, setPriceSearch] = useState("");
@@ -335,38 +333,48 @@ export default function StocksPage() {
   const [tradeExecuting, setTradeExecuting] = useState(false);
   const [closingTicket, setClosingTicket] = useState<number | null>(null);
   const [closeCandidate, setCloseCandidate] = useState<Position | null>(null);
+  const [symbolPage, setSymbolPage] = useState(0);
+  const [symbolRowsPerPage, setSymbolRowsPerPage] = useState(10);
   const [historyPage, setHistoryPage] = useState(0);
   const [historyRowsPerPage, setHistoryRowsPerPage] = useState(10);
 
   const stockSymbols = useMemo(() => {
+    // Preserve broker casing (symbols like "Apple" are case-sensitive in MT5).
     const fromConfig: string[] = (settings.symbols || "")
       .split(",")
-      .map((s: string) => s.trim().toUpperCase())
+      .map((s: string) => s.trim())
       .filter(Boolean)
       .filter(isStockSymbol);
-    return Array.from(new Set<string>(fromConfig)).sort((a, b) => {
-      const rank = ["AAPL", "MSFT", "TSLA", "NVDA", "AMZN", "GOOGL", "META"];
-      return (rank.indexOf(a) === -1 ? 99 : rank.indexOf(a)) - (rank.indexOf(b) === -1 ? 99 : rank.indexOf(b)) || a.localeCompare(b);
-    });
+    return Array.from(new Set<string>(fromConfig)).sort((a, b) => a.localeCompare(b));
   }, [settings.symbols]);
 
   const filteredStockSymbols = useMemo(() => {
     const q = priceSearch.trim().toUpperCase();
-    return q ? stockSymbols.filter((s) => s.includes(q)) : stockSymbols;
+    return q ? stockSymbols.filter((s) => s.toUpperCase().includes(q)) : stockSymbols;
   }, [stockSymbols, priceSearch]);
 
   const stockPositions = useMemo(
-    () => positions.filter((p) => isStockSymbol(p.symbol) && (!settings.stock_magic || p.magic === settings.stock_magic)),
-    [positions, settings.stock_magic]
+    () => positions.filter((p) => {
+      if (!isStockSymbol(p.symbol)) return false;
+      // Accept positions tagged with stock_magic OR legacy magic (direct_trade bug fix)
+      if (!settings.stock_magic) return true;
+      return p.magic === settings.stock_magic || p.magic === settings.magic;
+    }),
+    [positions, settings.stock_magic, settings.magic]
   );
   const stockHistory = useMemo(
-    () => history.filter((h) => isStockSymbol(h.symbol) && (!settings.stock_magic || h.magic === settings.stock_magic)),
-    [history, settings.stock_magic]
+    () => history.filter((h) => {
+      if (!isStockSymbol(h.symbol)) return false;
+      if (!settings.stock_magic) return true;
+      return h.magic === settings.stock_magic || h.magic === settings.magic;
+    }),
+    [history, settings.stock_magic, settings.magic]
   );
   const stockOpenPl = stockPositions.reduce((sum, p) => sum + (Number(p.profit) || 0), 0);
   const realizedStockPl = stockHistory.filter((h) => h.entry === "OUT").reduce((sum, h) => sum + (Number(h.profit) || 0), 0);
-  const selectedTick = selectedSymbol ? ticks[selectedSymbol] : null;
-  const spread = selectedTick ? Math.abs((selectedTick.ask || 0) - (selectedTick.bid || 0)) : null;
+  const selectedTick = selectedSymbol
+    ? (ticks[selectedSymbol] ?? Object.entries(ticks).find(([k]) => k.toUpperCase() === selectedSymbol.toUpperCase())?.[1] ?? null)
+    : null;
   const stockSlotLimit = settings.max_stock_open_trades ?? settings.max_open_trades ?? 5;
   const stockBotActive = Boolean(settings.stock_bot_enabled);
   const botStockUsage = stockSlotLimit ? Math.min(100, (stockPositions.length / Math.max(1, stockSlotLimit)) * 100) : 0;
@@ -398,12 +406,13 @@ export default function StocksPage() {
       setPositions(pos.positions || []);
       if (cfg && !settingsOpenRef.current) {
         setSettings(cfg);
+        setSettingsLoaded(true);
         const cfgStock = (cfg.symbols || "")
           .split(",")
-          .map((s: string) => s.trim().toUpperCase())
+          .map((s: string) => s.trim())
           .filter(Boolean)
           .filter(isStockSymbol);
-        setStockInput(cfgStock.length ? cfgStock.join(", ") : "AAPL,MSFT,TSLA,NVDA");
+        setStockInput(cfgStock.join(", "));
       }
       setStrategies(strat.strategies || []);
       setHistory(hist.history || []);
@@ -564,7 +573,7 @@ export default function StocksPage() {
     setDetecting(true);
     try {
       const data = await api("symbols/detect-stocks");
-      const detected = (data.symbols || []).map((s: string) => s.toUpperCase()).filter(isStockSymbol);
+      const detected = (data.symbols || []).map((s: string) => s.trim()).filter(isStockSymbol);
       if (detected.length) {
         setStockInput(detected.join(", "));
         toastr.success(`ตรวจพบสัญลักษณ์หุ้น US ${detected.length} รายการ`);
@@ -579,7 +588,7 @@ export default function StocksPage() {
   }
 
   async function validateStockSymbols() {
-    const list = stockInput.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
+    const list = stockInput.split(",").map((s) => s.trim()).filter(Boolean);
     if (!list.length) return;
     setValidating(true);
     try {
@@ -600,8 +609,9 @@ export default function StocksPage() {
   }
 
   async function saveStockSettings() {
-    const nextStock = stockInput.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
-    const current = (settings.symbols || "").split(",").map((s: string) => s.trim().toUpperCase()).filter(Boolean);
+    // Stock symbols keep broker casing ("Apple"); other groups stay uppercase.
+    const nextStock = stockInput.split(",").map((s) => s.trim()).filter(Boolean);
+    const current = (settings.symbols || "").split(",").map((s: string) => s.trim()).filter(Boolean);
     const keep = current.filter((s: string) => isStockSymbol(s) === false); // keep gold, crypto, forex
     const nextSymbols = Array.from(new Set([...keep, ...nextStock])).join(",");
     setSaving(true);
@@ -684,7 +694,7 @@ export default function StocksPage() {
                 label="Stock Symbols"
                 value={stockSymbols.length}
                 tone="#3b82f6"
-                sub={stockSymbols.join(" / ") || "ยังไม่ได้ตั้งค่า"}
+                sub={stockSymbols.length ? `${stockSymbols.length} symbols` : "ยังไม่ได้ตั้งค่า"}
               />
               <StatCard
                 icon={<Activity size={18} />}
@@ -736,8 +746,8 @@ export default function StocksPage() {
                       <TextField
                         size="small"
                         value={priceSearch}
-                        onChange={(e) => setPriceSearch(e.target.value)}
-                        placeholder="ค้นหา AAPL/TSLA"
+                        onChange={(e) => { setPriceSearch(e.target.value); setSymbolPage(0); }}
+                        placeholder="ค้นหา Apple/Tesla"
                         sx={{ minWidth: 180 }}
                       />
                       <Button
@@ -762,17 +772,26 @@ export default function StocksPage() {
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {filteredStockSymbols.length === 0 ? (
+                      {!settingsLoaded ? (
+                        <TableRow>
+                          <TableCell colSpan={6} sx={{ textAlign: "center", py: 3 }}>
+                            <CircularProgress size={20} sx={{ color: "#3b82f6" }} />
+                          </TableCell>
+                        </TableRow>
+                      ) : filteredStockSymbols.length === 0 ? (
                         <TableRow>
                           <TableCell colSpan={6}>
                             <Alert severity="warning">ยังไม่มี symbol หุ้น US กดตั้งค่าแล้วสแกนจาก MT5 ได้เลย</Alert>
                           </TableCell>
                         </TableRow>
                       ) : (
-                        filteredStockSymbols.map((sym) => {
-                          const tick = ticks[sym];
+                        filteredStockSymbols
+                          .slice(symbolPage * symbolRowsPerPage, (symbolPage + 1) * symbolRowsPerPage)
+                          .map((sym) => {
+                          const tick = ticks[sym] ?? Object.entries(ticks).find(([k]) => k.toUpperCase() === sym.toUpperCase())?.[1];
                           const scan = scanResults.find((r) => r.symbol.toUpperCase() === sym.toUpperCase());
-                          const rowSpread = tick ? Math.abs((tick.ask || 0) - (tick.bid || 0)) : null;
+                          const hasPrice = tick && !tick.error && (tick.bid > 0 || tick.ask > 0);
+                          const rowSpread = hasPrice ? Math.abs((tick.ask || 0) - (tick.bid || 0)) : null;
                           const selected = selectedSymbol === sym;
                           return (
                             <TableRow
@@ -791,9 +810,9 @@ export default function StocksPage() {
                                   <Typography sx={{ ...MONO, fontWeight: 800 }}>{sym}</Typography>
                                 </Stack>
                               </TableCell>
-                              <TableCell align="right" sx={MONO}>{tick?.error ? "-" : fmt(tick?.bid, 2)}</TableCell>
-                              <TableCell align="right" sx={MONO}>{tick?.error ? "-" : fmt(tick?.ask, 2)}</TableCell>
-                              <TableCell align="right" sx={MONO}>{rowSpread === null ? "-" : fmt(rowSpread, 2)}</TableCell>
+                              <TableCell align="right" sx={MONO}>{hasPrice ? fmt(tick!.bid, 2) : "-"}</TableCell>
+                              <TableCell align="right" sx={MONO}>{hasPrice ? fmt(tick!.ask, 2) : "-"}</TableCell>
+                              <TableCell align="right" sx={MONO}>{rowSpread !== null ? fmt(rowSpread, 2) : "-"}</TableCell>
                               <TableCell align="center">
                                 <Chip
                                   size="small"
@@ -822,6 +841,24 @@ export default function StocksPage() {
                       )}
                     </TableBody>
                   </Table>
+                  {filteredStockSymbols.length > 0 && (
+                    <TablePagination
+                      component="div"
+                      count={filteredStockSymbols.length}
+                      page={symbolPage}
+                      rowsPerPage={symbolRowsPerPage}
+                      onPageChange={(_, p) => setSymbolPage(p)}
+                      onRowsPerPageChange={(e) => { setSymbolRowsPerPage(parseInt(e.target.value)); setSymbolPage(0); }}
+                      rowsPerPageOptions={[10, 25, 50]}
+                      labelRowsPerPage="แสดง:"
+                      labelDisplayedRows={({ from, to, count }) => `${from}–${to} จาก ${count}`}
+                      sx={{
+                        color: "#94a3b8",
+                        "& .MuiTablePagination-toolbar": { minHeight: 44, px: 1 },
+                        "& .MuiTablePagination-selectLabel, & .MuiTablePagination-displayedRows": { fontSize: "0.78rem" },
+                      }}
+                    />
+                  )}
                 </CardContent>
               </Card>
 
@@ -829,43 +866,6 @@ export default function StocksPage() {
                 <Card>
                   <CardContent>
                     <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", mb: 1.5 }}>
-                      <Typography sx={{ fontWeight: 800 }}>Stock Bot Control</Typography>
-                      <Chip
-                        size="small"
-                        icon={<ShieldCheck size={14} />}
-                        label={stockBotActive ? "STOCK BOT ON" : "STOCK BOT OFF"}
-                        color={stockBotActive ? "success" : "default"}
-                      />
-                    </Stack>
-                    <Stack spacing={1.25}>
-                      <Autocomplete
-                        size="small"
-                        options={stockSymbols}
-                        value={selectedSymbol || null}
-                        onChange={(_, value) => setSelectedSymbol(value || "")}
-                        renderInput={(params) => <TextField {...params} label="Stock symbol" />}
-                      />
-                      <Stack direction="row" spacing={1.25}>
-                        <Box sx={{ flex: 1 }}>
-                          <Typography variant="caption" color="text.secondary">Bid</Typography>
-                          <Typography sx={{ ...MONO, fontSize: "1.25rem", fontWeight: 800 }}>{fmt(selectedTick?.bid, 2)}</Typography>
-                        </Box>
-                        <Box sx={{ flex: 1 }}>
-                          <Typography variant="caption" color="text.secondary">Ask</Typography>
-                          <Typography sx={{ ...MONO, fontSize: "1.25rem", fontWeight: 800 }}>{fmt(selectedTick?.ask, 2)}</Typography>
-                        </Box>
-                        <Box sx={{ flex: 1 }}>
-                          <Typography variant="caption" color="text.secondary">Spread</Typography>
-                          <Typography sx={{ ...MONO, fontSize: "1.25rem", fontWeight: 800 }}>{spread === null ? "-" : fmt(spread, 2)}</Typography>
-                        </Box>
-                      </Stack>
-                    </Stack>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardContent>
-                    <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", mb: 1 }}>
                       <Typography sx={{ fontWeight: 800 }}>Open Stock Positions</Typography>
                       <Chip size="small" label={`${stockPositions.length} open`} />
                     </Stack>
@@ -874,36 +874,88 @@ export default function StocksPage() {
                         <Typography color="text.secondary" variant="body2">ยังไม่มี position หุ้น US ที่เปิดอยู่</Typography>
                       ) : (
                         stockPositions.map((p) => {
-                          const isBuy = p.type?.toUpperCase().includes("BUY");
+                          const pct = p.price_open > 0
+                            ? (p.type === "BUY"
+                                ? ((p.price_current - p.price_open) / p.price_open) * 100
+                                : ((p.price_open - p.price_current) / p.price_open) * 100)
+                            : 0;
+                          const isProfit = p.profit >= 0;
+                          const invested = p.volume * p.price_open * (p.contract_size ?? 1.0);
                           return (
                             <Box
                               key={p.ticket}
                               sx={{
                                 p: 1.25,
                                 borderRadius: 1,
-                                border: "1px solid rgba(255,255,255,0.08)",
-                                bgcolor: "rgba(15,23,42,0.6)",
+                                bgcolor: p.type === "BUY" ? "rgba(16,185,129,0.04)" : "rgba(239,68,68,0.04)",
+                                border: `1px solid ${p.type === "BUY" ? "rgba(16,185,129,0.18)" : "rgba(239,68,68,0.18)"}`,
                               }}
                             >
-                              <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", gap: 1 }}>
-                                <Box>
-                                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                                    <Typography sx={{ ...MONO, fontWeight: 800 }}>{p.symbol}</Typography>
-                                    <Chip size="small" color={isBuy ? "success" : "error"} label={isBuy ? "BUY" : "SELL"} />
-                                  </Stack>
-                                  <Typography variant="caption" color="text.secondary" sx={MONO}>
-                                    {fmt(p.volume, 2)} lot · {fmt(p.price_open, 2)} &rarr; {fmt(p.price_current, 2)}
-                                  </Typography>
-                                </Box>
-                                <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                                  <Typography sx={{ ...MONO, fontWeight: 800, color: p.profit >= 0 ? "#10b981" : "#ef4444" }}>
-                                    {p.profit >= 0 ? "+" : ""}{fmt(p.profit)}
-                                  </Typography>
-                                  <IconButton size="small" color="error" disabled={closingTicket === p.ticket} onClick={() => setCloseCandidate(p)}>
-                                    {closingTicket === p.ticket ? <CircularProgress size={16} color="inherit" /> : <X size={16} />}
+                              <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start", justifyContent: "space-between", mb: 1 }}>
+                                <Stack direction="row" spacing={1} sx={{ alignItems: "center", minWidth: 0 }}>
+                                  <Chip
+                                    size="small"
+                                    label={actionLabel(p.type)}
+                                    color={actionColor(p.type)}
+                                    variant="outlined"
+                                    sx={{ flexShrink: 0, height: 22, borderRadius: 1, fontWeight: 800, fontSize: 10 }}
+                                  />
+                                  <Box sx={{ minWidth: 0 }}>
+                                    <Typography noWrap sx={{ fontWeight: 750, lineHeight: 1.15 }}>{p.symbol}</Typography>
+                                    <Typography variant="caption" color="text.secondary" sx={{ ...MONO, display: "block", lineHeight: 1.2 }}>
+                                      Ticket #{p.ticket}
+                                    </Typography>
+                                  </Box>
+                                </Stack>
+                                <Stack direction="row" spacing={0.75} sx={{ alignItems: "flex-start", flexShrink: 0 }}>
+                                  <Box sx={{ textAlign: "right" }}>
+                                    <Typography sx={{ ...MONO, fontWeight: 850, lineHeight: 1.15, color: isProfit ? "#10b981" : "#ef4444" }}>
+                                      {isProfit ? "+" : ""}{fmt(p.profit)} {account?.currency || ""}
+                                    </Typography>
+                                    <Typography variant="caption" sx={{ ...MONO, display: "block", lineHeight: 1.2, color: isProfit ? "#10b981" : "#ef4444", fontWeight: 700 }}>
+                                      {pct >= 0 ? "+" : ""}{pct.toFixed(2)}%
+                                    </Typography>
+                                  </Box>
+                                  <IconButton
+                                    size="small"
+                                    disabled={closingTicket === p.ticket}
+                                    onClick={() => setCloseCandidate(p)}
+                                    sx={{
+                                      width: 28, height: 28, borderRadius: 1,
+                                      border: "1px solid rgba(239,68,68,0.28)",
+                                      bgcolor: "rgba(239,68,68,0.06)", color: "#f87171", flexShrink: 0,
+                                      "&:hover": { borderColor: "#ef4444", bgcolor: "rgba(239,68,68,0.13)" },
+                                    }}
+                                  >
+                                    {closingTicket === p.ticket ? <CircularProgress size={14} color="inherit" /> : <X size={15} />}
                                   </IconButton>
                                 </Stack>
                               </Stack>
+
+                              <Box
+                                sx={{
+                                  display: "grid",
+                                  gridTemplateColumns: { xs: "repeat(2,1fr)", sm: "repeat(4,1fr)" },
+                                  gap: 0.75, p: 1, mb: 0.5, borderRadius: 1,
+                                  bgcolor: "rgba(255,255,255,0.025)",
+                                }}
+                              >
+                                {[
+                                  { label: "Lot",      value: fmt(p.volume, 2) },
+                                  { label: "ราคาเข้า", value: fmt(p.price_open, 2) },
+                                  { label: "ปัจจุบัน", value: fmt(p.price_current, 2) },
+                                  { label: "เงินทุน",  value: fmt(invested, 2) },
+                                ].map((cell) => (
+                                  <Box key={cell.label} sx={{ minWidth: 0 }}>
+                                    <Typography variant="caption" sx={{ display: "block", color: "#64748b", lineHeight: 1.2 }}>
+                                      {cell.label}
+                                    </Typography>
+                                    <Typography noWrap variant="caption" sx={{ ...MONO, display: "block", color: "#cbd5e1", fontWeight: 650, lineHeight: 1.25 }}>
+                                      {cell.value}
+                                    </Typography>
+                                  </Box>
+                                ))}
+                              </Box>
                             </Box>
                           );
                         })
@@ -915,41 +967,60 @@ export default function StocksPage() {
             </Box>
 
             <Card>
-              <CardContent>
+              <CardContent sx={{ p: 3 }}>
                 <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 2 }}>
                   <History size={18} color="#60a5fa" />
-                  <Typography sx={{ fontWeight: 800 }}>Stock Trade History 7D</Typography>
+                  <Typography sx={{ fontWeight: 800 }}>ประวัติรายการหุ้น US 7 วัน</Typography>
                 </Stack>
                 <PnLChart deals={stockHistory} />
                 <Box sx={{ overflowX: "auto", mt: 2 }}>
                   <Table size="small">
                     <TableHead>
                       <TableRow sx={{ "& th": { bgcolor: "#0d1321", borderBottomColor: "rgba(255,255,255,0.08)" } }}>
-                        <TableCell>Time</TableCell>
+                        <TableCell>เวลา</TableCell>
                         <TableCell>Symbol</TableCell>
-                        <TableCell>Type</TableCell>
+                        <TableCell>ประเภท</TableCell>
                         <TableCell align="right">Volume</TableCell>
-                        <TableCell align="right">Price</TableCell>
-                        <TableCell align="right">Profit</TableCell>
+                        <TableCell align="right">ราคา</TableCell>
+                        <TableCell align="right">กำไร/ขาดทุน</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
                       {paginatedStockHistory.map((h) => (
-                        <TableRow key={`${h.ticket}-${h.time}`} sx={{ "& td": { borderBottomColor: "rgba(255,255,255,0.04)" } }}>
-                          <TableCell sx={MONO}>{new Date(h.time).toLocaleString()}</TableCell>
+                        <TableRow
+                          key={`${h.ticket}-${h.time}`}
+                          sx={{ "& td": { borderBottomColor: "rgba(255,255,255,0.04)" } }}
+                        >
+                          <TableCell sx={{ ...MONO, color: "#94a3b8", fontSize: "0.78rem" }}>
+                            {formatBangkokTime(h.time)}
+                          </TableCell>
                           <TableCell sx={{ ...MONO, fontWeight: 800 }}>{h.symbol}</TableCell>
-                          <TableCell>{h.entry === "OUT" ? "Close" : "Open"} {h.type}</TableCell>
+                          <TableCell>
+                            <Chip
+                              size="small"
+                              label={`${h.entry === "OUT" ? "ปิด" : "เปิด"} ${h.type}`}
+                              color={h.type === "BUY" ? "success" : "error"}
+                              variant="outlined"
+                              sx={{ height: 20, fontSize: "0.7rem", fontWeight: 700, borderRadius: 1 }}
+                            />
+                          </TableCell>
                           <TableCell align="right" sx={MONO}>{fmt(h.volume, 2)}</TableCell>
                           <TableCell align="right" sx={MONO}>{fmt(h.price, 2)}</TableCell>
-                          <TableCell align="right" sx={{ ...MONO, color: h.profit >= 0 ? "#10b981" : "#ef4444", fontWeight: 800 }}>
-                            {h.profit >= 0 ? "+" : ""}{fmt(h.profit)}
+                          <TableCell
+                            align="right"
+                            sx={{ ...MONO, fontWeight: 800,
+                              color: h.profit > 0 ? "#10b981" : h.profit < 0 ? "#ef4444" : "#64748b" }}
+                          >
+                            {h.profit > 0 ? "+" : ""}{fmt(h.profit)}
                           </TableCell>
                         </TableRow>
                       ))}
                       {stockHistory.length === 0 && (
                         <TableRow>
                           <TableCell colSpan={6}>
-                            <Typography color="text.secondary" variant="body2">ยังไม่มีประวัติเทรดหุ้น US ใน 7 วันล่าสุด</Typography>
+                            <Typography color="text.secondary" variant="body2" sx={{ py: 1 }}>
+                              ยังไม่มีประวัติเทรดหุ้น US ใน 7 วันล่าสุด
+                            </Typography>
                           </TableCell>
                         </TableRow>
                       )}
@@ -961,15 +1032,15 @@ export default function StocksPage() {
                     count={stockHistory.length}
                     rowsPerPage={historyRowsPerPage}
                     page={historyPage}
-                    onPageChange={(_event, newPage) => setHistoryPage(newPage)}
-                    onRowsPerPageChange={(event) => {
-                      setHistoryRowsPerPage(parseInt(event.target.value, 10));
-                      setHistoryPage(0);
-                    }}
+                    onPageChange={(_e, p) => setHistoryPage(p)}
+                    onRowsPerPageChange={(e) => { setHistoryRowsPerPage(parseInt(e.target.value, 10)); setHistoryPage(0); }}
+                    labelRowsPerPage="แถวต่อหน้า:"
+                    labelDisplayedRows={({ from, to, count }) => `${from}–${to} จาก ${count}`}
                     sx={{
                       color: "#94a3b8",
                       borderTop: "1px solid rgba(255,255,255,0.06)",
                       "& .MuiTablePagination-toolbar": { minHeight: 44, px: 1 },
+                      "& .MuiTablePagination-selectLabel, & .MuiTablePagination-displayedRows": { fontSize: "0.78rem" },
                       "& .MuiTablePagination-selectIcon": { color: "#64748b" },
                       "& .MuiIconButton-root": { color: "#64748b" },
                       "& .MuiIconButton-root.Mui-disabled": { color: "rgba(255,255,255,0.1)" },

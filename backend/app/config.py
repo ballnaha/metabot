@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     mt5_password: str | None = None
     mt5_server: str | None = None
     mt5_path: str | None = None
+    mt5_server_utc_offset: int = 3
 
     # AI providers
     deepseek_api_key: str | None = None

@@ -38,6 +38,22 @@ _TIMEFRAME_NAMES = {
 _lock = threading.Lock()
 
 
+def _mt5_server_timestamp_to_utc(timestamp: int | float) -> float:
+    """MT5 deal/position times are broker server wall-clock seconds.
+
+    Many brokers run MT5 on UTC+3. Treat the raw timestamp as server-local
+    wall time first, then convert it back to a real UTC timestamp.
+    """
+    server_tz = timezone(timedelta(hours=settings.mt5_server_utc_offset))
+    server_time = datetime.fromtimestamp(timestamp, tz=timezone.utc).replace(tzinfo=server_tz)
+    return server_time.timestamp()
+
+
+def _mt5_server_time_to_bangkok(timestamp: int | float) -> str:
+    utc_timestamp = _mt5_server_timestamp_to_utc(timestamp)
+    return datetime.fromtimestamp(utc_timestamp, tz=TZ_TH).strftime("%Y-%m-%dT%H:%M:%S")
+
+
 class MT5Error(RuntimeError):
     pass
 
@@ -106,7 +122,7 @@ def account_info() -> Dict[str, Any]:
 def get_rates(symbol: str, timeframe: str, bars: int = 200) -> pd.DataFrame:
     """Return recent OHLCV candles as a DataFrame (oldest first)."""
     _require_mt5()
-    _ensure_symbol(symbol)
+    symbol = _ensure_symbol(symbol)
     rates = mt5.copy_rates_from_pos(symbol, timeframe_const(timeframe), 0, bars)
     if rates is None or len(rates) == 0:
         code, msg = mt5.last_error()
@@ -118,16 +134,16 @@ def get_rates(symbol: str, timeframe: str, bars: int = 200) -> pd.DataFrame:
 
 def get_tick(symbol: str) -> Dict[str, float]:
     _require_mt5()
-    _ensure_symbol(symbol)
+    symbol = _ensure_symbol(symbol)
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
         raise MT5Error(f"No tick for {symbol}")
-    return {"bid": tick.bid, "ask": tick.ask, "last": tick.last, "time": tick.time}
+    return {"bid": tick.bid, "ask": tick.ask, "last": tick.last, "time": _mt5_server_timestamp_to_utc(tick.time)}
 
 
 def symbol_info(symbol: str) -> Dict[str, Any]:
     _require_mt5()
-    _ensure_symbol(symbol)
+    symbol = _ensure_symbol(symbol)
     s = mt5.symbol_info(symbol)
     return {
         "name": s.name,
@@ -142,9 +158,64 @@ def symbol_info(symbol: str) -> Dict[str, Any]:
     }
 
 
-def _ensure_symbol(symbol: str) -> None:
-    if not mt5.symbol_select(symbol, True):
-        raise MT5Error(f"Symbol {symbol} not found / could not be selected.")
+# Cache resolved symbol names so we don't scan all symbols every call.
+_symbol_resolution: Dict[str, str] = {}
+
+
+def resolve_symbol(symbol: str) -> str:
+    """Map a requested ticker to the actual broker symbol name.
+
+    Brokers add suffixes/prefixes to equities (e.g. AAPL -> AAPL.OQ, #AAPL,
+    AAPLm). If an exact match can't be selected, search all available symbols
+    for one whose base ticker matches.
+    """
+    if symbol in _symbol_resolution:
+        return _symbol_resolution[symbol]
+
+    import re
+
+    # 1. Exact name works as-is.
+    if mt5.symbol_select(symbol, True):
+        _symbol_resolution[symbol] = symbol
+        return symbol
+
+    all_syms = mt5.symbols_get() or []
+
+    # 2. Case-insensitive exact name match (e.g. "APPLE" -> "Apple").
+    want = symbol.upper()
+    for s in all_syms:
+        if s.name.upper() == want and mt5.symbol_select(s.name, True):
+            _symbol_resolution[symbol] = s.name
+            return s.name
+
+    # 3. Try common broker ticker variants (AAPL -> AAPL.OQ / #AAPL / AAPLm).
+    base = symbol.upper().lstrip("#@").split(".")[0]
+    for cand in (f"{base}.OQ", f"{base}.N", f"{base}.NY", f"{base}.US",
+                 base, f"{base}m", f"#{base}"):
+        if mt5.symbol_select(cand, True):
+            _symbol_resolution[symbol] = cand
+            return cand
+
+    # 4. Scan every symbol for one whose base ticker matches.
+    for s in all_syms:
+        s_base = re.sub(r'^[#@]|\..*$', '', s.name, flags=re.IGNORECASE).upper()
+        if s_base == base and mt5.symbol_select(s.name, True):
+            _symbol_resolution[symbol] = s.name
+            return s.name
+
+    return symbol  # give up — caller will raise a clear error
+
+
+def _ensure_symbol(symbol: str) -> str:
+    """Select the symbol in Market Watch, resolving broker naming. Returns the
+    actual broker symbol name to use for subsequent calls."""
+    resolved = resolve_symbol(symbol)
+    if not mt5.symbol_select(resolved, True):
+        raise MT5Error(
+            f"Symbol {symbol} not found on this account. "
+            f"Your broker may not offer it, or it uses a different name."
+        )
+    return resolved
 
 
 def positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -172,7 +243,7 @@ def positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
                 "profit": p.profit,
                 "magic": p.magic,
                 "contract_size": contract_size,
-                "time": datetime.fromtimestamp(p.time, tz=TZ_TH).strftime("%Y-%m-%dT%H:%M:%S"),
+                "time": _mt5_server_time_to_bangkok(p.time),
             }
         )
     return out
@@ -195,7 +266,7 @@ def history_deals(days: int = 30) -> List[Dict[str, Any]]:
             {
                 "ticket": d.ticket,
                 "order": d.order,
-                "time": datetime.fromtimestamp(d.time, tz=TZ_TH).strftime("%Y-%m-%dT%H:%M:%S"),
+                "time": _mt5_server_time_to_bangkok(d.time),
                 "symbol": d.symbol,
                 "type": "BUY" if d.type == mt5.DEAL_TYPE_BUY else "SELL",
                 "entry": "IN" if d.entry == mt5.DEAL_ENTRY_IN else ("OUT" if d.entry == mt5.DEAL_ENTRY_OUT else "INOUT"),
@@ -234,7 +305,7 @@ def order_send(
 ) -> Dict[str, Any]:
     """Send a market order. Returns a normalised result dict."""
     _require_mt5()
-    _ensure_symbol(symbol)
+    symbol = _ensure_symbol(symbol)
     tick = mt5.symbol_info_tick(symbol)
     if action == Action.BUY:
         order_type = mt5.ORDER_TYPE_BUY

@@ -98,6 +98,18 @@ def format_trade_executed(rec: Recommendation, lot: float, status: str) -> str:
     return "\n".join(lines)
 
 
+def _pending_failure_reason(pending) -> str:
+    result = getattr(pending, "result", None) or {}
+    if result.get("error"):
+        return str(result["error"])
+    parts = []
+    if result.get("retcode") is not None:
+        parts.append(f"retcode={result.get('retcode')}")
+    if result.get("comment"):
+        parts.append(str(result.get("comment")))
+    return " — ".join(parts)
+
+
 def _notify_position_closed(old_pos: dict) -> None:
     from . import mt5_client
     symbol = old_pos["symbol"]
@@ -279,16 +291,23 @@ async def auto_trade_loop() -> None:
 
                     if rec.action != Action.HOLD and pending:
                         level = "success" if pending.status == "executed" else "error"
+                        failure_reason = _pending_failure_reason(pending) if pending.status == "failed" else ""
                         log_store.push(
                             level, "trade",
-                            f"{rec.action.value} {symbol} {pending.lot} lot @ {_fmt(rec.price, 5)} — {pending.status}",
+                            f"{rec.action.value} {symbol} {pending.lot} lot @ {_fmt(rec.price, 5)} — {pending.status}"
+                            + (f" ({failure_reason})" if failure_reason else ""),
                             {"symbol": symbol, "action": rec.action.value, "lot": pending.lot,
                              "price": rec.price, "sl": rec.stop_loss, "tp": rec.take_profit,
                              "status": pending.status, "confidence": round(rec.confidence, 2),
+                             "error": failure_reason,
+                             "result": pending.result,
                              "strategy": rec.indicators.strategy_name},
                         )
                         send_telegram_notification(format_trade_executed(rec, pending.lot, pending.status))
-                        log.info("Signal %s %s (status: %s)", symbol, rec.action.value, pending.status)
+                        if failure_reason:
+                            log.info("Signal %s %s (status: %s, reason: %s)", symbol, rec.action.value, pending.status, failure_reason)
+                        else:
+                            log.info("Signal %s %s (status: %s)", symbol, rec.action.value, pending.status)
                     else:
                         # Log HOLD only when there was a candle to scan (not cache hit)
                         if rec.summary:

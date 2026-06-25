@@ -161,17 +161,21 @@ export default function StockBotSettings({
 }: StockBotSettingsProps) {
   const [newSymbolInput, setNewSymbolInput] = useState("");
 
+  // Keep original casing — broker symbols are case-sensitive (e.g. "Apple").
   const currentList = stockInput
-    ? stockInput.split(",").map((x) => x.trim().toUpperCase()).filter(Boolean)
+    ? stockInput.split(",").map((x) => x.trim()).filter(Boolean)
     : [];
 
   const activeStrategy = strategies.find((s) => s.name === settings.stock_strategy);
   const patch = patchSettings;
 
   function addSymbol(raw: string) {
-    const clean = raw.trim().toUpperCase();
+    const clean = raw.trim();
     if (!clean) return;
-    if (!currentList.includes(clean)) setStockInput([...currentList, clean].join(", "));
+    // Dedup case-insensitively but preserve the entered casing.
+    if (!currentList.some((x) => x.toUpperCase() === clean.toUpperCase())) {
+      setStockInput([...currentList, clean].join(", "));
+    }
     setNewSymbolInput("");
   }
 
@@ -238,7 +242,7 @@ export default function StockBotSettings({
                       หุ้น US ที่ต้องการเทรด
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
-                      พิมพ์ชื่อหุ้นแล้วกด Enter หรือกด สแกนหุ้น เพื่อดึงจาก MT5 อัตโนมัติ
+                      แนะนำให้กด สแกนหุ้น เพื่อดึงชื่อที่ถูกต้องจาก MT5 (เช่น Apple, Tesla)
                     </Typography>
                   </Box>
                 </Stack>
@@ -254,7 +258,7 @@ export default function StockBotSettings({
                     renderInput={(params) => (
                       <TextField
                         {...params}
-                        placeholder="เช่น AAPL, MSFT, TSLA"
+                        placeholder="เช่น Apple, Tesla, Nvidia"
                         onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addSymbol(newSymbolInput); } }}
                         sx={{
                           "& .MuiInputBase-root": {
@@ -343,27 +347,58 @@ export default function StockBotSettings({
             </Box>
 
             {/* Timeframe + Interval */}
-            <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
-              <FormControl size="small" fullWidth>
-                <InputLabel sx={{ color: "#94a3b8" }}>Timeframe หุ้น</InputLabel>
-                <Select
-                  label="Timeframe หุ้น"
-                  value={settings.stock_timeframe || "H1"}
-                  onChange={(e) => patch({ stock_timeframe: e.target.value })}
-                  sx={{ bgcolor: "rgba(255,255,255,0.01)", "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.08)" } }}
-                >
-                  {["M15", "M30", "H1", "H4", "D1"].map((tf) => (
-                    <MenuItem key={tf} value={tf}>{tf}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-              <QuickNumberInput
-                label="สแกนทุก (วินาที)"
-                value={settings.stock_auto_trade_interval}
-                onChange={(val) => patch({ stock_auto_trade_interval: val })}
-                step={60} min={60} max={3600} precision={0}
-                helperText="แนะนำ 900 วินาที (15 นาที) สำหรับ H4"
-              />
+            <Box
+              sx={{
+                p: 2,
+                bgcolor: "rgba(255,255,255,0.01)",
+                border: "1px solid rgba(255,255,255,0.05)",
+                borderRadius: 1,
+              }}
+            >
+              <Typography variant="caption" sx={{ color: "#64748b", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", mb: 1.5 }}>
+                การตั้งค่าการสแกน
+              </Typography>
+              <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: "1fr 1fr" }}>
+                <FormControl size="small" fullWidth>
+                  <InputLabel sx={{ color: "#94a3b8" }}>Timeframe</InputLabel>
+                  <Select
+                    label="Timeframe"
+                    value={settings.stock_timeframe || "H4"}
+                    onChange={(e) => patch({ stock_timeframe: e.target.value })}
+                    sx={{ bgcolor: "rgba(255,255,255,0.01)", "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.08)" } }}
+                  >
+                    {[
+                      { v: "M15", l: "M15 — 15 นาที" },
+                      { v: "M30", l: "M30 — 30 นาที" },
+                      { v: "H1",  l: "H1 — 1 ชั่วโมง" },
+                      { v: "H4",  l: "H4 — 4 ชั่วโมง" },
+                      { v: "D1",  l: "D1 — รายวัน" },
+                    ].map(({ v, l }) => (
+                      <MenuItem key={v} value={v}>{l}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+
+                <FormControl size="small" fullWidth>
+                  <InputLabel sx={{ color: "#94a3b8" }}>สแกนซ้ำทุก</InputLabel>
+                  <Select
+                    label="สแกนซ้ำทุก"
+                    value={settings.stock_auto_trade_interval}
+                    onChange={(e) => patch({ stock_auto_trade_interval: Number(e.target.value) })}
+                    sx={{ bgcolor: "rgba(255,255,255,0.01)", "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.08)" } }}
+                  >
+                    {[
+                      { v: 300,  l: "5 นาที" },
+                      { v: 600,  l: "10 นาที" },
+                      { v: 900,  l: "15 นาที" },
+                      { v: 1800, l: "30 นาที" },
+                      { v: 3600, l: "1 ชั่วโมง" },
+                    ].map(({ v, l }) => (
+                      <MenuItem key={v} value={v}>{l}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Box>
             </Box>
 
             {/* Max slots + Magic */}

@@ -15,7 +15,7 @@ from . import mt5_client, strategy, worker
 from .config import settings
 from .market_groups import is_crypto_symbol, market_group
 from .models import AnalyzeRequest
-from .trader import manager
+from .trader import manager, magic_for_symbol
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("metabot.api")
@@ -436,47 +436,41 @@ async def detect_stock_symbols():
                     return True
             return False
             
-        def is_stock(s) -> bool:
+        # XM path structure: Stocks\US\Apple, Stocks\EU\Spain\ACS, etc.
+        def is_us_stock(s) -> bool:
             if is_crypto(s) or is_metal(s) or is_forex(s):
                 return False
-            name = s.name
-            name_upper = name.upper()
             path_lower = getattr(s, 'path', '').lower()
-
-            # Explicit stock path from broker
-            if any(x in path_lower for x in ['stock', 'shares', 'equities', 'us ', 'uk ', 'eu ']):
+            # Skip leveraged / turbo derivative products
+            if 'turbo' in path_lower or 'turbo' in s.name.lower():
+                return False
+            # XM explicitly marks US stocks in path: "Stocks\US\..."
+            if 'stocks\\us\\' in path_lower or 'stocks/us/' in path_lower:
                 return True
-
-            # Strip common broker prefixes/suffixes to get base ticker
-            # XM uses: AAPL.OQ (NASDAQ), TSLA.OQ, NVDA.OQ
-            #          also: NVDAm (micro), #NVDA, NVDA.US
-            base = re.sub(r'^[#@]|m$|\..*$', '', name, flags=re.IGNORECASE)
-            if 2 <= len(base) <= 6 and base.isalpha():
-                if base.upper() not in {"GOLD", "SILVER", "EURO", "BOND"}:
-                    return True
-            # Match XM exchange-suffix pattern: TICKER.OQ / TICKER.N / TICKER.NY
-            if re.match(r'^[A-Z]{2,6}\.(OQ|N|NY|L|T|AX|HK)$', name, re.IGNORECASE):
+            # Fallback: exchange-suffix patterns for US exchanges
+            if re.match(r'^[A-Z]{1,6}\.(OQ|N|NY)$', s.name, re.IGNORECASE):
                 return True
             return False
 
         EXCLUDE = {"INDEX", "CASH", "FUTURE", "SPOT", "SWAP"}
         detected = []
         for s in raw_symbols:
-            if is_stock(s):
+            if is_us_stock(s) and getattr(s, 'trade_mode', 0) > 0:
                 if not any(x in s.name.upper() for x in EXCLUDE):
                     detected.append(s.name)
 
-        # Sort with popular US names first
-        popular = ["AAPL.OQ", "MSFT.OQ", "NVDA.OQ", "TSLA.OQ", "GOOGL.OQ",
-                   "AMZN.OQ", "META.OQ", "AMD.OQ", "NFLX.OQ",
-                   "AAPL", "MSFT", "NVDA", "TSLA", "GOOGL", "AMZN", "META"]
+        popular_us = ["APPLE", "MICROSOFT", "NVIDIA", "TESLA", "GOOGLE", "ALPHABET",
+                      "AMAZON", "META", "NETFLIX", "AMD",
+                      "AAPL", "MSFT", "NVDA", "TSLA", "GOOGL", "AMZN", "NFLX"]
         def sort_key(name):
+            base = name.split(".")[0].upper()
             try:
-                return (0, popular.index(name.upper()))
+                return (0, popular_us.index(base))
             except ValueError:
                 return (1, name)
 
-        return {"symbols": sorted(detected, key=sort_key)}
+        return {"symbols": sorted(detected, key=sort_key),
+                "note": f"Found {len(detected)} US stocks. If 0, your XM account type may not include US stock CFDs."}
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
 
@@ -507,34 +501,15 @@ class ValidateSymbolsRequest(BaseModel):
 
 @app.post("/api/symbols/validate", dependencies=[Depends(require_key)])
 async def validate_symbols(req: ValidateSymbolsRequest):
-    """Check which symbols are available on MT5. Tries alternate broker formats
-    (e.g. NVDAm, #NVDA) when the exact name is not found."""
-    import MetaTrader5 as mt5
+    """Check which symbols exist on MT5, returning the broker's actual name
+    (resolution handles casing and ticker suffixes, e.g. APPLE -> Apple)."""
     valid, invalid = [], []
     for sym in req.symbols:
-        base = sym.upper().rstrip("M").lstrip("#").split(".")[0]
-        candidates = [
-            sym.upper(),          # as-is
-            f"{base}.OQ",         # XM NASDAQ (AAPL.OQ)
-            f"{base}.N",          # XM NYSE
-            f"{base}.NY",
-            f"{base}.US",
-            base,                 # plain
-            f"{base}m",           # micro
-            f"#{base}",           # prefixed
-        ]
-        found = None
-        for candidate in candidates:
-            try:
-                mt5_client._ensure_symbol(candidate)
-                found = candidate
-                break
-            except Exception:
-                continue
-        if found:
-            valid.append(found)
-        else:
-            invalid.append(sym.upper())
+        try:
+            resolved = mt5_client._ensure_symbol(sym)
+            valid.append(resolved)
+        except Exception:
+            invalid.append(sym)
     return {"valid": valid, "invalid": invalid}
 
 
@@ -554,7 +529,7 @@ async def direct_trade(req: DirectTradeRequest):
             sl=req.sl,
             tp=req.tp,
             comment="metabot-direct",
-            magic=settings.gold_magic if market_group(symbol) == "gold" else settings.magic,
+            magic=magic_for_symbol(symbol),
         )
         if not result.get("ok"):
             mt5_msg = result.get("comment", "Order failed")

@@ -117,6 +117,13 @@ const fmt = (n: number | null | undefined, d = 2) =>
   n === null || n === undefined ? "—" : Number(n).toFixed(d);
 
 const MONO = { fontFamily: "ui-monospace, monospace", fontVariantNumeric: "tabular-nums" };
+const formatBangkokUnixTime = (seconds: number) =>
+  new Date(seconds * 1000).toLocaleTimeString("th-TH", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZone: "Asia/Bangkok",
+  });
 
 const actionColor = (a?: string): "success" | "error" | "default" =>
   a === "BUY" ? "success" : a === "SELL" ? "error" : "default";
@@ -1946,7 +1953,7 @@ export default function Dashboard() {
                           <Stack direction="row" sx={{ justifyContent: "space-between" }}>
                             <Typography variant="caption" color="text.secondary">Last Update</Typography>
                             <Typography variant="caption" sx={MONO}>
-                              {new Date(metalTick.time * 1000).toLocaleTimeString()}
+                              {formatBangkokUnixTime(metalTick.time)}
                             </Typography>
                           </Stack>
                         </Stack>
@@ -2323,7 +2330,7 @@ export default function Dashboard() {
                           <Stack direction="row" sx={{ justifyContent: "space-between" }}>
                             <Typography variant="caption" color="text.secondary">Last Update</Typography>
                             <Typography variant="caption" sx={MONO}>
-                              {new Date(stockTick.time * 1000).toLocaleTimeString()}
+                              {formatBangkokUnixTime(stockTick.time)}
                             </Typography>
                           </Stack>
                         </Stack>

@@ -124,6 +124,15 @@ const fmt = (n: number | null | undefined, d = 2) =>
   n === null || n === undefined ? "—" : Number(n).toFixed(d);
 
 const MONO = { fontFamily: "ui-monospace, monospace", fontVariantNumeric: "tabular-nums" };
+const formatBangkokTime = (value: string) => {
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(value);
+  const date = new Date(hasTimezone ? value : `${value}+07:00`);
+  return date.toLocaleString("th-TH", {
+    dateStyle: "short",
+    timeStyle: "short",
+    timeZone: "Asia/Bangkok",
+  });
+};
 
 function StatCard({
   icon,
@@ -1260,178 +1269,56 @@ export default function CryptoPage() {
                     </Box>
                   ) : (
                     <>
-                    <Box sx={{ overflowX: "auto" }}>
-                      <Table size="small" stickyHeader>
+                    <Box sx={{ overflowX: "auto", mt: 2 }}>
+                      <Table size="small">
                         <TableHead>
-                          <TableRow>
-                            {[
-                              { label: "เวลา", align: "left" },
-                              { label: "Symbol", align: "left" },
-                              { label: "ฝั่ง", align: "center" },
-                              { label: "เข้า/ออก", align: "center" },
-                              { label: "Lot", align: "right" },
-                              { label: "ราคา", align: "right" },
-                              { label: "P & L", align: "right" },
-                            ].map((col) => (
-                              <TableCell
-                                key={col.label}
-                                align={col.align as any}
-                                sx={{
-                                  bgcolor: "#080d18",
-                                  color: "#64748b",
-                                  fontWeight: 700,
-                                  fontSize: "0.68rem",
-                                  letterSpacing: "0.08em",
-                                  textTransform: "uppercase",
-                                  borderBottom: "1px solid rgba(255,255,255,0.08)",
-                                  py: 1.25,
-                                  whiteSpace: "nowrap",
-                                }}
-                              >
-                                {col.label}
-                              </TableCell>
-                            ))}
+                          <TableRow sx={{ "& th": { bgcolor: "#0d1321", borderBottomColor: "rgba(255,255,255,0.08)" } }}>
+                            <TableCell>เวลา</TableCell>
+                            <TableCell>Symbol</TableCell>
+                            <TableCell>ประเภท</TableCell>
+                            <TableCell align="right">Volume</TableCell>
+                            <TableCell align="right">ราคา</TableCell>
+                            <TableCell align="right">กำไร/ขาดทุน</TableCell>
                           </TableRow>
                         </TableHead>
                         <TableBody>
-                          {paginatedCryptoHistory.map((h, idx) => {
-                            const isOut = h.entry === "OUT";
-                            const isWin = isOut && h.profit > 0;
-                            const isLoss = isOut && h.profit < 0;
-                            const isBuy = h.type === "BUY";
-                            const maxAbsProfit = Math.max(...cryptoHistory.filter(d => d.entry === "OUT").map(d => Math.abs(d.profit)), 1);
-                            const barPct = isOut ? Math.min(100, (Math.abs(h.profit) / maxAbsProfit) * 100) : 0;
-                            return (
+                          {paginatedCryptoHistory.map((h) => (
                               <TableRow
-                                key={`${h.ticket}-${idx}`}
-                                sx={{
-                                  bgcolor: isWin
-                                    ? "rgba(16,185,129,0.03)"
-                                    : isLoss
-                                    ? "rgba(239,68,68,0.03)"
-                                    : "transparent",
-                                  borderBottom: "1px solid rgba(255,255,255,0.025)",
-                                  transition: "background 0.15s",
-                                  "&:hover": {
-                                    bgcolor: isWin
-                                      ? "rgba(16,185,129,0.07)"
-                                      : isLoss
-                                      ? "rgba(239,68,68,0.07)"
-                                      : "rgba(255,255,255,0.03)",
-                                  },
-                                  "&:last-child td": { borderBottom: "none" },
-                                }}
+                                key={`${h.ticket}-${h.time}`}
+                                sx={{ "& td": { borderBottomColor: "rgba(255,255,255,0.04)" } }}
                               >
-                                {/* เวลา */}
-                                <TableCell sx={{ py: 1.25, whiteSpace: "nowrap" }}>
-                                  <Typography sx={{ fontFamily: "monospace", fontSize: "0.72rem", color: "#64748b", lineHeight: 1.2 }}>
-                                    {h.time.replace("T", " ").substring(0, 10)}
-                                  </Typography>
-                                  <Typography sx={{ fontFamily: "monospace", fontSize: "0.78rem", color: "#94a3b8", fontWeight: 600 }}>
-                                    {h.time.replace("T", " ").substring(11, 16)}
-                                  </Typography>
+                                <TableCell sx={{ ...MONO, color: "#94a3b8", fontSize: "0.78rem" }}>
+                                  {formatBangkokTime(h.time)}
                                 </TableCell>
-
-                                {/* Symbol */}
-                                <TableCell sx={{ py: 1.25 }}>
-                                  <Typography sx={{ fontWeight: 700, fontSize: "0.85rem", color: "#e2e8f0", letterSpacing: "0.02em" }}>
-                                    {h.symbol}
-                                  </Typography>
+                                <TableCell sx={{ ...MONO, fontWeight: 800 }}>{h.symbol}</TableCell>
+                                <TableCell>
+                                  <Chip
+                                    size="small"
+                                    label={`${h.entry === "OUT" ? "ปิด" : "เปิด"} ${h.type}`}
+                                    color={h.type === "BUY" ? "success" : "error"}
+                                    variant="outlined"
+                                    sx={{ height: 20, fontSize: "0.7rem", fontWeight: 700, borderRadius: 1 }}
+                                  />
                                 </TableCell>
-
-                                {/* BUY/SELL */}
-                                <TableCell align="center" sx={{ py: 1.25 }}>
-                                  <Box
-                                    sx={{
-                                      display: "inline-block",
-                                      px: 1,
-                                      py: 0.2,
-                                      borderRadius: 0.75,
-                                      fontSize: "0.68rem",
-                                      fontWeight: 800,
-                                      letterSpacing: "0.06em",
-                                      bgcolor: isBuy ? "rgba(59,130,246,0.12)" : "rgba(249,115,22,0.12)",
-                                      color: isBuy ? "#60a5fa" : "#fb923c",
-                                      border: `1px solid ${isBuy ? "rgba(59,130,246,0.25)" : "rgba(249,115,22,0.25)"}`,
-                                    }}
-                                  >
-                                    {h.type}
-                                  </Box>
-                                </TableCell>
-
-                                {/* IN/OUT */}
-                                <TableCell align="center" sx={{ py: 1.25 }}>
-                                  <Box
-                                    sx={{
-                                      display: "inline-block",
-                                      px: 0.9,
-                                      py: 0.2,
-                                      borderRadius: 0.75,
-                                      fontSize: "0.65rem",
-                                      fontWeight: 700,
-                                      letterSpacing: "0.05em",
-                                      bgcolor: isOut ? "rgba(234,179,8,0.1)" : "rgba(100,116,139,0.1)",
-                                      color: isOut ? "#fbbf24" : "#94a3b8",
-                                      border: `1px solid ${isOut ? "rgba(234,179,8,0.2)" : "rgba(100,116,139,0.2)"}`,
-                                    }}
-                                  >
-                                    {h.entry}
-                                  </Box>
-                                </TableCell>
-
-                                {/* Lot */}
-                                <TableCell align="right" sx={{ py: 1.25 }}>
-                                  <Typography sx={{ fontFamily: "monospace", fontSize: "0.8rem", color: "#94a3b8" }}>
-                                    {h.volume}
-                                  </Typography>
-                                </TableCell>
-
-                                {/* ราคา */}
-                                <TableCell align="right" sx={{ py: 1.25 }}>
-                                  <Typography sx={{ fontFamily: "monospace", fontSize: "0.8rem", color: "#94a3b8" }}>
-                                    {fmt(h.price, 2)}
-                                  </Typography>
-                                </TableCell>
-
-                                {/* P&L */}
-                                <TableCell align="right" sx={{ py: 1.25, pr: 2, minWidth: 110 }}>
-                                  {isOut ? (
-                                    <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 0.4 }}>
-                                      <Typography
-                                        sx={{
-                                          fontFamily: "monospace",
-                                          fontWeight: 700,
-                                          fontSize: "0.88rem",
-                                          color: isWin ? "#10b981" : isLoss ? "#ef4444" : "#64748b",
-                                        }}
-                                      >
-                                        {h.profit > 0 ? "+" : ""}{fmt(h.profit)}
-                                      </Typography>
-                                      {/* mini bar */}
-                                      <Box sx={{ width: 64, height: 3, bgcolor: "rgba(255,255,255,0.04)", borderRadius: 1, overflow: "hidden" }}>
-                                        <Box
-                                          sx={{
-                                            width: `${barPct}%`,
-                                            height: "100%",
-                                            bgcolor: isWin ? "#10b981" : "#ef4444",
-                                            borderRadius: 1,
-                                            opacity: 0.7,
-                                          }}
-                                        />
-                                      </Box>
-                                    </Box>
-                                  ) : (
-                                    <Typography sx={{ color: "#1e293b", fontFamily: "monospace", fontSize: "0.8rem" }}>—</Typography>
-                                  )}
+                                <TableCell align="right" sx={MONO}>{fmt(h.volume, 2)}</TableCell>
+                                <TableCell align="right" sx={MONO}>{fmt(h.price, 2)}</TableCell>
+                                <TableCell
+                                  align="right"
+                                  sx={{
+                                    ...MONO,
+                                    fontWeight: 800,
+                                    color: h.profit > 0 ? "#10b981" : h.profit < 0 ? "#ef4444" : "#64748b",
+                                  }}
+                                >
+                                  {h.profit > 0 ? "+" : ""}{fmt(h.profit)}
                                 </TableCell>
                               </TableRow>
-                            );
-                          })}
+                          ))}
                         </TableBody>
                       </Table>
                     </Box>
                     <TablePagination
-                      rowsPerPageOptions={[10, 25, 50]}
+                      rowsPerPageOptions={[5, 10, 20, 50]}
                       component="div"
                       count={cryptoHistory.length}
                       rowsPerPage={historyRowsPerPage}
@@ -1444,14 +1331,13 @@ export default function CryptoPage() {
                       labelRowsPerPage="แถวต่อหน้า:"
                       labelDisplayedRows={({ from, to, count }) => `${from}–${to} จาก ${count}`}
                       sx={{
-                        color: "#475569",
-                        fontSize: "0.78rem",
-                        borderTop: "1px solid rgba(255,255,255,0.04)",
-                        "& .MuiTablePagination-selectIcon": { color: "#475569" },
-                        "& .MuiTablePagination-select": { color: "#94a3b8" },
-                        "& .MuiIconButton-root": { color: "#475569" },
+                        color: "#94a3b8",
+                        borderTop: "1px solid rgba(255,255,255,0.06)",
+                        "& .MuiTablePagination-toolbar": { minHeight: 44, px: 1 },
+                        "& .MuiTablePagination-selectLabel, & .MuiTablePagination-displayedRows": { fontSize: "0.78rem" },
+                        "& .MuiTablePagination-selectIcon": { color: "#64748b" },
+                        "& .MuiIconButton-root": { color: "#64748b" },
                         "& .MuiIconButton-root.Mui-disabled": { color: "rgba(255,255,255,0.1)" },
-                        "& .MuiTablePagination-displayedRows": { color: "#475569" },
                       }}
                     />
                     </>
