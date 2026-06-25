@@ -31,7 +31,7 @@ def is_crypto_symbol(symbol: str) -> bool:
     for base in sorted(CRYPTO_BASES, key=len, reverse=True):
         if s == base:
             return True
-        if any(s == f"{base}{quote}" for quote in CRYPTO_QUOTES):
+        if any(s.startswith(f"{base}{quote}") for quote in CRYPTO_QUOTES):
             return True
     return False
 

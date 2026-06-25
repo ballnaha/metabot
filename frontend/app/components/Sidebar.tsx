@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Divider, Stack, Tooltip, Typography } from "@mui/material";
+import { Box, Divider, Stack, Tooltip, TooltipProps, tooltipClasses, Typography, styled } from "@mui/material";
 import {
   Award,
   Coins,
@@ -12,6 +12,24 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { useRouter, usePathname } from "next/navigation";
+
+const CustomTooltip = styled(({ className, ...props }: TooltipProps) => (
+  <Tooltip {...props} classes={{ popper: className }} />
+))(({ theme }) => ({
+  [`& .${tooltipClasses.tooltip}`]: {
+    backgroundColor: "#0f172a",
+    color: "#f8fafc",
+    fontSize: "0.78rem",
+    fontWeight: 500,
+    borderRadius: "6px",
+    padding: "6px 10px",
+    border: "1px solid rgba(255, 255, 255, 0.08)",
+    boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -4px rgba(0, 0, 0, 0.3)",
+  },
+  [`& .${tooltipClasses.arrow}`]: {
+    color: "#0f172a",
+  },
+}));
 
 export const SIDEBAR_W = 60;
 
@@ -47,7 +65,7 @@ function SideBtn({
   onClick?: () => void;
 }) {
   return (
-    <Tooltip title={label} placement="right" arrow>
+    <CustomTooltip title={label} placement="right" arrow>
       <Box
         onClick={onClick}
         sx={{
@@ -71,7 +89,7 @@ function SideBtn({
       >
         {icon}
       </Box>
-    </Tooltip>
+    </CustomTooltip>
   );
 }
 
@@ -106,7 +124,7 @@ export default function Sidebar({
       }}
     >
       {/* Logo */}
-      <Tooltip title="MetaBot" placement="right" arrow>
+      <CustomTooltip title="MetaBot" placement="right" arrow>
         <Box
           sx={{
             width: 38,
@@ -122,7 +140,7 @@ export default function Sidebar({
         >
           <Hexagon size={20} fill="#fff" color="#fff" />
         </Box>
-      </Tooltip>
+      </CustomTooltip>
 
       <Divider sx={{ width: 32, borderColor: "rgba(255,255,255,0.05)", mb: 1.5 }} />
 
@@ -150,7 +168,7 @@ export default function Sidebar({
       <Divider sx={{ width: 32, borderColor: "rgba(255,255,255,0.05)", mt: 1, mb: 1 }} />
 
       {/* Connection + Equity */}
-      <Tooltip title={`${connLabel}${equity ? ` · ${equity.toFixed(0)} ${currency}` : ""}`} placement="right" arrow>
+      <CustomTooltip title={`${connLabel}${equity ? ` · ${equity.toFixed(0)} ${currency}` : ""}`} placement="right" arrow>
         <Stack sx={{ alignItems: "center", gap: 0.5, cursor: "default" }}>
           <Box
             sx={{
@@ -180,7 +198,7 @@ export default function Sidebar({
             </Typography>
           )}
         </Stack>
-      </Tooltip>
+      </CustomTooltip>
     </Box>
   );
 }

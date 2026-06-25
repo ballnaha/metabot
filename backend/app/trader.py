@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 from . import advisor, indicators, mt5_client, strategy
 from .config import settings
 from .market_groups import market_group
-from .models import Action, PendingTrade, Recommendation
+from .models import Action, PendingTrade, Recommendation, IndicatorSnapshot, StrategySignal
 
 log = logging.getLogger("metabot.trader")
 
@@ -37,6 +37,32 @@ def max_slots_for_symbol(symbol: str) -> int:
     if group == "gold":   return max(1, settings.max_gold_open_trades   or settings.max_open_trades)
     if group == "stock":  return max(1, settings.max_stock_open_trades  or settings.max_open_trades)
     return max(1, settings.max_open_trades)
+
+
+def get_group_slot_status(group: str) -> tuple[int, int]:
+    """Return (used_slots, max_slots) for a given market group."""
+    try:
+        open_pos = mt5_client.positions()
+    except Exception as e:
+        log.warning("Could not fetch open positions: %s", e)
+        open_pos = []
+
+    bot_pos = [p for p in open_pos if _is_bot_position(p)]
+    
+    with _slot_lock:
+        _prune_slot_reservations()
+        reserved_symbols = set(_slot_reservations.keys())
+        
+    group_positions = [p for p in bot_pos if market_group(p["symbol"]) == group]
+    reserved_group_count = sum(1 for s in reserved_symbols if market_group(s) == group)
+    
+    if group == "crypto":   max_slots = max(1, settings.max_crypto_open_trades or settings.max_open_trades)
+    elif group == "gold":   max_slots = max(1, settings.max_gold_open_trades   or settings.max_open_trades)
+    elif group == "stock":  max_slots = max(1, settings.max_stock_open_trades  or settings.max_open_trades)
+    else:                   max_slots = max(1, settings.max_open_trades)
+    
+    used_slots = len(group_positions) + reserved_group_count
+    return used_slots, max_slots
 
 
 def _same_slot_group(position_symbol: str, target_symbol: str) -> bool:
@@ -117,6 +143,55 @@ def release_trade_slot(symbol: str, keep_after_success: bool = False) -> None:
 class TradeManager:
     def __init__(self) -> None:
         self._pending: Dict[str, PendingTrade] = {}
+
+    def evaluate_technical_signal(
+        self,
+        symbol: str,
+        timeframe: str,
+        strategy_name: Optional[str] = None,
+    ) -> tuple[IndicatorSnapshot, StrategySignal]:
+        df = mt5_client.get_rates(symbol, timeframe, 200)
+        snap = indicators.compute(df, symbol, timeframe)
+        sig = strategy.apply(df, snap, strategy_name)
+        return snap, sig
+
+    async def stage_and_execute(
+        self,
+        symbol: str,
+        snap: IndicatorSnapshot,
+        use_ai: bool,
+    ) -> tuple[Recommendation, Optional[PendingTrade]]:
+        # 1. Double check slot status with lock
+        ok, slot_reason = reserve_trade_slot(symbol)
+        if not ok:
+            # Slot was taken in the meantime
+            rec = Recommendation(
+                symbol=symbol,
+                timeframe=snap.timeframe,
+                price=snap.price,
+                action=Action.HOLD,
+                confidence=0.0,
+                summary=slot_reason
+            )
+            return rec, None
+
+        # 2. Gather AI opinions if enabled
+        opinions = (
+            await advisor.gather_opinions(snap)
+            if use_ai
+            else []
+        )
+        rec = advisor.decide(snap, opinions, use_ai)
+        rec.suggested_lot = self.risk_lot(symbol, rec)
+
+        if rec.action == Action.HOLD:
+            release_trade_slot(symbol)
+            return rec, None
+
+        # 3. Stage and confirm
+        pending = self.stage(rec)
+        self.confirm(pending.id, slot_reserved=True)
+        return rec, self._pending.get(pending.id)
 
     # ------------------------------------------------------------------ #
     # Analysis

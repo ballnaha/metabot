@@ -149,17 +149,38 @@ const actionColor = (action?: string): "success" | "error" | "default" =>
 const actionLabel = (action?: string) =>
   action === "BUY" ? "Long" : action === "SELL" ? "Short" : action || "รอ";
 
+const CRYPTO_BASES = [
+  "1INCH", "AAVE", "ADA", "AGIX", "ALGO", "APE", "APT", "ARB", "ATOM", "AVAX", "AXS",
+  "BAT", "BCH", "BNB", "BONK", "BTC", "BTG", "CHZ", "COMP", "CRV", "DASH", "DOGE",
+  "DOT", "DYDX", "EGLD", "ENJ", "ETC", "ETH", "FET", "FIL", "FLOKI", "FLOW", "GALA",
+  "GRT", "HBAR", "ICP", "IMX", "INJ", "JUP", "LDO", "LINK", "LRC", "LTC", "LUNA",
+  "MANA", "MATIC", "MKR", "NEAR", "OCEAN", "OP", "PEPE", "RNDR", "SAND", "SEI",
+  "SHIB", "SNX", "SOL", "STORJ", "STX", "SUI", "SUSHI", "THETA", "TIA", "UMA",
+  "UNI", "WIF", "XLM", "XRP", "XTZ", "ZEC", "ZRX",
+].sort((a, b) => b.length - a.length);
+
+const CRYPTO_QUOTES = ["USD", "USDT", "BTC", "ETH", "EUR"];
+
+const isCryptoSymbol = (sym: string) => {
+  const s = sym.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (/GOLD|SILVER|XAU|XAG|PLATINUM|PALLADIUM/.test(s)) return false;
+  if (/^(EUR|GBP|AUD|NZD|CAD|CHF|HKD|SGD|ZAR|MXN|NOK|SEK|DKK|TRY|CNH|RUB)[A-Z]{3}$/.test(s)) return false;
+  return CRYPTO_BASES.some((base) => s === base || CRYPTO_QUOTES.some((quote) => s.startsWith(`${base}${quote}`)));
+};
+
+const isMetalSymbol = (sym: string) => {
+  return /GOLD|SILVER|XAU|XAG|PLATINUM|PALLADIUM/i.test(sym);
+};
+
+const FOREX_PREFIXES = ["EUR", "GBP", "AUD", "NZD", "CAD", "CHF", "HKD", "SGD", "ZAR", "MXN", "NOK", "SEK", "DKK", "TRY", "CNH", "RUB", "USD", "JPY"];
+
+const isForexSymbol = (sym: string) => {
+  const s = sym.toUpperCase().replace(/[^A-Z]/g, "");
+  return s.length === 6 && FOREX_PREFIXES.some((p) => s.startsWith(p)) && !isCryptoSymbol(sym) && !isMetalSymbol(sym);
+};
+
 const isStockSymbol = (sym: string) => {
-  const s = sym.toUpperCase();
-  if (/GOLD|XAU|XAG|SILVER|PLATINUM|PALLADIUM/.test(s)) return false;
-  if (/BTC|ETH|SOL|XRP|LTC|DOGE|ADA|DOT|LINK|AVAX|SHIB|UNI|BNB|NEAR|SUI|PEPE/.test(s)) return false;
-  // XM exchange-suffix format: AAPL.OQ, NVDA.OQ, TSLA.N
-  if (/^[A-Z]{1,6}\.(OQ|N|NY|L|T|AX|HK)$/.test(s)) return true;
-  // Exclude 6-char pure forex pairs
-  if (/^[A-Z]{6}$/.test(s)) return false;
-  // Strip broker prefix/suffix and check base ticker
-  const base = s.replace(/^[#@]|M$|\..*$/, "");
-  return base.length >= 2 && base.length <= 5 && /^[A-Z]+$/.test(base);
+  return !isCryptoSymbol(sym) && !isMetalSymbol(sym) && !isForexSymbol(sym);
 };
 
 const strategyLabel = (name: string) =>
@@ -235,6 +256,7 @@ function QuickNumberInput({
         sx={{
           display: "flex",
           alignItems: "center",
+          height: 40,
           bgcolor: "rgba(255,255,255,0.01)",
           border: "1px solid rgba(255,255,255,0.08)",
           borderRadius: 2,
@@ -251,7 +273,7 @@ function QuickNumberInput({
           sx={{
             minWidth: 40,
             width: 40,
-            height: 40,
+            height: "100%",
             borderRadius: 0,
             color: "#94a3b8",
             borderRight: "1px solid rgba(255,255,255,0.05)",
@@ -270,6 +292,7 @@ function QuickNumberInput({
           style={{
             flexGrow: 1,
             width: "100%",
+            height: "100%",
             border: "none",
             background: "transparent",
             color: "#fff",
@@ -286,7 +309,7 @@ function QuickNumberInput({
           sx={{
             minWidth: 40,
             width: 40,
-            height: 40,
+            height: "100%",
             borderRadius: 0,
             color: "#94a3b8",
             borderLeft: "1px solid rgba(255,255,255,0.05)",
@@ -569,14 +592,15 @@ export default function StocksPage() {
     }
   }
 
-  async function detectStockSymbols() {
+  async function detectStockSymbols(filterType: any = "liquid_100") {
+    const type = typeof filterType === "string" ? filterType : "liquid_100";
     setDetecting(true);
     try {
-      const data = await api("symbols/detect-stocks");
+      const data = await api(`symbols/detect-stocks?filter_type=${type}`);
       const detected = (data.symbols || []).map((s: string) => s.trim()).filter(isStockSymbol);
       if (detected.length) {
         setStockInput(detected.join(", "));
-        toastr.success(`ตรวจพบสัญลักษณ์หุ้น US ${detected.length} รายการ`);
+        toastr.success(`ตรวจพบสัญลักษณ์หุ้น US ${detected.length} รายการ (แบบ ${type === "all" ? "ทั้งหมด" : type === "liquid_30" ? "Top 30" : "Top 100"})`);
       } else {
         toastr.warning("ไม่พบสัญลักษณ์หุ้น US ใน MT5 ของโบรกเกอร์นี้");
       }

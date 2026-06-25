@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 
 from .config import settings
 from .market_groups import market_group
-from .trader import manager
+from .trader import manager, get_group_slot_status, can_open_new_trade
 from .models import Action, Recommendation
 from . import log_store
 
@@ -254,83 +254,230 @@ async def position_monitor_loop() -> None:
 
 
 async def auto_trade_loop() -> None:
-    """Scan all symbols once per candle and place trades."""
-    log.info("Auto-trade worker started.")
-    log_store.push("info", "system", "Worker เริ่มทำงาน")
+    """Scan all symbols once per candle, rank them by signal strength, and place trades."""
+    log.info("Auto-trade worker started (ranking-based).")
+    log_store.push("info", "system", "Worker เริ่มทำงาน (ระบบจัดอันดับ)")
     await asyncio.sleep(5)
 
     last_processed_candles: dict[tuple, str] = {}
     unavailable_symbols: set[str] = set()
+    _is_first_scan = True
+    _last_summary_time = 0.0  # monotonic time of last periodic summary
+    _scan_count = 0
 
     while True:
         try:
             from . import mt5_client
+            import time as _time
+
+            _scan_count += 1
+            now_mono = _time.monotonic()
+
+            # Group active symbols by market group
             active_symbols = [
                 s
                 for s in settings.symbol_list
                 if s not in unavailable_symbols
                 and _symbol_bot_enabled(s)
             ]
-            for symbol in active_symbols:
-                try:
-                    timeframe = _symbol_timeframe(symbol)
-                    df = mt5_client.get_rates(symbol, timeframe, 3)
-                    if df is not None and len(df) > 0:
-                        latest_candle_time = str(df["time"].iloc[-1])
-                        cache_key = (symbol.upper(), timeframe.upper())
-                        if last_processed_candles.get(cache_key) == latest_candle_time:
+
+            grouped_symbols: dict[str, list[str]] = {}
+            for sym in active_symbols:
+                grp = market_group(sym)
+                grouped_symbols.setdefault(grp, []).append(sym)
+
+            # Per-cycle summary counters
+            cycle_scanned = 0
+            cycle_new_candle = 0
+            cycle_same_candle = 0
+            cycle_slot_full_groups: list[str] = []
+            cycle_signals: list[str] = []  # "BTCUSD:SELL(94%)"
+            cycle_holds = 0
+            cycle_trades = 0
+            cycle_skipped_dup = 0
+
+            log.info("Scan cycle #%d: %d active symbols in %d groups [%s]",
+                     _scan_count, len(active_symbols),
+                     len(grouped_symbols),
+                     ", ".join(f"{g}={len(s)}" for g, s in grouped_symbols.items()))
+
+            for group, symbols_in_group in grouped_symbols.items():
+                # 1. Check open slots for this group
+                used_slots, max_slots = get_group_slot_status(group)
+                available_slots = max_slots - used_slots
+                if available_slots <= 0:
+                    cycle_slot_full_groups.append(f"{group}({used_slots}/{max_slots})")
+                    log.debug("Group %s: slots full (%d/%d), skipping.", group, used_slots, max_slots)
+                    continue
+
+                log.debug("Group %s: %d/%d slots used, %d available, scanning %d symbols.",
+                          group, used_slots, max_slots, available_slots, len(symbols_in_group))
+
+                # 2. Gather candidates that have new candles and pass preliminary checks
+                group_candidates = []
+                for symbol in symbols_in_group:
+                    try:
+                        timeframe = _symbol_timeframe(symbol)
+                        cycle_scanned += 1
+
+                        # Double entry prevention
+                        ok, reason = can_open_new_trade(symbol)
+                        if not ok:
+                            cycle_skipped_dup += 1
                             continue
-                        last_processed_candles[cache_key] = latest_candle_time
 
-                    rec, pending = await manager.analyze_and_stage(
-                        symbol=symbol,
-                        timeframe=timeframe,
-                        strategy_name=_symbol_strategy(symbol),
-                        use_ai=_symbol_use_ai(symbol),
-                    )
+                        # Active pending trade prevention
+                        pending_trades = manager.list_pending()
+                        if any(p.recommendation.symbol.upper() == symbol.upper() for p in pending_trades):
+                            cycle_skipped_dup += 1
+                            continue
 
-                    if rec.action != Action.HOLD and pending:
-                        level = "success" if pending.status == "executed" else "error"
-                        failure_reason = _pending_failure_reason(pending) if pending.status == "failed" else ""
-                        log_store.push(
-                            level, "trade",
-                            f"{rec.action.value} {symbol} {pending.lot} lot @ {_fmt(rec.price, 5)} — {pending.status}"
-                            + (f" ({failure_reason})" if failure_reason else ""),
-                            {"symbol": symbol, "action": rec.action.value, "lot": pending.lot,
-                             "price": rec.price, "sl": rec.stop_loss, "tp": rec.take_profit,
-                             "status": pending.status, "confidence": round(rec.confidence, 2),
-                             "error": failure_reason,
-                             "result": pending.result,
-                             "strategy": rec.indicators.strategy_name},
-                        )
-                        send_telegram_notification(format_trade_executed(rec, pending.lot, pending.status))
-                        if failure_reason:
-                            log.info("Signal %s %s (status: %s, reason: %s)", symbol, rec.action.value, pending.status, failure_reason)
+                        df = mt5_client.get_rates(symbol, timeframe, 3)
+                        if df is not None and len(df) > 0:
+                            latest_candle_time = str(df["time"].iloc[-1])
+                            cache_key = (symbol.upper(), timeframe.upper())
+
+                            if cache_key not in last_processed_candles:
+                                # First time seeing this symbol — initialize cache
+                                last_processed_candles[cache_key] = latest_candle_time
+                                if _is_first_scan:
+                                    # On first startup scan, allow immediate evaluation
+                                    log.debug("First scan: evaluating %s (%s) at candle %s", symbol, timeframe, latest_candle_time)
+                                else:
+                                    # Symbol was added later — wait for next candle
+                                    log.info("New symbol %s (%s) cached at %s, waiting for next candle.", symbol, timeframe, latest_candle_time)
+                                    cycle_same_candle += 1
+                                    continue
+
+                            elif last_processed_candles.get(cache_key) == latest_candle_time:
+                                cycle_same_candle += 1
+                                continue
+                            else:
+                                # New candle detected!
+                                log.info("New candle for %s (%s): %s -> %s",
+                                         symbol, timeframe,
+                                         last_processed_candles.get(cache_key, "?")[-19:],
+                                         latest_candle_time[-19:])
+
+                            last_processed_candles[cache_key] = latest_candle_time
+                            cycle_new_candle += 1
+
+                            # Compute technical signal locally (fast, no AI)
+                            # Need 200 bars for indicators, not just 3
+                            snap, sig = manager.evaluate_technical_signal(symbol, timeframe, _symbol_strategy(symbol))
+
+                            if sig.action != Action.HOLD:
+                                group_candidates.append((symbol, snap, sig))
+                                cycle_signals.append(f"{symbol}:{sig.action.value}({sig.confidence:.0%})")
+                            else:
+                                cycle_holds += 1
+
+                    except Exception as e:
+                        err = str(e)
+                        if "not found" in err or "could not be selected" in err:
+                            unavailable_symbols.add(symbol)
+                            log_store.push("warning", "unavailable", f"{symbol} ไม่มีใน broker — ข้ามการสแกน")
+                            log.warning("Symbol %s not available on broker — skipping.", symbol)
                         else:
-                            log.info("Signal %s %s (status: %s)", symbol, rec.action.value, pending.status)
-                    else:
-                        # Log HOLD only when there was a candle to scan (not cache hit)
-                        if rec.summary:
-                            log_store.push(
-                                "info", "signal",
-                                f"HOLD {symbol} — {rec.summary[:80]}",
-                                {"symbol": symbol, "confidence": round(rec.confidence, 2)},
-                            )
+                            log_store.push("error", "scan_error", f"Scan error {symbol}: {str(e)[:100]}")
+                            log.error("Scan error for %s: %s", symbol, e)
+                            log.debug(traceback.format_exc())
 
-                except Exception as e:
-                    err = str(e)
-                    if "not found" in err or "could not be selected" in err:
-                        unavailable_symbols.add(symbol)
-                        log_store.push("warning", "unavailable",
-                                       f"{symbol} ไม่มีใน broker — ข้ามการสแกน")
-                        log.warning("Symbol %s not available on broker — skipping.", symbol)
-                    else:
-                        log_store.push("error", "scan_error",
-                                       f"Scan error {symbol}: {str(e)[:100]}")
-                        log.error("Scan error for %s: %s", symbol, e)
-                        log.debug(traceback.format_exc())
+                    await asyncio.sleep(0.1)
 
-                await asyncio.sleep(0.2)
+                # 3. Sort candidates by confidence descending and select the top ones to execute
+                if group_candidates:
+                    group_candidates.sort(key=lambda x: x[2].confidence, reverse=True)
+                    selected_candidates = group_candidates[:available_slots]
+
+                    log.info("Group %s: %d candidates found, executing top %d",
+                             group, len(group_candidates), len(selected_candidates))
+
+                    for symbol, snap, sig in selected_candidates:
+                        try:
+                            use_ai = _symbol_use_ai(symbol)
+                            rec, pending = await manager.stage_and_execute(symbol, snap, use_ai)
+
+                            if rec.action != Action.HOLD and pending:
+                                cycle_trades += 1
+                                level = "success" if pending.status == "executed" else "error"
+                                failure_reason = _pending_failure_reason(pending) if pending.status == "failed" else ""
+                                log_store.push(
+                                    level, "trade",
+                                    f"{rec.action.value} {symbol} {pending.lot} lot @ {_fmt(rec.price, 5)} — {pending.status}"
+                                    + (f" ({failure_reason})" if failure_reason else ""),
+                                    {"symbol": symbol, "action": rec.action.value, "lot": pending.lot,
+                                     "price": rec.price, "sl": rec.stop_loss, "tp": rec.take_profit,
+                                     "status": pending.status, "confidence": round(rec.confidence, 2),
+                                     "error": failure_reason, "result": pending.result,
+                                     "strategy": rec.indicators.strategy_name},
+                                )
+                                send_telegram_notification(format_trade_executed(rec, pending.lot, pending.status))
+                                if failure_reason:
+                                    log.info("Signal %s %s (status: %s, reason: %s)", symbol, rec.action.value, pending.status, failure_reason)
+                                else:
+                                    log.info("Signal %s %s (status: %s)", symbol, rec.action.value, pending.status)
+                            else:
+                                cycle_holds += 1
+                                if rec.summary:
+                                    log_store.push(
+                                        "info", "signal",
+                                        f"HOLD {symbol} — {rec.summary[:80]}",
+                                        {"symbol": symbol, "confidence": round(rec.confidence, 2)},
+                                    )
+                        except Exception as e:
+                            log_store.push("error", "trade_execute_error", f"Execute error {symbol}: {str(e)[:100]}")
+                            log.error("Trade execute error for %s: %s", symbol, e)
+
+            # End of cycle summary
+            summary_parts = [f"Cycle #{_scan_count} done"]
+            summary_parts.append(f"scanned={cycle_scanned}")
+            if cycle_new_candle:
+                summary_parts.append(f"new_candles={cycle_new_candle}")
+            if cycle_same_candle:
+                summary_parts.append(f"unchanged={cycle_same_candle}")
+            if cycle_skipped_dup:
+                summary_parts.append(f"dup_skip={cycle_skipped_dup}")
+            if cycle_slot_full_groups:
+                summary_parts.append(f"slots_full=[{','.join(cycle_slot_full_groups)}]")
+            if cycle_signals:
+                summary_parts.append(f"signals=[{', '.join(cycle_signals[:5])}]")
+            if cycle_holds:
+                summary_parts.append(f"holds={cycle_holds}")
+            if cycle_trades:
+                summary_parts.append(f"trades={cycle_trades}")
+
+            cycle_summary = " | ".join(summary_parts)
+            log.info(cycle_summary)
+
+            # Push to log_store only when something interesting happened
+            if cycle_new_candle > 0 or cycle_trades > 0 or _is_first_scan:
+                log_store.push(
+                    "info", "scan_cycle",
+                    cycle_summary,
+                    {"scan_count": _scan_count, "scanned": cycle_scanned,
+                     "new_candles": cycle_new_candle, "signals": cycle_signals[:10],
+                     "holds": cycle_holds, "trades": cycle_trades},
+                )
+
+            # Periodic summary every 5 minutes (to log_store so UI can see it)
+            if now_mono - _last_summary_time >= 300:
+                _last_summary_time = now_mono
+                try:
+                    slot_parts = []
+                    for grp in ("crypto", "gold", "stock"):
+                        used, mx = get_group_slot_status(grp)
+                        bot_on = {"crypto": settings.bot_enabled, "gold": settings.gold_bot_enabled, "stock": settings.stock_bot_enabled}.get(grp, False)
+                        status = f"{used}/{mx}" if bot_on else "OFF"
+                        slot_parts.append(f"{grp}={status}")
+                    log_store.push(
+                        "info", "worker_alive",
+                        f"Worker alive | cycles={_scan_count} | slots: {' '.join(slot_parts)} | unavailable={len(unavailable_symbols)}",
+                    )
+                except Exception:
+                    pass
+
+            _is_first_scan = False
 
         except Exception as e:
             log_store.push("error", "system", f"Worker error: {str(e)[:120]}")

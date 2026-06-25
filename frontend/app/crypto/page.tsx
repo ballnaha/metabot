@@ -213,15 +213,18 @@ const isCryptoSymbol = (sym: string) => {
   const s = sym.toUpperCase().replace(/[^A-Z0-9]/g, "");
   if (/GOLD|SILVER|XAU|XAG|PLATINUM|PALLADIUM/.test(s)) return false;
   if (/^(EUR|GBP|AUD|NZD|CAD|CHF|HKD|SGD|ZAR|MXN|NOK|SEK|DKK|TRY|CNH|RUB)[A-Z]{3}$/.test(s)) return false;
-  return CRYPTO_BASES.some((base) => s === base || CRYPTO_QUOTES.some((quote) => s === `${base}${quote}`));
+  return CRYPTO_BASES.some((base) => s === base || CRYPTO_QUOTES.some((quote) => s.startsWith(`${base}${quote}`)));
 };
 
 const isMetalSymbol = (sym: string) => {
   return /GOLD|SILVER|XAU|XAG|PLATINUM|PALLADIUM/i.test(sym);
 };
 
+const FOREX_PREFIXES = ["EUR", "GBP", "AUD", "NZD", "CAD", "CHF", "HKD", "SGD", "ZAR", "MXN", "NOK", "SEK", "DKK", "TRY", "CNH", "RUB", "USD", "JPY"];
+
 const isForexSymbol = (sym: string) => {
-  return /^[A-Z]{6}$/i.test(sym) && !isCryptoSymbol(sym) && !isMetalSymbol(sym);
+  const s = sym.toUpperCase().replace(/[^A-Z]/g, "");
+  return s.length === 6 && FOREX_PREFIXES.some((p) => s.startsWith(p)) && !isCryptoSymbol(sym) && !isMetalSymbol(sym);
 };
 
 export default function CryptoPage() {

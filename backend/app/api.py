@@ -398,7 +398,7 @@ async def detect_metal_symbols():
 
 
 @app.get("/api/symbols/detect-stocks", dependencies=[Depends(require_key)])
-async def detect_stock_symbols():
+async def detect_stock_symbols(filter_type: str = "liquid_100"):
     try:
         import re
         import MetaTrader5 as mt5
@@ -412,11 +412,7 @@ async def detect_stock_symbols():
             path_lower = getattr(s, 'path', '').lower()
             if 'cryptocurrencies' in path_lower or 'crypto' in path_lower:
                 return True
-            crypto_pat = re.compile(
-                r'^(BTC|ETH|SOL|XRP|LTC|DOGE|ADA|DOT|LINK|AVAX|SHIB|UNI)USD', 
-                re.IGNORECASE
-            )
-            return bool(crypto_pat.match(s.name))
+            return is_crypto_symbol(s.name)
             
         def is_metal(s) -> bool:
             path_lower = getattr(s, 'path', '').lower()
@@ -431,6 +427,9 @@ async def detect_stock_symbols():
             return False
             
         def is_forex(s) -> bool:
+            path_lower = getattr(s, 'path', '').lower()
+            if any(x in path_lower for x in ['stock', 'shares', 'equity', 'equities', 'index', 'indices', 'crypto', 'metal', 'commodity', 'energy']):
+                return False
             if len(s.name) == 6 and s.name.isalpha():
                 if not is_crypto(s) and not is_metal(s):
                     return True
@@ -452,11 +451,75 @@ async def detect_stock_symbols():
                 return True
             return False
 
+        LIQUID_30 = {
+            # Tickers
+            "AAPL", "MSFT", "NVDA", "TSLA", "GOOGL", "GOOG", "AMZN", "META", "NFLX", "AMD",
+            "JPM", "V", "MA", "PG", "JNJ", "WMT", "HD", "KO", "PEP", "MCD",
+            "DIS", "XOM", "CVX", "CAT", "HON", "GE", "BA", "CSCO", "ORCL", "CRM",
+            # Full Names
+            "APPLE", "MICROSOFT", "NVIDIA", "TESLA", "ALPHABET", "GOOGLE", "AMAZON", "META", "FACEBOOK", "NETFLIX", "AMD",
+            "JPMORGAN", "VISA", "MASTERCARD", "PROCTER", "JOHNSON & JOHNSON", "JOHNSON&JOHNSON", "JOHNSON_AND_JOHNSON", "JOHNSON_JOHNSON", "WALMART", "WAL-MART", "HOME_DEPOT", "HOME DEPOT", "COCA", "PEPSI", "MCDONALD",
+            "DISNEY", "EXXON", "CHEVRON", "CATERPILLAR", "HONEYWELL", "GENERAL ELECTRIC", "GENERAL_ELECTRIC", "GENERALELEC", "GENERAL_ELEC", "BOEING", "CISCO", "ORACLE", "SALESFORCE"
+        }
+
+        LIQUID_100 = {
+            # Tickers
+            "AAPL", "MSFT", "NVDA", "TSLA", "GOOGL", "GOOG", "AMZN", "META", "NFLX", "AMD",
+            "INTC", "QCOM", "AVGO", "TXN", "MU", "AMAT", "LRCX", "ASML", "ADI", "PANW",
+            "FTNT", "CRWD", "DDOG", "ZS", "COIN", "PLTR", "CSCO", "ORCL", "CRM", "NOW",
+            "WDAY", "ADBE", "INTU", "SNPS", "CDNS", "ANET", "MCHP", "ON", "MRVL",
+            "JPM", "BAC", "WFC", "C", "MS", "GS", "V", "MA", "AXP", "PYPL", "SQ",
+            "JNJ", "LLY", "UNH", "ABBV", "MRK", "PFE", "TMO", "ABT", "MDT", "GILD",
+            "REGN", "VRTX", "ISRG",
+            "WMT", "HD", "LOW", "COST", "TGT", "KO", "PEP", "MCD", "SBUX", "DIS",
+            "CMG", "NKE", "NIO",
+            "XOM", "CVX", "COP", "CAT", "DE", "HON", "GE", "UPS", "FDX", "BA",
+            "LMT", "RTX", "NOC", "GD",
+            "T", "VZ", "TMUS", "NEE", "D", "SO", "AEP",
+            # Full Names
+            "APPLE", "MICROSOFT", "NVIDIA", "TESLA", "ALPHABET", "GOOGLE", "AMAZON", "META", "FACEBOOK", "NETFLIX", "AMD",
+            "INTEL", "QUALCOMM", "BROADCOM", "TEXAS", "MICRON", "APPLIED", "LAM", "ASML", "ANALOG", "PALO",
+            "FORTINET", "CROWDSTRIKE", "DATADOG", "ZSCALER", "COINBASE", "PALANTIR", "CISCO", "ORACLE", "SALESFORCE", "SERVICENOW",
+            "WORKDAY", "ADOBE", "INTUIT", "SYNOPSYS", "CADENCE", "ARISTA", "MICROCHIP", "ON_SEMI", "ON SEMI", "MARVELL",
+            "JPMORGAN", "BANK_OF_AMERICA", "BANK OF AMERICA", "WELLS", "CITI", "GOLDMAN", "VISA", "MASTERCARD", "AMERICAN_EXPRESS", "AMERICAN EXPRESS", "PAYPAL", "BLOCK", "SQUARE",
+            "JOHNSON & JOHNSON", "JOHNSON&JOHNSON", "JOHNSON_AND_JOHNSON", "JOHNSON_JOHNSON", "LILLY", "UNITEDHEALTH", "UNITED HEALTH", "ABBVIE", "MERCK", "PFE", "THERMO", "ABBOTT", "MEDTRONIC", "GILEAD",
+            "REGENERON", "VERTEX", "INTUITIVE",
+            "WALMART", "WAL-MART", "HOME_DEPOT", "HOME DEPOT", "LOWES", "COSTCO", "TARGET", "COCA", "PEPSI", "MCDONALD", "STARBUCKS", "DISNEY",
+            "CHIPOTLE", "NIKE", "NIO",
+            "EXXON", "CHEVRON", "CONOCO", "CATERPILLAR", "DEERE", "HONEYWELL", "GENERAL ELECTRIC", "GENERAL_ELECTRIC", "GENERALELEC", "GENERAL_ELEC", "UPS", "UNITED_PARCEL", "UNITED PARCEL", "FEDEX", "BOEING",
+            "LOCKHEED", "RAYTHEON", "RTX", "NORTHROP", "GENERAL_DYNAMICS", "GENERAL DYNAMICS",
+            "AT&T", "AT_T", "AT T", "VERIZON", "T-MOBILE", "T MOBILE", "T_MOBILE", "NEXTERA", "DUKE", "SOUTHERN", "AMERICAN_ELECTRIC", "AMERICAN ELECTRIC"
+        }
+
         EXCLUDE = {"INDEX", "CASH", "FUTURE", "SPOT", "SWAP"}
+
+        def matches_preset(base_name: str, preset_set: set[str]) -> bool:
+            norm_base = re.sub(r"[^A-Z0-9]", "", base_name.upper())
+            if not norm_base:
+                return False
+            for x in preset_set:
+                norm_x = re.sub(r"[^A-Z0-9]", "", x.upper())
+                if not norm_x:
+                    continue
+                if len(x) <= 3:
+                    if norm_base == norm_x:
+                        return True
+                else:
+                    if norm_base == norm_x or norm_base.startswith(norm_x):
+                        return True
+            return False
+
         detected = []
         for s in raw_symbols:
             if is_us_stock(s) and getattr(s, 'trade_mode', 0) > 0:
                 if not any(x in s.name.upper() for x in EXCLUDE):
+                    base = s.name.split(".")[0].upper()
+                    is_in_30 = matches_preset(base, LIQUID_30)
+                    is_in_100 = matches_preset(base, LIQUID_100)
+                    if filter_type == "liquid_30" and not is_in_30:
+                        continue
+                    elif filter_type == "liquid_100" and not is_in_100:
+                        continue
                     detected.append(s.name)
 
         popular_us = ["APPLE", "MICROSOFT", "NVIDIA", "TESLA", "GOOGLE", "ALPHABET",
@@ -470,7 +533,7 @@ async def detect_stock_symbols():
                 return (1, name)
 
         return {"symbols": sorted(detected, key=sort_key),
-                "note": f"Found {len(detected)} US stocks. If 0, your XM account type may not include US stock CFDs."}
+                "note": f"Found {len(detected)} US stocks with filter '{filter_type}'. If 0, your XM account type may not include US stock CFDs."}
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
 

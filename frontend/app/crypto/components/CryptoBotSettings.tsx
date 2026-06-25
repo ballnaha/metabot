@@ -109,6 +109,7 @@ function QuickNumberInput({
         sx={{
           display: "flex",
           alignItems: "center",
+          height: 40,
           bgcolor: "rgba(255, 255, 255, 0.01)",
           border: "1px solid rgba(255, 255, 255, 0.08)",
           borderRadius: 2,
@@ -126,7 +127,7 @@ function QuickNumberInput({
           sx={{
             minWidth: 40,
             width: 40,
-            height: 40,
+            height: "100%",
             borderRadius: 0,
             color: "#94a3b8",
             bgcolor: "transparent",
@@ -153,6 +154,7 @@ function QuickNumberInput({
           style={{
             flexGrow: 1,
             width: "100%",
+            height: "100%",
             border: "none",
             background: "transparent",
             color: "#fff",
@@ -169,7 +171,7 @@ function QuickNumberInput({
           sx={{
             minWidth: 40,
             width: 40,
-            height: 40,
+            height: "100%",
             borderRadius: 0,
             color: "#94a3b8",
             bgcolor: "transparent",
@@ -575,14 +577,25 @@ export default function CryptoBotSettings({
               />
             </Box>
 
-            <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1.2fr 0.8fr" }, alignItems: "end" }}>
-              <FormControl size="small" fullWidth>
-                <InputLabel sx={{ color: "#94a3b8" }}>กลยุทธ์ที่ใช้</InputLabel>
+            <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1.2fr 0.8fr" } }}>
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5, width: "100%" }}>
+                <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 600, px: 0.5 }}>
+                  กลยุทธ์ที่ใช้
+                </Typography>
                 <Select
-                  label="กลยุทธ์ที่ใช้"
+                  size="small"
+                  fullWidth
                   value={selectedStrategyValue}
                   onChange={(e) => patchSettings({ strategy: e.target.value })}
-                  sx={{ bgcolor: "rgba(255,255,255,0.01)", "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.08)" } }}
+                  sx={{
+                    height: 40,
+                    borderRadius: 2,
+                    bgcolor: "rgba(255,255,255,0.01)",
+                    "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.08)" },
+                    "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.2) !important" },
+                    "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: "#3b82f6 !important" },
+                    "& .MuiSelect-select": { color: "#fff" }
+                  }}
                 >
                   <MenuItem value="" disabled>
                     กำลังโหลดกลยุทธ์...
@@ -593,7 +606,7 @@ export default function CryptoBotSettings({
                     </MenuItem>
                   ))}
                 </Select>
-              </FormControl>
+              </Box>
 
               <QuickNumberInput
                 label="สแกนทุก (วินาที)"

@@ -21,9 +21,12 @@ import {
   DialogContent,
   DialogTitle,
   Drawer,
+  FormControl,
   IconButton,
+  InputLabel,
   LinearProgress,
   MenuItem,
+  Select,
   Stack,
   Switch,
   Table,
@@ -154,9 +157,23 @@ const isGoldSymbol = (sym: string) => {
   return s.includes("GOLD") || s.startsWith("XAU");
 };
 
+const CRYPTO_BASES = [
+  "1INCH", "AAVE", "ADA", "AGIX", "ALGO", "APE", "APT", "ARB", "ATOM", "AVAX", "AXS",
+  "BAT", "BCH", "BNB", "BONK", "BTC", "BTG", "CHZ", "COMP", "CRV", "DASH", "DOGE",
+  "DOT", "DYDX", "EGLD", "ENJ", "ETC", "ETH", "FET", "FIL", "FLOKI", "FLOW", "GALA",
+  "GRT", "HBAR", "ICP", "IMX", "INJ", "JUP", "LDO", "LINK", "LRC", "LTC", "LUNA",
+  "MANA", "MATIC", "MKR", "NEAR", "OCEAN", "OP", "PEPE", "RNDR", "SAND", "SEI",
+  "SHIB", "SNX", "SOL", "STORJ", "STX", "SUI", "SUSHI", "THETA", "TIA", "UMA",
+  "UNI", "WIF", "XLM", "XRP", "XTZ", "ZEC", "ZRX",
+].sort((a, b) => b.length - a.length);
+
+const CRYPTO_QUOTES = ["USD", "USDT", "BTC", "ETH", "EUR"];
+
 const isCryptoSymbol = (sym: string) => {
-  const s = sym.toUpperCase();
-  return /BTC|ETH|SOL|XRP|LTC|DOGE|ADA|DOT|LINK|AVAX|SHIB|UNI|BNB|NEAR|SUI|PEPE/i.test(s);
+  const s = sym.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (/GOLD|SILVER|XAU|XAG|PLATINUM|PALLADIUM/.test(s)) return false;
+  if (/^(EUR|GBP|AUD|NZD|CAD|CHF|HKD|SGD|ZAR|MXN|NOK|SEK|DKK|TRY|CNH|RUB)[A-Z]{3}$/.test(s)) return false;
+  return CRYPTO_BASES.some((base) => s === base || CRYPTO_QUOTES.some((quote) => s.startsWith(`${base}${quote}`)));
 };
 
 const isSilverOrOtherMetal = (sym: string) => {
@@ -237,6 +254,7 @@ function QuickNumberInput({
         sx={{
           display: "flex",
           alignItems: "center",
+          height: 40,
           bgcolor: "rgba(255,255,255,0.01)",
           border: "1px solid rgba(255,255,255,0.08)",
           borderRadius: 2,
@@ -253,7 +271,7 @@ function QuickNumberInput({
           sx={{
             minWidth: 40,
             width: 40,
-            height: 40,
+            height: "100%",
             borderRadius: 0,
             color: "#94a3b8",
             borderRight: "1px solid rgba(255,255,255,0.05)",
@@ -272,6 +290,7 @@ function QuickNumberInput({
           style={{
             flexGrow: 1,
             width: "100%",
+            height: "100%",
             border: "none",
             background: "transparent",
             color: "#fff",
@@ -288,7 +307,7 @@ function QuickNumberInput({
           sx={{
             minWidth: 40,
             width: 40,
-            height: 40,
+            height: "100%",
             borderRadius: 0,
             color: "#94a3b8",
             borderLeft: "1px solid rgba(255,255,255,0.05)",
@@ -316,7 +335,7 @@ export default function GoldPage() {
   const [history, setHistory] = useState<HistoryDeal[]>([]);
   const [ticks, setTicks] = useState<Record<string, Tick>>({});
   const [settings, setSettings] = useState<any>({
-    symbols: "GOLD",
+    symbols: "",
     default_timeframe: "M15",
     strategy: "ema_macd_rsi",
     risk_per_trade: 0.01,
@@ -330,10 +349,32 @@ export default function GoldPage() {
     use_ai: false,
   });
   const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
-  const [goldInput, setGoldInput] = useState("GOLD");
+  const [goldInput, setGoldInput] = useState("");
+  const [newSymbolInput, setNewSymbolInput] = useState("");
+
+  const currentList = useMemo(() => {
+    return goldInput
+      ? goldInput.split(",").map((x) => x.trim().toUpperCase()).filter(Boolean)
+      : [];
+  }, [goldInput]);
+
+  const addSymbol = useCallback((raw: string) => {
+    const clean = raw.trim().toUpperCase();
+    if (!clean) return;
+    if (!currentList.includes(clean)) {
+      setGoldInput([...currentList, clean].join(", "));
+    }
+    setNewSymbolInput("");
+  }, [currentList]);
+
+  const removeSymbol = useCallback((sym: string) => {
+    setGoldInput(currentList.filter((x) => x !== sym).join(", "));
+  }, [currentList]);
+
   const [selectedSymbol, setSelectedSymbol] = useState("");
   const [scanResults, setScanResults] = useState<ScanResult[]>([]);
   const [priceSearch, setPriceSearch] = useState("");
+  const [initialLoading, setInitialLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [scanLoading, setScanLoading] = useState(false);
   const [detecting, setDetecting] = useState(false);
@@ -423,6 +464,7 @@ export default function GoldPage() {
       setConnected(false);
       toastr.error(`โหลดข้อมูลหน้าเทรดทองไม่สำเร็จ: ${e.message}`);
     } finally {
+      setInitialLoading(false);
       setRefreshing(false);
     }
   }, [toastr]);
@@ -434,7 +476,10 @@ export default function GoldPage() {
   }, [refresh]);
 
   useEffect(() => {
-    if (!goldSymbols.length) return;
+    if (!goldSymbols.length) {
+      setSelectedSymbol("");
+      return;
+    }
     setSelectedSymbol((prev) => (prev && goldSymbols.includes(prev) ? prev : goldSymbols[0]));
   }, [goldSymbols]);
 
@@ -772,7 +817,13 @@ export default function GoldPage() {
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {filteredGoldSymbols.length === 0 ? (
+                      {initialLoading ? (
+                        <TableRow>
+                          <TableCell colSpan={6} align="center" sx={{ py: 4 }}>
+                            <CircularProgress size={22} sx={{ color: "#fbbf24" }} />
+                          </TableCell>
+                        </TableRow>
+                      ) : filteredGoldSymbols.length === 0 ? (
                         <TableRow>
                           <TableCell colSpan={6}>
                             <Alert severity="warning">ยังไม่มี symbol ทอง กดตั้งค่าแล้วสแกนจาก MT5 ได้เลย</Alert>
@@ -1035,13 +1086,15 @@ export default function GoldPage() {
               width: { xs: "100vw", sm: 720, md: 800 },
               bgcolor: "#0d1321",
               color: "#e2e8f0",
-              borderLeft: "1px solid rgba(251,191,36,0.2)",
+              borderLeft: "1px solid rgba(251,191,36,0.18)",
               backgroundImage: "none",
             },
           },
         }}
       >
         <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
+          
+          {/* Header */}
           <Stack
             direction="row"
             spacing={1.5}
@@ -1059,10 +1112,10 @@ export default function GoldPage() {
               </Box>
               <Box>
                 <Typography variant="h6" sx={{ color: "#fff", fontWeight: 650, lineHeight: 1.15 }}>
-                  Gold Bot Settings
+                  ตั้งค่าบอททองคำ
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  สัญลักษณ์ทอง กลยุทธ์ ขนาดไม้ และ auto trade
+                  กลยุทธ์ ขนาดไม้ และการยืนยันออเดอร์
                 </Typography>
               </Box>
             </Stack>
@@ -1076,29 +1129,38 @@ export default function GoldPage() {
             </Button>
           </Stack>
 
+          {/* Body */}
           <Box sx={{ flex: 1, overflowY: "auto", px: 3, py: 3 }}>
             <Stack spacing={2.5}>
-              <Box sx={{ p: 2, bgcolor: "rgba(251,191,36,0.035)", border: "1px solid rgba(251,191,36,0.14)", borderRadius: 1 }}>
+              
+              {/* Gold Symbols */}
+              <Box sx={{ p: 2, bgcolor: "rgba(251,191,36,0.03)", border: "1px solid rgba(251,191,36,0.1)", borderRadius: 1 }}>
                 <Stack spacing={1.5}>
                   <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
                     <Filter size={18} color="#fbbf24" />
                     <Box>
                       <Typography variant="body2" sx={{ fontWeight: 650, color: "#fff" }}>
-                        คัดสัญลักษณ์ทอง
+                        สัญลักษณ์ทองคำที่ต้องการเทรด
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
-                        พิมพ์ symbol ที่โบรกเกอร์ใช้ หรือสแกนจาก MT5 แล้วตรวจสอบก่อนบันทึก
+                        แนะนำให้กด สแกน MT5 เพื่อดึงชื่อที่ถูกต้องจากโบรกเกอร์ (เช่น GOLD, XAUUSD)
                       </Typography>
                     </Box>
                   </Stack>
 
-                  <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ alignItems: "stretch" }}>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                     <TextField
                       fullWidth
                       size="small"
-                      value={goldInput}
-                      onChange={(e) => setGoldInput(e.target.value.toUpperCase())}
-                      placeholder="GOLD"
+                      value={newSymbolInput}
+                      onChange={(e) => setNewSymbolInput(e.target.value.toUpperCase())}
+                      placeholder="พิมพ์ค้นหาทองคำ เช่น GOLD, XAUUSD"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          addSymbol(newSymbolInput);
+                        }
+                      }}
                       sx={{
                         "& .MuiInputBase-root": {
                           height: 40,
@@ -1109,8 +1171,29 @@ export default function GoldPage() {
                           "&:hover fieldset": { borderColor: "rgba(255,255,255,0.2) !important" },
                           "&.Mui-focused fieldset": { borderColor: "#fbbf24 !important" },
                         },
+                        "& .MuiInputBase-input": { color: "#fff", fontSize: "0.9rem" },
                       }}
                     />
+                    <Button
+                      variant="contained"
+                      size="small"
+                      onClick={() => addSymbol(newSymbolInput)}
+                      sx={{
+                        height: 40,
+                        fontWeight: 600,
+                        px: 2.5,
+                        minWidth: "fit-content",
+                        bgcolor: "#fbbf24",
+                        color: "#111827",
+                        "&:hover": { bgcolor: "#f59e0b" },
+                        borderRadius: 1,
+                      }}
+                    >
+                      เพิ่ม
+                    </Button>
+                  </Stack>
+
+                  <Stack direction="row" spacing={1} sx={{ alignItems: "center", mt: 1 }}>
                     <Button
                       variant="outlined"
                       size="small"
@@ -1118,13 +1201,15 @@ export default function GoldPage() {
                       onClick={detectGoldSymbols}
                       sx={{
                         height: 40,
-                        borderColor: "rgba(251,191,36,0.28)",
+                        borderColor: "rgba(251,191,36,0.25)",
                         color: "#fbbf24",
-                        fontWeight: 650,
+                        fontWeight: 600,
                         px: 2,
-                        minWidth: 116,
-                        bgcolor: "rgba(251,191,36,0.05)",
-                        "&:hover": { borderColor: "#fbbf24", bgcolor: "rgba(251,191,36,0.09)" },
+                        minWidth: "fit-content",
+                        bgcolor: "rgba(251,191,36,0.04)",
+                        "&:hover": { borderColor: "#fbbf24", bgcolor: "rgba(251,191,36,0.08)" },
+                        "&.Mui-disabled": { color: "rgba(255,255,255,0.2)" },
+                        borderRadius: 1,
                       }}
                     >
                       {detecting ? <CircularProgress size={16} color="inherit" /> : "สแกน MT5"}
@@ -1136,44 +1221,65 @@ export default function GoldPage() {
                       onClick={validateGoldSymbols}
                       sx={{
                         height: 40,
-                        borderColor: "rgba(16,185,129,0.25)",
+                        borderColor: "rgba(52,211,153,0.25)",
                         color: "#34d399",
-                        fontWeight: 650,
+                        fontWeight: 600,
                         px: 2,
-                        minWidth: 116,
-                        bgcolor: "rgba(16,185,129,0.04)",
-                        "&:hover": { borderColor: "#10b981", bgcolor: "rgba(16,185,129,0.08)" },
+                        minWidth: "fit-content",
+                        bgcolor: "rgba(52,211,153,0.04)",
+                        "&:hover": { borderColor: "#10b981", bgcolor: "rgba(52,211,153,0.08)" },
+                        "&.Mui-disabled": { color: "rgba(255,255,255,0.2)" },
+                        borderRadius: 1,
                       }}
                     >
                       {validating ? <CircularProgress size={16} color="inherit" /> : "ตรวจสอบ"}
                     </Button>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      onClick={() => setGoldInput("")}
+                      disabled={!goldInput}
+                      sx={{
+                        height: 40,
+                        borderColor: "rgba(239,68,68,0.25)",
+                        color: "#f87171",
+                        fontWeight: 600,
+                        px: 2,
+                        minWidth: "fit-content",
+                        bgcolor: "rgba(239,68,68,0.04)",
+                        "&:hover": { borderColor: "#ef4444", bgcolor: "rgba(239,68,68,0.08)" },
+                        "&.Mui-disabled": { color: "rgba(255,255,255,0.1)", borderColor: "rgba(255,255,255,0.05)" },
+                        borderRadius: 1,
+                      }}
+                    >
+                      ล้างทั้งหมด
+                  </Button>
                   </Stack>
 
+                  {/* Chips */}
                   <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, pt: 0.5 }}>
-                    {goldInput.split(",").map((x) => x.trim().toUpperCase()).filter(Boolean).length === 0 ? (
+                    {currentList.length === 0 ? (
                       <Typography variant="caption" color="text.secondary" sx={{ fontStyle: "italic", px: 0.5 }}>
-                        ยังไม่มี symbol ทองในรายการ
+                        ยังไม่มีสัญลักษณ์ทองในรายการสแกน
                       </Typography>
                     ) : (
-                      goldInput.split(",").map((x) => x.trim().toUpperCase()).filter(Boolean).map((sym) => (
+                      currentList.map((sym) => (
                         <Chip
                           key={sym}
                           label={sym}
-                          onDelete={() => {
-                            const next = goldInput
-                              .split(",")
-                              .map((x) => x.trim().toUpperCase())
-                              .filter((x) => x && x !== sym);
-                            setGoldInput(next.join(", "));
-                          }}
+                          onDelete={() => removeSymbol(sym)}
                           size="small"
                           sx={{
                             bgcolor: "rgba(251,191,36,0.08)",
                             color: "#fff",
-                            border: "1px solid rgba(251,191,36,0.22)",
+                            border: "1px solid rgba(251,191,36,0.2)",
                             fontWeight: 700,
                             borderRadius: 1,
-                            "& .MuiChip-deleteIcon": { color: "rgba(255,255,255,0.45)", "&:hover": { color: "#ef4444" } },
+                            "& .MuiChip-deleteIcon": {
+                              color: "rgba(255,255,255,0.4)",
+                              transition: "color 0.2s",
+                              "&:hover": { color: "#ef4444" },
+                            },
                           }}
                         />
                       ))
@@ -1182,45 +1288,148 @@ export default function GoldPage() {
                 </Stack>
               </Box>
 
-              <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
-                <TextField
-                  select
-                  size="small"
-                  label="Timeframe"
-                  value={settings.default_timeframe || "M15"}
-                  onChange={(e) => patchSettings({ default_timeframe: e.target.value })}
-                  sx={{ bgcolor: "rgba(255,255,255,0.01)", "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.08)" } }}
+              {/* Timeframe + Interval */}
+              <Box
+                sx={{
+                  p: 2,
+                  bgcolor: "rgba(255,255,255,0.01)",
+                  border: "1px solid rgba(255,255,255,0.05)",
+                  borderRadius: 1,
+                }}
+              >
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: "#64748b",
+                    fontWeight: 700,
+                    letterSpacing: "0.06em",
+                    textTransform: "uppercase",
+                    display: "block",
+                    mb: 1.5,
+                  }}
                 >
-                  {["M1", "M5", "M15", "M30", "H1", "H4", "D1"].map((tf) => (
-                    <MenuItem key={tf} value={tf}>{tf}</MenuItem>
-                  ))}
-                </TextField>
-                <TextField
-                  select
-                  size="small"
-                  label="Strategy"
-                  value={settings.strategy || "ema_macd_rsi"}
-                  onChange={(e) => patchSettings({ strategy: e.target.value })}
-                  sx={{ bgcolor: "rgba(255,255,255,0.01)", "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.08)" } }}
-                >
-                  {(strategies.length ? strategies : [{ name: "ema_macd_rsi", description: "" }]).map((s) => (
-                    <MenuItem key={s.name} value={s.name}>{strategyLabel(s.name)}</MenuItem>
-                  ))}
-                </TextField>
+                  การตั้งค่าการสแกน
+                </Typography>
+                <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: "1fr 1fr" }}>
+                  <FormControl size="small" fullWidth>
+                    <InputLabel sx={{ color: "#94a3b8" }}>Timeframe</InputLabel>
+                    <Select
+                      label="Timeframe"
+                      value={settings.default_timeframe || "M15"}
+                      onChange={(e) => patchSettings({ default_timeframe: e.target.value })}
+                      sx={{
+                        bgcolor: "rgba(255,255,255,0.01)",
+                        "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.08)" },
+                        "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.2) !important" },
+                        "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: "#fbbf24 !important" },
+                        "& .MuiSelect-select": { color: "#fff" }
+                      }}
+                    >
+                      {[
+                        { v: "M1", l: "M1 — 1 นาที" },
+                        { v: "M5", l: "M5 — 5 นาที" },
+                        { v: "M15", l: "M15 — 15 นาที" },
+                        { v: "M30", l: "M30 — 30 นาที" },
+                        { v: "H1", l: "H1 — 1 ชั่วโมง" },
+                        { v: "H4", l: "H4 — 4 ชั่วโมง" },
+                        { v: "D1", l: "D1 — รายวัน" },
+                      ].map(({ v, l }) => (
+                        <MenuItem key={v} value={v}>
+                          {l}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+
+                  <FormControl size="small" fullWidth>
+                    <InputLabel sx={{ color: "#94a3b8" }}>สแกนซ้ำทุก</InputLabel>
+                    <Select
+                      label="สแกนซ้ำทุก"
+                      value={settings.auto_trade_interval || 60}
+                      onChange={(e) => patchSettings({ auto_trade_interval: Number(e.target.value) })}
+                      sx={{
+                        bgcolor: "rgba(255,255,255,0.01)",
+                        "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.08)" },
+                        "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.2) !important" },
+                        "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: "#fbbf24 !important" },
+                        "& .MuiSelect-select": { color: "#fff" }
+                      }}
+                    >
+                      {[
+                        { v: 10, l: "10 วินาที" },
+                        { v: 30, l: "30 วินาที" },
+                        { v: 60, l: "1 นาที" },
+                        { v: 300, l: "5 นาที" },
+                        { v: 600, l: "10 นาที" },
+                        { v: 900, l: "15 นาที" },
+                      ].map(({ v, l }) => (
+                        <MenuItem key={v} value={v}>
+                          {l}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Box>
               </Box>
 
-              <QuickNumberInput
-                label="สแกนทุก (วินาที)"
-                value={settings.auto_trade_interval || 60}
-                onChange={(val) => patchSettings({ auto_trade_interval: val })}
-                step={10}
-                min={10}
-                precision={0}
-              />
-
+              {/* Max slots + Magic */}
               <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
                 <QuickNumberInput
-                  label="Risk per trade (%)"
+                  label="ช่องเทรดทองสูงสุด"
+                  value={settings.max_gold_open_trades || 3}
+                  onChange={(val) => patchSettings({ max_gold_open_trades: val })}
+                  step={1}
+                  min={1}
+                  precision={0}
+                />
+                <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
+                  <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 600, px: 0.5 }}>
+                    Gold Magic Number
+                  </Typography>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                    <input
+                      type="text"
+                      value={settings.gold_magic ?? 556688}
+                      onChange={(e) => patchSettings({ gold_magic: parseInt(e.target.value, 10) || 0 })}
+                      style={{
+                        flexGrow: 1,
+                        height: 40,
+                        borderRadius: 8,
+                        border: "1px solid rgba(255,255,255,0.08)",
+                        background: "rgba(255,255,255,0.01)",
+                        color: "#fff",
+                        padding: "0 12px",
+                        fontFamily: "ui-monospace, monospace",
+                        fontWeight: 600,
+                        outline: "none",
+                        fontSize: "1rem",
+                      }}
+                    />
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      onClick={() => patchSettings({ gold_magic: Math.floor(100000 + Math.random() * 900000) })}
+                      sx={{
+                        height: 40,
+                        borderColor: "rgba(255,255,255,0.08)",
+                        color: "#94a3b8",
+                        fontWeight: 600,
+                        px: 1.5,
+                        minWidth: "fit-content",
+                        "&:hover": { borderColor: "rgba(255,255,255,0.2)", color: "#fff" },
+                        borderRadius: 1,
+                      }}
+                    >
+                      สุ่มเลข
+                    </Button>
+                  </Stack>
+                </Box>
+              </Box>
+
+              {/* Risk + RR */}
+              <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
+                <QuickNumberInput
+                  label="ความเสี่ยงต่อไม้ (% Risk)"
                   value={Math.round((settings.risk_per_trade || 0.01) * 10000) / 100}
                   onChange={(val) => patchSettings({ risk_per_trade: Math.max(0, val) / 100 })}
                   step={0.1}
@@ -1228,26 +1437,7 @@ export default function GoldPage() {
                   precision={2}
                 />
                 <QuickNumberInput
-                  label="Max lot"
-                  value={settings.max_lot || 1}
-                  onChange={(val) => patchSettings({ max_lot: Math.max(0.01, val) })}
-                  step={0.01}
-                  min={0.01}
-                  precision={2}
-                />
-              </Box>
-
-              <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
-                <QuickNumberInput
-                  label="จำนวนช่องทองสูงสุด"
-                  value={goldSlotLimit}
-                  onChange={(val) => patchSettings({ max_gold_open_trades: val })}
-                  step={1}
-                  min={1}
-                  precision={0}
-                />
-                <QuickNumberInput
-                  label="R:R เป้ากำไร"
+                  label="R:R เป้ากำไร (เท่า)"
                   value={settings.default_rr || 2}
                   onChange={(val) => patchSettings({ default_rr: val })}
                   step={0.1}
@@ -1256,54 +1446,71 @@ export default function GoldPage() {
                 />
               </Box>
 
-              <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
-                <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 600, px: 0.5 }}>
-                  Gold Magic Number
-                </Typography>
-                <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                  <input
-                    type="text"
-                    value={settings.gold_magic ?? 556688}
-                    onChange={(e) => patchSettings({ gold_magic: parseInt(e.target.value, 10) || 0 })}
-                    style={{
-                      flexGrow: 1,
-                      height: 40,
-                      borderRadius: 8,
-                      border: "1px solid rgba(255,255,255,0.08)",
-                      background: "rgba(255,255,255,0.01)",
-                      color: "#fff",
-                      padding: "0 12px",
-                      fontFamily: "ui-monospace, monospace",
-                      fontWeight: 700,
-                      outline: "none",
-                      fontSize: "1rem",
-                    }}
-                  />
-                  <Button
-                    variant="outlined"
+              {/* Strategy + Lot */}
+              <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
+                <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5, width: "100%" }}>
+                  <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 600, px: 0.5 }}>
+                    กลยุทธ์ที่ใช้
+                  </Typography>
+                  <Select
                     size="small"
-                    onClick={() => patchSettings({ gold_magic: Math.floor(100000 + Math.random() * 900000) })}
+                    fullWidth
+                    value={settings.strategy || "ema_macd_rsi"}
+                    onChange={(e) => patchSettings({ strategy: e.target.value })}
                     sx={{
                       height: 40,
-                      borderColor: "rgba(251,191,36,0.28)",
-                      color: "#fbbf24",
-                      fontWeight: 650,
-                      px: 1.5,
-                      minWidth: "fit-content",
-                      bgcolor: "rgba(251,191,36,0.04)",
-                      "&:hover": { borderColor: "#fbbf24", bgcolor: "rgba(251,191,36,0.08)" },
+                      borderRadius: 2,
+                      bgcolor: "rgba(255,255,255,0.01)",
+                      "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.08)" },
+                      "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.2) !important" },
+                      "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: "#fbbf24 !important" },
+                      "& .MuiSelect-select": { color: "#fff" }
                     }}
                   >
-                    สุ่มเลข
-                  </Button>
-                </Stack>
+                    {(strategies.length ? strategies : [{ name: "ema_macd_rsi", description: "" }]).map((s) => (
+                      <MenuItem key={s.name} value={s.name}>
+                        {strategyLabel(s.name)}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </Box>
+                <QuickNumberInput
+                  label="ขนาด Lot สูงสุด"
+                  value={settings.max_lot || 1}
+                  onChange={(val) => patchSettings({ max_lot: Math.max(0.01, val) })}
+                  step={0.01}
+                  min={0.01}
+                  precision={2}
+                />
               </Box>
 
-              <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", px: 1.25, py: 1, bgcolor: "rgba(255,255,255,0.01)", border: "1px solid rgba(255,255,255,0.03)", borderRadius: 2 }}>
-                <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                  {settings.gold_bot_enabled ? <ShieldCheck size={16} color="#10b981" /> : <ShieldAlert size={16} color="#ef4444" />}
+              {/* switches */}
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  px: 2,
+                  py: 1.5,
+                  bgcolor: "rgba(255,255,255,0.01)",
+                  border: "1px solid rgba(255,255,255,0.03)",
+                  borderRadius: 1,
+                }}
+              >
+                <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
+                  <Box
+                    sx={{
+                      color: settings.gold_bot_enabled ? "#10b981" : "#ef4444",
+                      display: "flex",
+                      p: 0.5,
+                      borderRadius: 1.5,
+                      bgcolor: settings.gold_bot_enabled ? "rgba(16,185,129,0.08)" : "rgba(239,68,68,0.08)",
+                    }}
+                  >
+                    {settings.gold_bot_enabled ? <ShieldCheck size={16} /> : <ShieldAlert size={16} />}
+                  </Box>
                   <Box>
-                    <Typography variant="body2" sx={{ fontWeight: 650 }}>
+                    <Typography variant="body2" sx={{ fontWeight: 650, color: "#fff" }}>
                       {settings.gold_bot_enabled ? "เปิดบอททองอัตโนมัติ" : "ปิดบอททองอัตโนมัติ"}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
@@ -1311,14 +1518,39 @@ export default function GoldPage() {
                     </Typography>
                   </Box>
                 </Stack>
-                <Switch checked={settings.gold_bot_enabled ?? true} onChange={(e) => patchSettings({ gold_bot_enabled: e.target.checked })} color="success" />
+                <Switch
+                  checked={settings.gold_bot_enabled ?? true}
+                  onChange={(e) => patchSettings({ gold_bot_enabled: e.target.checked })}
+                  color="success"
+                />
               </Box>
 
-              <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", px: 1.25, py: 1, bgcolor: "rgba(255,255,255,0.01)", border: "1px solid rgba(255,255,255,0.03)", borderRadius: 2 }}>
-                <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                  {settings.use_ai ? <ShieldCheck size={16} color="#10b981" /> : <ShieldAlert size={16} color="#94a3b8" />}
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  px: 2,
+                  py: 1.5,
+                  bgcolor: "rgba(255,255,255,0.01)",
+                  border: "1px solid rgba(255,255,255,0.03)",
+                  borderRadius: 1,
+                }}
+              >
+                <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
+                  <Box
+                    sx={{
+                      color: settings.use_ai ? "#3b82f6" : "#64748b",
+                      display: "flex",
+                      p: 0.5,
+                      borderRadius: 1.5,
+                      bgcolor: settings.use_ai ? "rgba(59,130,246,0.08)" : "rgba(255,255,255,0.03)",
+                    }}
+                  >
+                    {settings.use_ai ? <ShieldCheck size={16} /> : <ShieldAlert size={16} />}
+                  </Box>
                   <Box>
-                    <Typography variant="body2" sx={{ fontWeight: 650 }}>
+                    <Typography variant="body2" sx={{ fontWeight: 650, color: "#fff" }}>
                       {settings.use_ai ? "เปิดให้ AI ตรวจซ้ำ" : "ใช้กลยุทธ์อย่างเดียว"}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
@@ -1326,7 +1558,11 @@ export default function GoldPage() {
                     </Typography>
                   </Box>
                 </Stack>
-                <Switch checked={settings.use_ai ?? false} onChange={(e) => patchSettings({ use_ai: e.target.checked })} color="primary" />
+                <Switch
+                  checked={settings.use_ai ?? false}
+                  onChange={(e) => patchSettings({ use_ai: e.target.checked })}
+                  color="primary"
+                />
               </Box>
             </Stack>
           </Box>
@@ -1341,10 +1577,10 @@ export default function GoldPage() {
               sx={{
                 py: 1.5,
                 fontWeight: 650,
-                bgcolor: "#f59e0b",
+                bgcolor: "#fbbf24",
                 color: "#111827",
-                "&:hover": { bgcolor: "#d97706" },
-                boxShadow: "0 4px 12px rgba(245,158,11,0.2)",
+                "&:hover": { bgcolor: "#f59e0b" },
+                boxShadow: "0 4px 12px rgba(251,191,36,0.2)",
                 borderRadius: 2,
               }}
             >

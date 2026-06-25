@@ -57,7 +57,7 @@ type StockBotSettingsProps = {
   onSave: () => void;
   stockInput: string;
   setStockInput: (val: string) => void;
-  onDetectStockSymbols: () => void;
+  onDetectStockSymbols: (filterType: string) => void;
   detectingStockSymbols: boolean;
   allStockSymbols: string[];
   onValidateSymbols: () => void;
@@ -83,6 +83,8 @@ function QuickNumberInput({
   precision?: number;
   helperText?: string;
 }) {
+  const valNum = value ?? min ?? 0;
+
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5, width: "100%" }}>
       <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 600, px: 0.5 }}>
@@ -92,6 +94,7 @@ function QuickNumberInput({
         sx={{
           display: "flex",
           alignItems: "center",
+          height: 40,
           bgcolor: "rgba(255,255,255,0.01)",
           border: "1px solid rgba(255,255,255,0.08)",
           borderRadius: 2,
@@ -104,10 +107,10 @@ function QuickNumberInput({
         }}
       >
         <Button
-          onClick={() => onChange(Math.max(min, Number((value - step).toFixed(precision))))}
-          disabled={value <= min}
+          onClick={() => onChange(Math.max(min, Number((valNum - step).toFixed(precision))))}
+          disabled={valNum <= min}
           sx={{
-            minWidth: 40, width: 40, height: 40, borderRadius: 0,
+            minWidth: 40, width: 40, height: "100%", borderRadius: 0,
             color: "#94a3b8", bgcolor: "transparent", fontSize: "1.2rem", fontWeight: 500,
             borderRight: "1px solid rgba(255,255,255,0.05)",
             "&:hover": { bgcolor: "rgba(255,255,255,0.03)", color: "#fff" },
@@ -118,23 +121,23 @@ function QuickNumberInput({
         </Button>
         <input
           type="text"
-          value={value}
+          value={valNum}
           onChange={(e) => {
             const val = parseFloat(e.target.value);
             if (!isNaN(val)) onChange(Math.max(min, Math.min(max, Number(val.toFixed(precision)))));
             else if (e.target.value === "") onChange(min);
           }}
           style={{
-            flexGrow: 1, width: "100%", border: "none", background: "transparent",
+            flexGrow: 1, width: "100%", height: "100%", border: "none", background: "transparent",
             color: "#fff", textAlign: "center", fontFamily: "ui-monospace, monospace",
             fontWeight: 600, fontSize: "1rem", outline: "none",
           }}
         />
         <Button
-          onClick={() => onChange(Math.min(max, Number((value + step).toFixed(precision))))}
-          disabled={value >= max}
+          onClick={() => onChange(Math.min(max, Number((valNum + step).toFixed(precision))))}
+          disabled={valNum >= max}
           sx={{
-            minWidth: 40, width: 40, height: 40, borderRadius: 0,
+            minWidth: 40, width: 40, height: "100%", borderRadius: 0,
             color: "#94a3b8", bgcolor: "transparent", fontSize: "1.2rem", fontWeight: 500,
             borderLeft: "1px solid rgba(255,255,255,0.05)",
             "&:hover": { bgcolor: "rgba(255,255,255,0.03)", color: "#fff" },
@@ -160,6 +163,7 @@ export default function StockBotSettings({
   onValidateSymbols, validatingSymbols,
 }: StockBotSettingsProps) {
   const [newSymbolInput, setNewSymbolInput] = useState("");
+  const [stockFilterType, setStockFilterType] = useState("liquid_100");
 
   // Keep original casing — broker symbols are case-sensitive (e.g. "Apple").
   const currentList = stockInput
@@ -292,9 +296,34 @@ export default function StockBotSettings({
                   >
                     เพิ่ม
                   </Button>
+                </Stack>
+
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center", mt: 1 }}>
+                  <FormControl size="small" sx={{ minWidth: 180, flexGrow: 1 }}>
+                    <InputLabel id="stock-filter-type-label">ประเภทการสแกน</InputLabel>
+                    <Select
+                      labelId="stock-filter-type-label"
+                      label="ประเภทการสแกน"
+                      value={stockFilterType}
+                      onChange={(e) => setStockFilterType(e.target.value)}
+                      sx={{
+                        height: 40,
+                        bgcolor: "rgba(255,255,255,0.01)",
+                        color: "#fff",
+                        "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.08)" },
+                        "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.2) !important" },
+                        "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: "#3b82f6 !important" }
+                      }}
+                    >
+                      <MenuItem value="liquid_100">Top 100 หุ้นสภาพคล่องสูง</MenuItem>
+                      <MenuItem value="liquid_30">Top 30 หุ้นพิมพ์นิยม</MenuItem>
+                      <MenuItem value="all">ทั้งหมด</MenuItem>
+                    </Select>
+                  </FormControl>
+
                   <Button
                     variant="outlined" size="small"
-                    onClick={onDetectStockSymbols} disabled={detectingStockSymbols}
+                    onClick={() => onDetectStockSymbols(stockFilterType)} disabled={detectingStockSymbols}
                     sx={{
                       height: 40, borderColor: "rgba(59,130,246,0.25)", color: "#60a5fa",
                       fontWeight: 600, px: 2, minWidth: "fit-content",
@@ -317,6 +346,20 @@ export default function StockBotSettings({
                     }}
                   >
                     {validatingSymbols ? <CircularProgress size={16} color="inherit" /> : "กรองหุ้น"}
+                  </Button>
+                  <Button
+                    variant="outlined" size="small"
+                    onClick={() => setStockInput("")}
+                    disabled={!stockInput}
+                    sx={{
+                      height: 40, borderColor: "rgba(239,68,68,0.25)", color: "#f87171",
+                      fontWeight: 600, px: 2, minWidth: "fit-content",
+                      bgcolor: "rgba(239,68,68,0.04)",
+                      "&:hover": { borderColor: "#ef4444", bgcolor: "rgba(239,68,68,0.08)" },
+                      "&.Mui-disabled": { color: "rgba(255,255,255,0.1)", borderColor: "rgba(255,255,255,0.05)" }, borderRadius: 1,
+                    }}
+                  >
+                    ล้างทั้งหมด
                   </Button>
                 </Stack>
 
@@ -370,9 +413,9 @@ export default function StockBotSettings({
                     {[
                       { v: "M15", l: "M15 — 15 นาที" },
                       { v: "M30", l: "M30 — 30 นาที" },
-                      { v: "H1",  l: "H1 — 1 ชั่วโมง" },
-                      { v: "H4",  l: "H4 — 4 ชั่วโมง" },
-                      { v: "D1",  l: "D1 — รายวัน" },
+                      { v: "H1", l: "H1 — 1 ชั่วโมง" },
+                      { v: "H4", l: "H4 — 4 ชั่วโมง" },
+                      { v: "D1", l: "D1 — รายวัน" },
                     ].map(({ v, l }) => (
                       <MenuItem key={v} value={v}>{l}</MenuItem>
                     ))}
@@ -388,9 +431,9 @@ export default function StockBotSettings({
                     sx={{ bgcolor: "rgba(255,255,255,0.01)", "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.08)" } }}
                   >
                     {[
-                      { v: 300,  l: "5 นาที" },
-                      { v: 600,  l: "10 นาที" },
-                      { v: 900,  l: "15 นาที" },
+                      { v: 300, l: "5 นาที" },
+                      { v: 600, l: "10 นาที" },
+                      { v: 900, l: "15 นาที" },
                       { v: 1800, l: "30 นาที" },
                       { v: 3600, l: "1 ชั่วโมง" },
                     ].map(({ v, l }) => (
