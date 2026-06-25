@@ -7,14 +7,111 @@ The flow lives here:
 from __future__ import annotations
 
 import logging
+import threading
+import time
 import uuid
 from typing import Dict, List, Optional
 
 from . import advisor, indicators, mt5_client, strategy
 from .config import settings
+from .market_groups import market_group
 from .models import Action, PendingTrade, Recommendation
 
 log = logging.getLogger("metabot.trader")
+
+_SLOT_RESERVATION_TTL_SECONDS = 30
+_slot_lock = threading.Lock()
+_slot_reservations: dict[str, float] = {}
+
+
+def magic_for_symbol(symbol: str) -> int:
+    group = market_group(symbol)
+    if group == "gold":  return settings.gold_magic
+    if group == "stock": return settings.stock_magic
+    return settings.magic
+
+
+def max_slots_for_symbol(symbol: str) -> int:
+    group = market_group(symbol)
+    if group == "crypto": return max(1, settings.max_crypto_open_trades or settings.max_open_trades)
+    if group == "gold":   return max(1, settings.max_gold_open_trades   or settings.max_open_trades)
+    if group == "stock":  return max(1, settings.max_stock_open_trades  or settings.max_open_trades)
+    return max(1, settings.max_open_trades)
+
+
+def _same_slot_group(position_symbol: str, target_symbol: str) -> bool:
+    return market_group(position_symbol) == market_group(target_symbol)
+
+
+def _prune_slot_reservations(now: float | None = None) -> None:
+    now = now or time.monotonic()
+    expired = [sym for sym, expires_at in _slot_reservations.items() if expires_at <= now]
+    for sym in expired:
+        _slot_reservations.pop(sym, None)
+
+
+def _bot_magic_numbers() -> set[int]:
+    """Return the set of magic numbers the bot currently uses."""
+    return {settings.magic, settings.gold_magic, settings.stock_magic}
+
+
+def _is_bot_position(pos: dict) -> bool:
+    """True only if this position was opened by the current bot instance."""
+    return pos.get("magic") in _bot_magic_numbers()
+
+
+def _can_open_new_trade_unlocked(symbol: str) -> tuple[bool, str]:
+    try:
+        open_pos = mt5_client.positions()
+    except Exception as e:
+        log.warning("Could not fetch open positions to check slots: %s", e)
+        open_pos = []
+
+    # Only consider positions that belong to this bot (matching magic number).
+    # Positions with a different or old magic are ignored so a magic-number
+    # change doesn't permanently lock the bot out of a symbol.
+    bot_pos = [p for p in open_pos if _is_bot_position(p)]
+
+    symbol_upper = symbol.upper()
+    reserved_symbols = set(_slot_reservations.keys())
+    if any(p["symbol"].upper() == symbol_upper for p in bot_pos) or symbol_upper in reserved_symbols:
+        return False, f"Already holding or opening an active position on {symbol_upper}."
+
+    group_positions = [p for p in bot_pos if _same_slot_group(p["symbol"], symbol_upper)]
+    reserved_group_count = sum(1 for s in reserved_symbols if _same_slot_group(s, symbol_upper))
+    max_slots = max_slots_for_symbol(symbol_upper)
+    used_slots = len(group_positions) + reserved_group_count
+    if used_slots >= max_slots:
+        group = market_group(symbol_upper)
+        return False, f"Max {group} open trades limit reached ({used_slots}/{max_slots})."
+
+    return True, ""
+
+
+def can_open_new_trade(symbol: str) -> tuple[bool, str]:
+    with _slot_lock:
+        _prune_slot_reservations()
+        return _can_open_new_trade_unlocked(symbol)
+
+
+def reserve_trade_slot(symbol: str) -> tuple[bool, str]:
+    symbol_upper = symbol.upper()
+    with _slot_lock:
+        _prune_slot_reservations()
+        ok, reason = _can_open_new_trade_unlocked(symbol_upper)
+        if not ok:
+            return False, reason
+        _slot_reservations[symbol_upper] = time.monotonic() + _SLOT_RESERVATION_TTL_SECONDS
+        return True, ""
+
+
+def release_trade_slot(symbol: str, keep_after_success: bool = False) -> None:
+    symbol_upper = symbol.upper()
+    with _slot_lock:
+        if keep_after_success:
+            _slot_reservations[symbol_upper] = time.monotonic() + _SLOT_RESERVATION_TTL_SECONDS
+        else:
+            _slot_reservations.pop(symbol_upper, None)
 
 
 class TradeManager:
@@ -57,21 +154,13 @@ class TradeManager:
         use_ai: Optional[bool] = None,
     ) -> tuple[Recommendation, Optional[PendingTrade]]:
         """Analyze and, if actionable, create a pending trade (or auto-execute)."""
-        # Check active positions to implement Freqtrade slot checks
-        try:
-            open_pos = mt5_client.positions()
-            # Only count positions opened by this bot's magic number
-            bot_positions = [p for p in open_pos if p.get("magic") == settings.magic]
-        except Exception as e:
-            log.warning("Could not fetch open positions to check slots: %s", e)
-            bot_positions = []
-
         # 1. Do not enter another position on the same symbol (no double entry)
-        if any(p["symbol"].upper() == symbol.upper() for p in bot_positions):
-            log.info("Symbol %s already has an active open position managed by the bot. Skipping new trade signal.", symbol)
+        ok, slot_reason = can_open_new_trade(symbol)
+        if not ok:
+            log.info("%s Skipping new trade signal for %s.", slot_reason, symbol)
             rec = await self.analyze(symbol, timeframe, bars, strategy_name, use_ai)
             rec.action = Action.HOLD
-            rec.summary = f"Already holding an active position on {symbol}."
+            rec.summary = slot_reason
             return rec, None
 
         # Check active pending trades for this symbol (prevent duplicate alerts/signals in pending state)
@@ -83,21 +172,18 @@ class TradeManager:
             rec.summary = f"Already have a pending trade for {symbol}."
             return rec, None
 
-        # 2. Prevent entry if maximum open trade slots are filled
-        if len(bot_positions) >= settings.max_open_trades:
-            log.info("Max open trades limit reached (%s/%s). Skipping new entry for %s.",
-                     len(bot_positions), settings.max_open_trades, symbol)
-            rec = await self.analyze(symbol, timeframe, bars, strategy_name, use_ai)
-            rec.action = Action.HOLD
-            rec.summary = f"Max open trades limit reached ({len(bot_positions)}/{settings.max_open_trades})."
-            return rec, None
-
         rec = await self.analyze(symbol, timeframe, bars, strategy_name, use_ai)
         if rec.action == Action.HOLD:
             return rec, None
 
+        ok, slot_reason = reserve_trade_slot(symbol)
+        if not ok:
+            rec.action = Action.HOLD
+            rec.summary = slot_reason
+            return rec, None
+
         pending = self.stage(rec)
-        self.confirm(pending.id)
+        self.confirm(pending.id, slot_reserved=True)
         return rec, self._pending.get(pending.id)
 
     # ------------------------------------------------------------------ #
@@ -113,7 +199,7 @@ class TradeManager:
 
         # Freqtrade-style equal slots division sizing
         if settings.position_sizing_mode == "equal_slots":
-            max_slots = max(1, settings.max_open_trades)
+            max_slots = max_slots_for_symbol(symbol)
             if settings.stake_amount > 0:
                 stake_amount = settings.stake_amount
             else:
@@ -167,7 +253,7 @@ class TradeManager:
             p.status = "cancelled"
         return p
 
-    def confirm(self, pending_id: str, lot: Optional[float] = None) -> PendingTrade:
+    def confirm(self, pending_id: str, lot: Optional[float] = None, slot_reserved: bool = False) -> PendingTrade:
         p = self._pending.get(pending_id)
         if p is None:
             raise KeyError(f"Unknown pending trade {pending_id}")
@@ -176,6 +262,13 @@ class TradeManager:
 
         rec = p.recommendation
         use_lot = lot or p.lot
+        if not slot_reserved:
+            ok, reason = reserve_trade_slot(rec.symbol)
+            if not ok:
+                p.result = {"ok": False, "error": reason}
+                p.status = "failed"
+                return p
+
         try:
             result = mt5_client.order_send(
                 symbol=rec.symbol,
@@ -184,10 +277,13 @@ class TradeManager:
                 sl=rec.stop_loss,
                 tp=rec.take_profit,
                 comment=f"metabot-{rec.action.value}",
+                magic=magic_for_symbol(rec.symbol),
             )
             p.result = result
             p.status = "executed" if result.get("ok") else "failed"
+            release_trade_slot(rec.symbol, keep_after_success=result.get("ok", False))
         except Exception as e:  # noqa: BLE001
+            release_trade_slot(rec.symbol)
             p.result = {"ok": False, "error": str(e)}
             p.status = "failed"
         return p

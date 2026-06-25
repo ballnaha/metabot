@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useState, useRef } from "react";
 import { useToastr } from "../components/Toastr";
 import CryptoBotSettings from "./components/CryptoBotSettings";
-import CryptoHeader from "./components/CryptoHeader";
+import Sidebar, { SIDEBAR_W } from "../components/Sidebar";
+import TopBar from "../components/TopBar";
+import PnLChart from "./components/PnLChart";
+import BotLog from "./components/BotLog";
 import {
   Alert,
   Autocomplete,
@@ -18,6 +21,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  IconButton,
   Stack,
   Table,
   TableBody,
@@ -40,6 +44,9 @@ import {
   History,
   Sliders,
   RefreshCw,
+  ScrollText,
+  Search,
+  X,
   Zap,
 } from "lucide-react";
 
@@ -118,21 +125,40 @@ const fmt = (n: number | null | undefined, d = 2) =>
 
 const MONO = { fontFamily: "ui-monospace, monospace", fontVariantNumeric: "tabular-nums" };
 
-const KPI_LABEL_SX = {
-  display: "block",
-  fontSize: "1rem",
-  fontWeight: 500,
-  letterSpacing: 0,
-  lineHeight: 1.45,
-};
-
-const KPI_VALUE_SX = {
-  fontSize: "1.8rem",
-  fontWeight: 650,
-  lineHeight: 1.2,
-};
-
-const KPI_UNIT_STYLE = { fontSize: 15, fontWeight: 500, color: "#64748b" };
+function StatCard({
+  icon,
+  label,
+  value,
+  tone = "#e2e8f0",
+  sub,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: React.ReactNode;
+  tone?: string;
+  sub?: React.ReactNode;
+}) {
+  return (
+    <Card sx={{ height: "100%" }}>
+      <CardContent sx={{ p: 2, "&:last-child": { pb: 2 } }}>
+        <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", gap: 1 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
+            {label}
+          </Typography>
+          <Box sx={{ color: tone, display: "flex" }}>{icon}</Box>
+        </Stack>
+        <Typography sx={{ ...MONO, color: tone, fontSize: "1.45rem", fontWeight: 800, mt: 1, lineHeight: 1.15 }}>
+          {value}
+        </Typography>
+        {sub && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.75 }}>
+            {sub}
+          </Typography>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 const actionColor = (a?: string): "success" | "error" | "default" =>
   a === "BUY" ? "success" : a === "SELL" ? "error" : "default";
@@ -162,13 +188,23 @@ function SectionTitle({ icon, children }: { icon: React.ReactNode; children: Rea
   );
 }
 
+const CRYPTO_BASES = [
+  "1INCH", "AAVE", "ADA", "AGIX", "ALGO", "APE", "APT", "ARB", "ATOM", "AVAX", "AXS",
+  "BAT", "BCH", "BNB", "BONK", "BTC", "BTG", "CHZ", "COMP", "CRV", "DASH", "DOGE",
+  "DOT", "DYDX", "EGLD", "ENJ", "ETC", "ETH", "FET", "FIL", "FLOKI", "FLOW", "GALA",
+  "GRT", "HBAR", "ICP", "IMX", "INJ", "JUP", "LDO", "LINK", "LRC", "LTC", "LUNA",
+  "MANA", "MATIC", "MKR", "NEAR", "OCEAN", "OP", "PEPE", "RNDR", "SAND", "SEI",
+  "SHIB", "SNX", "SOL", "STORJ", "STX", "SUI", "SUSHI", "THETA", "TIA", "UMA",
+  "UNI", "WIF", "XLM", "XRP", "XTZ", "ZEC", "ZRX",
+].sort((a, b) => b.length - a.length);
 
-
+const CRYPTO_QUOTES = ["USD", "USDT", "BTC", "ETH", "EUR"];
 
 const isCryptoSymbol = (sym: string) => {
-  const s = sym.toUpperCase();
-  return /BTC|ETH|SOL|XRP|LTC|DOGE|ADA|DOT|LINK|AVAX|SHIB|UNI|LUNA|ALGO|BCH|XLM|ATOM|ICP|FIL|HBAR|XTZ|GRT|AAVE|MKR|THETA|FTM|BNB|DYDX|OP|ARB|NEAR|TIA|SUI|SEI|APT|RNDR|INJ|FET|AGIX|OCEAN|JUP|WIF|BONK|FLOKI|PEPE/i.test(s)
-    || ((s.endsWith("USD") || s.endsWith("USDT")) && s.length >= 6 && !/^(EUR|GBP|AUD|NZD|CAD|CHF|HKD|SGD|ZAR|MXN|NOK|SEK|DKK|TRY|CNH|RUB|XAU|XAG|XPD|XPT)/.test(s));
+  const s = sym.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (/GOLD|SILVER|XAU|XAG|PLATINUM|PALLADIUM/.test(s)) return false;
+  if (/^(EUR|GBP|AUD|NZD|CAD|CHF|HKD|SGD|ZAR|MXN|NOK|SEK|DKK|TRY|CNH|RUB)[A-Z]{3}$/.test(s)) return false;
+  return CRYPTO_BASES.some((base) => s === base || CRYPTO_QUOTES.some((quote) => s === `${base}${quote}`));
 };
 
 const isMetalSymbol = (sym: string) => {
@@ -189,6 +225,7 @@ export default function CryptoPage() {
   const [cryptoSymbol, setCryptoSymbol] = useState("");
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [priceSearch, setPriceSearch] = useState("");
   const [ticks, setTicks] = useState<Record<string, { bid: number; ask: number; last: number; time: number; error?: string }>>({});
   const [tickDirections, setTickDirections] = useState<Record<string, { bid: "up" | "down" | "flat"; ask: "up" | "down" | "flat"; lastUpdated: number }>>({});
   const [closingTicket, setClosingTicket] = useState<number | null>(null);
@@ -196,6 +233,7 @@ export default function CryptoPage() {
   const [settingsData, setSettingsData] = useState<any>(null);
   const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [logOpen, setLogOpen] = useState(false);
 
   // Coin screener scores
   const [scanResults, setScanResults] = useState<ScanResult[]>([]);
@@ -209,6 +247,7 @@ export default function CryptoPage() {
   const [settingsForm, setSettingsForm] = useState<any>({
     position_sizing_mode: "risk_pct",
     max_open_trades: 5,
+    max_crypto_open_trades: 5,
     stake_amount: 0.0,
     atr_sl_mult: 1.5,
     default_rr: 2.0,
@@ -216,12 +255,14 @@ export default function CryptoPage() {
     use_ai: false,
     auto_trade_interval: 60,
     strategy: "ema_macd_rsi",
-    magic: 556677
+    magic: 556677,
+    telegram_enabled: true,
   });
   const [savingSettings, setSavingSettings] = useState(false);
   const [cryptoInput, setCryptoInput] = useState("");
-  const [nonCryptoInput, setNonCryptoInput] = useState("");
+  const [preservedNonCryptoSymbols, setPreservedNonCryptoSymbols] = useState<string[]>([]);
   const [detectingCryptoSymbols, setDetectingCryptoSymbols] = useState(false);
+  const [validatingSymbols, setValidatingSymbols] = useState(false);
 
   // Realized Transaction History
   const [tradeHistory, setTradeHistory] = useState<HistoryDeal[]>([]);
@@ -237,7 +278,7 @@ export default function CryptoPage() {
   const fetchHistory = useCallback(async () => {
     try {
       setHistoryLoading(true);
-      const data = await api("history?days=30");
+      const data = await api("history?days=7");
       setTradeHistory(data.history ?? []);
     } catch (e: any) {
       console.warn("โหลดประวัติรายการเทรดไม่สำเร็จ:", e.message);
@@ -279,10 +320,11 @@ export default function CryptoPage() {
         setSettingsData(data);
         const allSyms = data.symbols ? data.symbols.split(",").map((s: string) => s.trim().toUpperCase()).filter(Boolean) : [];
         setCryptoInput(allSyms.filter(isCryptoSymbol).join(", "));
-        setNonCryptoInput(allSyms.filter((s: string) => !isCryptoSymbol(s)).join(", "));
+        setPreservedNonCryptoSymbols(allSyms.filter(isMetalSymbol));
         setSettingsForm({
           position_sizing_mode: data.position_sizing_mode || "risk_pct",
           max_open_trades: data.max_open_trades ?? 5,
+          max_crypto_open_trades: data.max_crypto_open_trades ?? data.max_open_trades ?? 5,
           stake_amount: data.stake_amount ?? 0.0,
           atr_sl_mult: data.atr_sl_mult ?? 1.5,
           default_rr: data.default_rr ?? 2.0,
@@ -290,7 +332,8 @@ export default function CryptoPage() {
           use_ai: data.use_ai ?? false,
           auto_trade_interval: data.auto_trade_interval ?? 60,
           strategy: data.strategy || "ema_macd_rsi",
-          magic: data.magic ?? 556677
+          magic: data.magic ?? 556677,
+          telegram_enabled: data.telegram_enabled ?? true,
         });
       })
       .catch(() => {});
@@ -320,12 +363,28 @@ export default function CryptoPage() {
     return () => clearInterval(id);
   }, [refresh, fetchHistory, toastr]);
 
-  const cryptoSymbols = symbols.filter(isCryptoSymbol);
+  // Crypto page is intentionally scoped to crypto symbols only.
+  const allBotSymbols = new Set(
+    cryptoInput.split(",")
+      .map((s) => s.trim().toUpperCase())
+      .filter(Boolean)
+      .filter(isCryptoSymbol)
+  );
+  const isTrackedSymbol = (sym: string) => allBotSymbols.has(sym.toUpperCase());
 
-  // Reset pagination page if symbols list updates
+  // Use configured symbol list when available, fall back to pattern detection initially.
+  const cryptoSymbols = allBotSymbols.size > 0
+    ? symbols.filter((s) => allBotSymbols.has(s.toUpperCase()))
+    : symbols.filter(isCryptoSymbol);
+
+  const filteredCryptoSymbols = priceSearch.trim()
+    ? cryptoSymbols.filter((s) => s.toLowerCase().includes(priceSearch.trim().toLowerCase()))
+    : cryptoSymbols;
+
+  // Reset pagination page if symbols list or search changes
   useEffect(() => {
     setPage(0);
-  }, [cryptoSymbols.length]);
+  }, [cryptoSymbols.length, priceSearch]);
 
   // Poll ticks for all crypto symbols in bulk every 3 seconds
   useEffect(() => {
@@ -436,7 +495,7 @@ export default function CryptoPage() {
     return () => clearTimeout(timer);
   }, [tickDirections]);
   // Filter active positions managed by this bot
-  const cryptoPositions = positions.filter((p) => isCryptoSymbol(p.symbol) && p.magic === settingsForm.magic);
+  const cryptoPositions = positions.filter((p) => isTrackedSymbol(p.symbol) && isCryptoSymbol(p.symbol));
   const ccy = account?.currency ?? "";
   const openPl = cryptoPositions.reduce((acc, curr) => acc + curr.profit, 0);
   const totalOpenPlPct = account && account.balance > 0 ? (openPl / account.balance) * 100 : 0;
@@ -445,7 +504,7 @@ export default function CryptoPage() {
     : "";
 
   // Filter transaction history log for bot's crypto deals
-  const cryptoHistory = tradeHistory.filter((d) => isCryptoSymbol(d.symbol) && d.magic === settingsForm.magic);
+  const cryptoHistory = tradeHistory.filter((d) => isTrackedSymbol(d.symbol) && d.magic === settingsForm.magic);
   const scanBySymbol = new Map(scanResults.map((r) => [r.symbol, r]));
   const historyPageStart = historyPage * historyRowsPerPage;
   const paginatedCryptoHistory = cryptoHistory.slice(historyPageStart, historyPageStart + historyRowsPerPage);
@@ -535,6 +594,17 @@ export default function CryptoPage() {
   async function confirmTrade() {
     if (!tradeConfirm) return;
     const rec = tradeConfirm;
+    const maxCryptoSlots = settingsForm.max_crypto_open_trades ?? settingsForm.max_open_trades ?? 1;
+    if (cryptoPositions.some((p) => p.symbol.toUpperCase() === rec.symbol.toUpperCase())) {
+      toastr.warning(`มี position ${rec.symbol} เปิดอยู่แล้ว`);
+      setTradeConfirm(null);
+      return;
+    }
+    if (cryptoPositions.length >= maxCryptoSlots) {
+      toastr.warning(`ช่องคริปโตเต็มแล้ว (${cryptoPositions.length}/${maxCryptoSlots})`);
+      setTradeConfirm(null);
+      return;
+    }
     setTradeExecuting(true);
     try {
       const lot = rec.suggested_lot ?? 0.01;
@@ -605,14 +675,53 @@ export default function CryptoPage() {
     }
   };
 
+  const validateSymbols = async () => {
+    setValidatingSymbols(true);
+    try {
+      const allSyms = [
+        ...cryptoInput.split(","),
+      ].map((s) => s.trim().toUpperCase()).filter(Boolean).filter(isCryptoSymbol);
+
+      if (allSyms.length === 0) {
+        toastr.warning("ไม่มี symbol ในรายการ");
+        return;
+      }
+
+      const data = await api("symbols/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbols: allSyms }),
+      });
+
+      const validSet = new Set<string>(data.valid ?? []);
+      const removed: string[] = data.invalid ?? [];
+
+      setCryptoInput(
+        cryptoInput.split(",").map((s) => s.trim().toUpperCase()).filter((s) => s && validSet.has(s)).join(", ")
+      );
+
+      if (removed.length > 0) {
+        toastr.success(`นำออก ${removed.length} รายการที่ไม่มีใน MT5: ${removed.join(", ")}`);
+      } else {
+        toastr.success(`ทุก symbol (${validSet.size} รายการ) ใช้งานได้ใน MT5`);
+      }
+    } catch (e: any) {
+      toastr.error(`ตรวจสอบ symbol ไม่สำเร็จ: ${e.message}`);
+    } finally {
+      setValidatingSymbols(false);
+    }
+  };
+
   // Save Settings directly on the page
   const handleSaveSettings = async () => {
     setSavingSettings(true);
     try {
-      const combined = [
-        ...cryptoInput.split(",").map(x => x.trim().toUpperCase()),
-        ...nonCryptoInput.split(",").map(x => x.trim().toUpperCase())
-      ].filter(Boolean).join(",");
+      const nextCryptoSymbols = cryptoInput
+        .split(",")
+        .map(x => x.trim().toUpperCase())
+        .filter(Boolean)
+        .filter(isCryptoSymbol);
+      const combined = Array.from(new Set([...preservedNonCryptoSymbols, ...nextCryptoSymbols])).join(",");
 
       const updatedForm = {
         ...settingsForm,
@@ -636,6 +745,7 @@ export default function CryptoPage() {
         setSettingsData(data);
   
         const nextSyms = data.symbols ? data.symbols.split(",").map((s: string) => s.trim().toUpperCase()).filter(Boolean) : [];
+        setPreservedNonCryptoSymbols(nextSyms.filter(isMetalSymbol));
         setSymbols(nextSyms);
         const nextCryptos = nextSyms.filter(isCryptoSymbol);
         if (!nextCryptos.includes(cryptoSymbol)) {
@@ -714,107 +824,78 @@ export default function CryptoPage() {
 
   return (
     <Box sx={{ display: "flex", minHeight: "100vh", bgcolor: "#090d16", color: "#e2e8f0" }}>
-      {/* Main Content Area */}
-      <Box sx={{ flexGrow: 1, width: "100%", overflowY: "auto", display: "flex", flexDirection: "column" }}>
+      <Sidebar
+        connected={connected}
+        equity={account?.equity}
+        currency={ccy}
+        onOpenLog={() => setLogOpen(true)}
+        onSync={() => { refresh(); fetchHistory(); }}
+      />
+
+      {/* Main Content — offset by sidebar width */}
+      <Box sx={{ flexGrow: 1, ml: `${SIDEBAR_W}px`, display: "flex", flexDirection: "column" }}>
+        <TopBar
+          pageTitle="Crypto Terminal"
+          pageIcon={<Coins size={15} />}
+          connected={connected}
+          accountLogin={account?.login}
+          balance={account?.balance}
+          equity={account?.equity}
+          currency={ccy}
+          openPl={openPl}
+          botEnabled={settingsForm.bot_enabled ?? false}
+          strategy={settingsForm.strategy ?? ""}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
         <Container maxWidth={false} sx={{ width: "100%", maxWidth: "none", px: { xs: 2, md: 3 }, py: 3 }}>
-          <CryptoHeader
-            accountLogin={account?.login}
-            connected={connected}
-            currency={ccy}
-            equity={account?.equity}
-            onOpenBotSettings={() => setSettingsOpen(true)}
-            onSync={() => {
-              refresh();
-              fetchHistory();
-            }}
-          />
 
           {/* Account Status Card Row */}
-          <Box sx={{ display: "grid", gap: 3, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr", md: "1fr 1fr 1fr 1fr" }, mb: 4 }}>
-            {/* KPI: Available Assets */}
-            <Card sx={{ bgcolor: "#0d1321", border: "1px solid rgba(255, 255, 255, 0.03)" }}>
-              <CardContent sx={{ display: "flex", alignItems: "center", gap: 2.25, py: 2.5 }}>
-                <Box sx={{ p: 1.65, borderRadius: 2.5, bgcolor: "rgba(59, 130, 246, 0.08)", display: "flex", color: "#3b82f6" }}>
-                  <Coins size={24} />
-                </Box>
+          <Box sx={{ display: "grid", gap: 1.5, gridTemplateColumns: { xs: "1fr", md: "repeat(4, minmax(0, 1fr))" }, mb: 2.5 }}>
+            <StatCard
+              icon={<Coins size={18} />}
+              label="Crypto Symbols"
+              value={cryptoSymbols.length}
+              tone="#60a5fa"
+              sub="รายการที่สแกนและเทรด"
+            />
+            <StatCard
+              icon={<Wallet size={18} />}
+              label="Account Balance"
+              value={`${account ? fmt(account.balance) : "—"} ${ccy}`}
+              tone="#10b981"
+              sub={account ? `Equity ${fmt(account.equity)} ${ccy}` : "รอข้อมูลบัญชี"}
+            />
+            <StatCard
+              icon={<TrendingUp size={18} />}
+              label="Realized 7D"
+              value={`${realizedPl >= 0 ? "+" : ""}${fmt(realizedPl)} ${ccy}`}
+              tone={realizedPl >= 0 ? "#10b981" : "#ef4444"}
+              sub={`${cryptoHistory.filter((h) => h.entry === "OUT").length} closed deals`}
+            />
+            <StatCard
+              icon={<Sliders size={18} />}
+              label="Crypto Capacity"
+              value={`${cryptoPositions.length}/${settingsForm.max_crypto_open_trades ?? settingsForm.max_open_trades}`}
+              tone="#8b5cf6"
+              sub={
                 <Box>
-                  <Typography variant="caption" color="text.secondary" sx={KPI_LABEL_SX}>
-                    เหรียญที่เทรดได้
-                  </Typography>
-                  <Typography variant="h5" sx={KPI_VALUE_SX}>
-                    {cryptoSymbols.length}{" "}
-                    <span style={KPI_UNIT_STYLE}>รายการ</span>
-                  </Typography>
-                </Box>
-              </CardContent>
-            </Card>
-
-            {/* KPI: Account Equity */}
-            <Card sx={{ bgcolor: "#0d1321", border: "1px solid rgba(255, 255, 255, 0.03)" }}>
-              <CardContent sx={{ display: "flex", alignItems: "center", gap: 2.25, py: 2.5 }}>
-                <Box sx={{ p: 1.65, borderRadius: 2.5, bgcolor: "rgba(16, 185, 129, 0.08)", display: "flex", color: "#10b981" }}>
-                  <Wallet size={24} />
-                </Box>
-                <Box>
-                  <Typography variant="caption" color="text.secondary" sx={KPI_LABEL_SX}>
-                    ยอดเงินบัญชี
-                  </Typography>
-                  <Typography variant="h5" sx={{ ...MONO, ...KPI_VALUE_SX }}>
-                    {account ? `${fmt(account.balance)}` : "—"}{" "}
-                    <span style={KPI_UNIT_STYLE}>{ccy}</span>
+                  <LinearProgress
+                    variant="determinate"
+                    value={Math.min(100, (cryptoPositions.length / Math.max(1, settingsForm.max_crypto_open_trades ?? settingsForm.max_open_trades)) * 100)}
+                    sx={{
+                      mt: 0.75,
+                      height: 5,
+                      borderRadius: 99,
+                      bgcolor: "rgba(255,255,255,0.05)",
+                      "& .MuiLinearProgress-bar": { bgcolor: "#8b5cf6" },
+                    }}
+                  />
+                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.75 }}>
+                    Max crypto slots: {settingsForm.max_crypto_open_trades ?? settingsForm.max_open_trades}
                   </Typography>
                 </Box>
-              </CardContent>
-            </Card>
-
-            {/* KPI: Bot Realized P/L */}
-            <Card sx={{ bgcolor: "#0d1321", border: "1px solid rgba(255, 255, 255, 0.03)" }}>
-              <CardContent sx={{ display: "flex", alignItems: "center", gap: 2.25, py: 2.5 }}>
-                <Box sx={{ p: 1.65, borderRadius: 2.5, bgcolor: realizedPl >= 0 ? "rgba(16, 185, 129, 0.08)" : "rgba(239, 68, 68, 0.08)", display: "flex", color: realizedPl >= 0 ? "#10b981" : "#ef4444" }}>
-                  <TrendingUp size={24} />
-                </Box>
-                <Box>
-                  <Typography variant="caption" color="text.secondary" sx={KPI_LABEL_SX}>
-                    กำไร/ขาดทุนจริง 30 วัน
-                  </Typography>
-                  <Typography variant="h5" sx={{ ...MONO, ...KPI_VALUE_SX, color: realizedPl >= 0 ? "#10b981" : "#ef4444" }}>
-                    {realizedPl >= 0 ? "+" : ""}{fmt(realizedPl)}{" "}
-                    <span style={KPI_UNIT_STYLE}>{ccy}</span>
-                  </Typography>
-                </Box>
-              </CardContent>
-            </Card>
-
-            {/* KPI: Slots Utilization */}
-            <Card sx={{ bgcolor: "#0d1321", border: "1px solid rgba(255, 255, 255, 0.03)" }}>
-              <CardContent sx={{ width: "100%", display: "flex", flexDirection: "column", gap: 1.25, py: 2.5 }}>
-                <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
-                  <Box sx={{ p: 1.45, borderRadius: 2, bgcolor: "rgba(139, 92, 246, 0.08)", display: "flex", color: "#8b5cf6" }}>
-                    <Sliders size={22} />
-                  </Box>
-                  <Box sx={{ flexGrow: 1 }}>
-                    <Typography variant="caption" color="text.secondary" sx={KPI_LABEL_SX}>
-                      ช่องเทรดที่ใช้อยู่
-                    </Typography>
-                    <Typography variant="subtitle2" sx={{ fontSize: "1.2rem", fontWeight: 650, color: "#fff", lineHeight: 1.25 }}>
-                      {cryptoPositions.length} / {settingsForm.max_open_trades} ช่อง
-                    </Typography>
-                  </Box>
-                </Stack>
-                <LinearProgress
-                  variant="determinate"
-                  value={Math.min(100, (cryptoPositions.length / Math.max(1, settingsForm.max_open_trades)) * 100)}
-                  sx={{
-                    height: 6,
-                    borderRadius: 3,
-                    bgcolor: "rgba(255,255,255,0.05)",
-                    "& .MuiLinearProgress-bar": {
-                      bgcolor: "#8b5cf6",
-                    }
-                  }}
-                />
-              </CardContent>
-            </Card>
+              }
+            />
           </Box>
 
           {/* Main workspace: chart + live positions side-by-side on wide screens */}
@@ -830,28 +911,66 @@ export default function CryptoPage() {
             <Stack spacing={4}>
               {/* Crypto Price Table */}
               <Card sx={{ bgcolor: "#0d1321", border: "1px solid rgba(255, 255, 255, 0.03)" }}>
-                <CardContent sx={{ p: 3 }}>
-                  <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 3 }}>
+                <CardContent sx={{ p: 0, "&:last-child": { pb: 0 } }}>
+                  <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", p: 2, gap: 1.5, flexWrap: "wrap" }}>
                     <SectionTitle icon={<Activity size={18} color="#3b82f6" />}>
                       ราคารายเหรียญคริปโต Real-time
                     </SectionTitle>
-                    <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
+                    <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }}>
+                      {/* Search box */}
+                      <Box
+                        sx={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 0.75,
+                          height: 38,
+                          px: 1.25,
+                          minWidth: 190,
+                          bgcolor: "rgba(255,255,255,0.02)",
+                          border: "1px solid rgba(255,255,255,0.07)",
+                          borderRadius: 1,
+                          transition: "border-color 0.2s",
+                          "&:focus-within": { borderColor: "rgba(59,130,246,0.5)" },
+                        }}
+                      >
+                        <Search size={13} color="#475569" />
+                        <input
+                          value={priceSearch}
+                          onChange={(e) => setPriceSearch(e.target.value)}
+                          placeholder="ค้นหาเหรียญ..."
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            outline: "none",
+                            color: "#e2e8f0",
+                            fontSize: "0.86rem",
+                            width: "100%",
+                            fontFamily: "inherit",
+                          }}
+                        />
+                        {priceSearch && (
+                          <Box
+                            onClick={() => setPriceSearch("")}
+                            sx={{ cursor: "pointer", color: "#475569", display: "flex", "&:hover": { color: "#94a3b8" } }}
+                          >
+                            <X size={12} />
+                          </Box>
+                        )}
+                      </Box>
                       <Button
                         size="small"
-                        variant="outlined"
+                        variant="contained"
                         onClick={runScan}
                         disabled={scanLoading || cryptoSymbols.length === 0}
                         startIcon={scanLoading ? <CircularProgress size={13} color="inherit" /> : <RefreshCw size={14} />}
                         sx={{
-                          height: 30,
+                          height: 38,
                           borderRadius: 1,
                           px: 1.5,
                           fontSize: "0.82rem",
                           fontWeight: 700,
-                          borderColor: "rgba(59, 130, 246, 0.35)",
-                          color: "#60a5fa",
-                          bgcolor: "rgba(59, 130, 246, 0.06)",
-                          "&:hover": { borderColor: "#3b82f6", bgcolor: "rgba(59, 130, 246, 0.12)" },
+                          bgcolor: "#2563eb",
+                          "&:hover": { bgcolor: "#1d4ed8" },
                         }}
                       >
                         Refresh score
@@ -878,19 +997,19 @@ export default function CryptoPage() {
                     </Box>
                   ) : (
                     <Box sx={{ overflowX: "auto" }}>
-                      <Table size="medium">
+                      <Table size="small">
                         <TableHead>
                           <TableRow sx={{ "& th": { borderBottomColor: "rgba(255,255,255,0.08)", bgcolor: "#0d1321" } }}>
-                            <TableCell sx={{ fontWeight: 700, color: "#94a3b8" }}>เหรียญ</TableCell>
-                            <TableCell align="right" sx={{ fontWeight: 700, color: "#94a3b8" }}>BID (ขาย)</TableCell>
-                            <TableCell align="right" sx={{ fontWeight: 700, color: "#94a3b8" }}>ASK (ซื้อ)</TableCell>
-                            <TableCell align="right" sx={{ fontWeight: 700, color: "#94a3b8" }}>Spread</TableCell>
-                            <TableCell align="right" sx={{ fontWeight: 700, color: "#94a3b8" }}>Signal Score</TableCell>
-                            <TableCell align="right" sx={{ fontWeight: 700, color: "#94a3b8", pr: 2 }}>คำสั่ง</TableCell>
+                            <TableCell>Symbol</TableCell>
+                            <TableCell align="right">Bid</TableCell>
+                            <TableCell align="right">Ask</TableCell>
+                            <TableCell align="right">Spread</TableCell>
+                            <TableCell align="center">Signal</TableCell>
+                            <TableCell align="right">Action</TableCell>
                           </TableRow>
                         </TableHead>
                         <TableBody>
-                          {cryptoSymbols.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage).map((sym) => {
+                          {filteredCryptoSymbols.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage).map((sym) => {
                             const tick = ticks[sym];
                             const dir = tickDirections[sym] || { bid: "flat", ask: "flat" };
                             const decimals = getDecimals(sym);
@@ -900,7 +1019,6 @@ export default function CryptoPage() {
                             const isSelected = cryptoSymbol === sym;
                             const scan = scanBySymbol.get(sym);
                             const scanScore = scan ? Math.round(scan.confidence * 100) : null;
-                            const scanColor = scan?.action === "BUY" ? "#10b981" : scan?.action === "SELL" ? "#ef4444" : "#64748b";
                             return (
                               <TableRow
                                 key={sym}
@@ -908,73 +1026,42 @@ export default function CryptoPage() {
                                 onClick={() => handleCryptoSymbolChange(sym)}
                                 sx={{
                                   cursor: "pointer",
-                                  borderLeft: isSelected ? "3px solid #3b82f6" : "3px solid transparent",
-                                  bgcolor: isSelected ? "rgba(59, 130, 246, 0.04)" : "transparent",
-                                  borderBottomColor: "rgba(255,255,255,0.03)",
+                                  bgcolor: isSelected ? "rgba(59, 130, 246, 0.08)" : "transparent",
                                   transition: "background-color 0.15s, border-color 0.15s",
+                                  "& td": { borderBottomColor: "rgba(255,255,255,0.04)" },
                                   "&:hover": {
-                                    bgcolor: isSelected ? "rgba(59, 130, 246, 0.06)" : "rgba(255, 255, 255, 0.02)",
+                                    bgcolor: isSelected ? "rgba(59, 130, 246, 0.1)" : "rgba(255, 255, 255, 0.025)",
                                   },
                                 }}
                               >
-                                <TableCell sx={{ py: 1.75 }}>
-                                  <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
-                                    <Box>
-                                      <Typography sx={{ fontWeight: 700, color: isSelected ? "#60a5fa" : "#fff" }}>
-                                        {sym}
-                                      </Typography>
-                                      {isSelected && (
-                                        <Typography variant="caption" sx={{ color: "#3b82f6", display: "block", fontSize: "0.7rem", fontWeight: 700 }}>
-                                          SELECTED
-                                        </Typography>
-                                      )}
-                                    </Box>
+                                <TableCell>
+                                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                                    <Coins size={15} color="#60a5fa" />
+                                    <Typography sx={{ ...MONO, fontWeight: 800, color: isSelected ? "#60a5fa" : "#fff" }}>{sym}</Typography>
                                   </Stack>
-                                </TableCell>
-                                <TableCell align="right" sx={{ py: 1.5 }}>
-                                  <PriceDirection value={bidVal !== null ? bidVal.toFixed(decimals) : "—"} direction={dir.bid} />
-                                </TableCell>
-                                <TableCell align="right" sx={{ py: 1.5 }}>
-                                  <PriceDirection value={askVal !== null ? askVal.toFixed(decimals) : "—"} direction={dir.ask} />
-                                </TableCell>
-                                <TableCell align="right" sx={{ py: 1.5, ...MONO, fontWeight: 500, color: "#cbd5e1" }}>
-                                  {spreadVal !== null ? spreadVal.toFixed(decimals) : "—"}
                                 </TableCell>
                                 <TableCell align="right" sx={{ py: 1.25 }}>
-                                  <Stack spacing={0.5} sx={{ alignItems: "flex-end" }}>
-                                    <Chip
-                                      size="small"
-                                      label={scanScore !== null ? `${actionLabel(scan?.action)} ${scanScore}%` : scanLoading ? "Scanning" : "—"}
-                                      variant="outlined"
-                                      sx={{
-                                        height: 20,
-                                        borderRadius: 1,
-                                        fontSize: 10,
-                                        fontWeight: 800,
-                                        color: scanScore !== null ? scanColor : "#64748b",
-                                        borderColor: scanScore !== null ? scanColor : "rgba(148,163,184,0.25)",
-                                        bgcolor: scanScore !== null ? `${scanColor}14` : "transparent",
-                                        "& .MuiChip-label": { px: 0.75 },
-                                      }}
-                                    />
-                                    <LinearProgress
-                                      variant={scanScore !== null ? "determinate" : "indeterminate"}
-                                      value={scanScore ?? 0}
-                                      sx={{
-                                        width: 86,
-                                        height: 4,
-                                        borderRadius: 1,
-                                        bgcolor: "rgba(255,255,255,0.05)",
-                                        opacity: scanScore !== null || scanLoading ? 1 : 0.25,
-                                        "& .MuiLinearProgress-bar": { bgcolor: scanColor },
-                                      }}
-                                    />
-                                  </Stack>
+                                  <PriceDirection value={bidVal !== null ? bidVal.toFixed(decimals) : "—"} direction={dir.bid} />
                                 </TableCell>
-                                <TableCell align="right" sx={{ py: 1.5, pr: 2 }}>
+                                <TableCell align="right" sx={{ py: 1.25 }}>
+                                  <PriceDirection value={askVal !== null ? askVal.toFixed(decimals) : "—"} direction={dir.ask} />
+                                </TableCell>
+                                <TableCell align="right" sx={{ py: 1.25, ...MONO, fontWeight: 650, color: "#cbd5e1" }}>
+                                  {spreadVal !== null ? spreadVal.toFixed(decimals) : "—"}
+                                </TableCell>
+                                <TableCell align="center" sx={{ py: 1.25 }}>
+                                  <Chip
+                                    size="small"
+                                    color={actionColor(scan?.action)}
+                                    label={scanScore !== null ? `${actionLabel(scan?.action)} ${scanScore}%` : scanLoading ? "Scanning" : "รอสแกน"}
+                                    variant={scanScore !== null ? "filled" : "outlined"}
+                                    sx={{ height: 24, borderRadius: 1, fontWeight: 800, "& .MuiChip-label": { px: 0.9 } }}
+                                  />
+                                </TableCell>
+                                <TableCell align="right" sx={{ py: 1.25, pr: 2 }}>
                                   <Button
                                     size="small"
-                                    variant="contained"
+                                    variant="outlined"
                                     disabled={tradeStagingSymbol === sym}
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -989,12 +1076,10 @@ export default function CryptoPage() {
                                     }
                                     sx={{
                                       height: 32,
-                                      borderRadius: 1.5,
+                                      borderRadius: 1,
                                       fontWeight: 700,
                                       fontSize: "0.82rem",
                                       textTransform: "none",
-                                      bgcolor: "#2563eb",
-                                      "&:hover": { bgcolor: "#1d4ed8" },
                                     }}
                                   >
                                     {tradeStagingSymbol === sym ? "กำลังวิเคราะห์..." : "วิเคราะห์ & เทรด"}
@@ -1008,7 +1093,7 @@ export default function CryptoPage() {
                       <TablePagination
                         rowsPerPageOptions={[5, 10, 20, 50]}
                         component="div"
-                        count={cryptoSymbols.length}
+                        count={filteredCryptoSymbols.length}
                         rowsPerPage={rowsPerPage}
                         page={page}
                         onPageChange={(_event, newPage) => setPage(newPage)}
@@ -1036,7 +1121,7 @@ export default function CryptoPage() {
               <Card sx={{ bgcolor: "#0d1321", border: "1px solid rgba(255, 255, 255, 0.03)", position: { lg: "sticky" }, top: { lg: 16 } }}>
                 <CardContent sx={{ p: 2 }}>
                   <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 1.25 }}>
-                    <SectionTitle icon={<Layers size={16} color="#3b82f6" />}>ออเดอร์ที่บอทเปิดอยู่</SectionTitle>
+                    <SectionTitle icon={<Layers size={16} color="#3b82f6" />}>ออเดอร์คริปโตที่เปิดอยู่</SectionTitle>
                     {cryptoPositions.length > 0 && (
                       <Chip
                         size="small"
@@ -1049,7 +1134,7 @@ export default function CryptoPage() {
                   {cryptoPositions.length === 0 ? (
                     <Box sx={{ py: 5, textAlign: "center", bgcolor: "rgba(255,255,255,0.01)", borderRadius: 2.5, border: "1px dashed rgba(255,255,255,0.03)" }}>
                       <Typography variant="body2" color="text.secondary" sx={{ fontStyle: "italic" }}>
-                        ตอนนี้ยังไม่มีออเดอร์ที่บอทเปิดอยู่ใน MT5
+                        ตอนนี้ยังไม่มีออเดอร์คริปโตที่เปิดอยู่ใน MT5
                       </Typography>
                     </Box>
                   ) : (
@@ -1090,14 +1175,34 @@ export default function CryptoPage() {
                                   </Typography>
                                 </Box>
                               </Stack>
-                              <Box sx={{ textAlign: "right", flexShrink: 0 }}>
+                              <Stack direction="row" spacing={0.75} sx={{ alignItems: "flex-start", flexShrink: 0 }}>
+                                <Box sx={{ textAlign: "right" }}>
                                 <Typography sx={{ ...MONO, fontWeight: 850, lineHeight: 1.15, color: isProfit ? "#10b981" : "#ef4444" }}>
                                   {isProfit ? "+" : ""}{fmt(p.profit)} {ccy}
                                 </Typography>
                                 <Typography variant="caption" sx={{ ...MONO, display: "block", lineHeight: 1.2, color: isProfit ? "#10b981" : "#ef4444", fontWeight: 700 }}>
                                   {pct >= 0 ? "+" : ""}{pct.toFixed(2)}%
                                 </Typography>
-                              </Box>
+                                </Box>
+                                <IconButton
+                                  size="small"
+                                  color="error"
+                                  disabled={closingTicket === p.ticket}
+                                  onClick={() => setCloseCandidate(p)}
+                                  sx={{
+                                    width: 28,
+                                    height: 28,
+                                    borderRadius: 1,
+                                    border: "1px solid rgba(239, 68, 68, 0.28)",
+                                    bgcolor: "rgba(239, 68, 68, 0.06)",
+                                    color: "#f87171",
+                                    flexShrink: 0,
+                                    "&:hover": { borderColor: "#ef4444", bgcolor: "rgba(239, 68, 68, 0.13)" },
+                                  }}
+                                >
+                                  {closingTicket === p.ticket ? <CircularProgress size={14} color="inherit" /> : <X size={15} />}
+                                </IconButton>
+                              </Stack>
                             </Stack>
 
                             <Box
@@ -1128,30 +1233,6 @@ export default function CryptoPage() {
                               ))}
                             </Box>
 
-                            <Button
-                              size="small"
-                              color="error"
-                              variant="outlined"
-                              fullWidth
-                              disabled={closingTicket === p.ticket}
-                              onClick={() => setCloseCandidate(p)}
-                              startIcon={closingTicket === p.ticket ? <CircularProgress size={13} color="inherit" /> : undefined}
-                              sx={{
-                                height: 28,
-                                borderRadius: 1,
-                                fontSize: "0.78rem",
-                                fontWeight: 750,
-                                borderColor: "rgba(239, 68, 68, 0.35)",
-                                color: "#f87171",
-                                bgcolor: "rgba(239, 68, 68, 0.05)",
-                                "&:hover": {
-                                  borderColor: "#ef4444",
-                                  bgcolor: "rgba(239, 68, 68, 0.12)",
-                                },
-                              }}
-                            >
-                              ปิด slot
-                            </Button>
                           </Box>
                         );
                       })}
@@ -1167,68 +1248,190 @@ export default function CryptoPage() {
               <Card sx={{ bgcolor: "#0d1321", border: "1px solid rgba(255, 255, 255, 0.03)" }}>
                 <CardContent sx={{ p: 3 }}>
                   <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 2.5 }}>
-                    <SectionTitle icon={<History size={16} color="#3b82f6" />}>ประวัติรายการที่ปิดแล้ว 30 วัน</SectionTitle>
+                    <SectionTitle icon={<History size={16} color="#3b82f6" />}>ประวัติรายการที่ปิดแล้ว 7 วัน</SectionTitle>
                     {historyLoading && <CircularProgress size={16} color="primary" />}
                   </Stack>
+                  <PnLChart deals={cryptoHistory} />
                   {cryptoHistory.length === 0 ? (
-                    <Box sx={{ py: 4, textAlign: "center", bgcolor: "rgba(255,255,255,0.01)", borderRadius: 2.5 }}>
-                      <Typography variant="body2" color="text.secondary">
-                        ยังไม่มีรายการเทรดของ Magic Number นี้ในช่วง 30 วันที่ผ่านมา
+                    <Box sx={{ py: 6, textAlign: "center" }}>
+                      <Typography variant="body2" sx={{ color: "#64748b" }}>
+                        ไม่มีรายการใน 7 วันที่ผ่านมา
                       </Typography>
                     </Box>
                   ) : (
                     <>
-                    <Box sx={{ overflowX: "auto", maxHeight: "auto" }}>
+                    <Box sx={{ overflowX: "auto" }}>
                       <Table size="small" stickyHeader>
                         <TableHead>
-                          <TableRow sx={{ "& th": { borderBottomColor: "rgba(255,255,255,0.05)", bgcolor: "#0d1321" } }}>
-                            {["เวลา", "สัญลักษณ์", "ฝั่ง", "เข้า/ออก", "ขนาด", "ราคา", "กำไร/ขาดทุนจริง", "หมายเหตุ"].map((h) => (
-                              <TableCell key={h} sx={{ fontWeight: 700, color: "#94a3b8" }}>{h}</TableCell>
+                          <TableRow>
+                            {[
+                              { label: "เวลา", align: "left" },
+                              { label: "Symbol", align: "left" },
+                              { label: "ฝั่ง", align: "center" },
+                              { label: "เข้า/ออก", align: "center" },
+                              { label: "Lot", align: "right" },
+                              { label: "ราคา", align: "right" },
+                              { label: "P & L", align: "right" },
+                            ].map((col) => (
+                              <TableCell
+                                key={col.label}
+                                align={col.align as any}
+                                sx={{
+                                  bgcolor: "#080d18",
+                                  color: "#64748b",
+                                  fontWeight: 700,
+                                  fontSize: "0.68rem",
+                                  letterSpacing: "0.08em",
+                                  textTransform: "uppercase",
+                                  borderBottom: "1px solid rgba(255,255,255,0.08)",
+                                  py: 1.25,
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {col.label}
+                              </TableCell>
                             ))}
                           </TableRow>
                         </TableHead>
                         <TableBody>
-                          {paginatedCryptoHistory.map((h) => (
-                            <TableRow key={h.ticket} hover sx={{ borderBottomColor: "rgba(255,255,255,0.02)" }}>
-                              <TableCell sx={{ ...MONO, fontSize: 11 }}>
-                                {h.time.replace("T", " ").substring(5, 16)}
-                              </TableCell>
-                              <TableCell sx={{ fontWeight: 700 }}>{h.symbol}</TableCell>
-                              <TableCell>
-                                <Chip size="small" label={actionLabel(h.type)} color={actionColor(h.type)} variant="outlined" sx={{ fontWeight: 700, fontSize: 9, height: 18 }} />
-                              </TableCell>
-                              <TableCell>
-                                <Chip
-                                  size="small"
-                                  label={entryLabel(h.entry)}
-                                  variant="outlined"
-                                  sx={{
-                                    fontWeight: 700,
-                                    fontSize: 9,
-                                    height: 18,
-                                    color: h.entry === "IN" ? "#3b82f6" : "#eab308",
-                                    borderColor: h.entry === "IN" ? "rgba(59,130,246,0.3)" : "rgba(234,179,8,0.3)",
-                                  }}
-                                />
-                              </TableCell>
-                              <TableCell sx={MONO}>{h.volume}</TableCell>
-                              <TableCell sx={MONO}>{fmt(h.price, 2)}</TableCell>
-                              <TableCell sx={{ ...MONO, fontWeight: 700, color: h.profit > 0 ? "#10b981" : h.profit < 0 ? "#ef4444" : "#94a3b8" }}>
-                                {h.entry === "OUT" ? (
-                                  <>
-                                    {h.profit > 0 ? "+" : ""}
-                                    {fmt(h.profit)}
-                                  </>
-                                ) : "—"}
-                              </TableCell>
-                              <TableCell sx={{ fontSize: 11, color: "text.secondary" }}>{h.comment}</TableCell>
-                            </TableRow>
-                          ))}
+                          {paginatedCryptoHistory.map((h, idx) => {
+                            const isOut = h.entry === "OUT";
+                            const isWin = isOut && h.profit > 0;
+                            const isLoss = isOut && h.profit < 0;
+                            const isBuy = h.type === "BUY";
+                            const maxAbsProfit = Math.max(...cryptoHistory.filter(d => d.entry === "OUT").map(d => Math.abs(d.profit)), 1);
+                            const barPct = isOut ? Math.min(100, (Math.abs(h.profit) / maxAbsProfit) * 100) : 0;
+                            return (
+                              <TableRow
+                                key={`${h.ticket}-${idx}`}
+                                sx={{
+                                  bgcolor: isWin
+                                    ? "rgba(16,185,129,0.03)"
+                                    : isLoss
+                                    ? "rgba(239,68,68,0.03)"
+                                    : "transparent",
+                                  borderBottom: "1px solid rgba(255,255,255,0.025)",
+                                  transition: "background 0.15s",
+                                  "&:hover": {
+                                    bgcolor: isWin
+                                      ? "rgba(16,185,129,0.07)"
+                                      : isLoss
+                                      ? "rgba(239,68,68,0.07)"
+                                      : "rgba(255,255,255,0.03)",
+                                  },
+                                  "&:last-child td": { borderBottom: "none" },
+                                }}
+                              >
+                                {/* เวลา */}
+                                <TableCell sx={{ py: 1.25, whiteSpace: "nowrap" }}>
+                                  <Typography sx={{ fontFamily: "monospace", fontSize: "0.72rem", color: "#64748b", lineHeight: 1.2 }}>
+                                    {h.time.replace("T", " ").substring(0, 10)}
+                                  </Typography>
+                                  <Typography sx={{ fontFamily: "monospace", fontSize: "0.78rem", color: "#94a3b8", fontWeight: 600 }}>
+                                    {h.time.replace("T", " ").substring(11, 16)}
+                                  </Typography>
+                                </TableCell>
+
+                                {/* Symbol */}
+                                <TableCell sx={{ py: 1.25 }}>
+                                  <Typography sx={{ fontWeight: 700, fontSize: "0.85rem", color: "#e2e8f0", letterSpacing: "0.02em" }}>
+                                    {h.symbol}
+                                  </Typography>
+                                </TableCell>
+
+                                {/* BUY/SELL */}
+                                <TableCell align="center" sx={{ py: 1.25 }}>
+                                  <Box
+                                    sx={{
+                                      display: "inline-block",
+                                      px: 1,
+                                      py: 0.2,
+                                      borderRadius: 0.75,
+                                      fontSize: "0.68rem",
+                                      fontWeight: 800,
+                                      letterSpacing: "0.06em",
+                                      bgcolor: isBuy ? "rgba(59,130,246,0.12)" : "rgba(249,115,22,0.12)",
+                                      color: isBuy ? "#60a5fa" : "#fb923c",
+                                      border: `1px solid ${isBuy ? "rgba(59,130,246,0.25)" : "rgba(249,115,22,0.25)"}`,
+                                    }}
+                                  >
+                                    {h.type}
+                                  </Box>
+                                </TableCell>
+
+                                {/* IN/OUT */}
+                                <TableCell align="center" sx={{ py: 1.25 }}>
+                                  <Box
+                                    sx={{
+                                      display: "inline-block",
+                                      px: 0.9,
+                                      py: 0.2,
+                                      borderRadius: 0.75,
+                                      fontSize: "0.65rem",
+                                      fontWeight: 700,
+                                      letterSpacing: "0.05em",
+                                      bgcolor: isOut ? "rgba(234,179,8,0.1)" : "rgba(100,116,139,0.1)",
+                                      color: isOut ? "#fbbf24" : "#94a3b8",
+                                      border: `1px solid ${isOut ? "rgba(234,179,8,0.2)" : "rgba(100,116,139,0.2)"}`,
+                                    }}
+                                  >
+                                    {h.entry}
+                                  </Box>
+                                </TableCell>
+
+                                {/* Lot */}
+                                <TableCell align="right" sx={{ py: 1.25 }}>
+                                  <Typography sx={{ fontFamily: "monospace", fontSize: "0.8rem", color: "#94a3b8" }}>
+                                    {h.volume}
+                                  </Typography>
+                                </TableCell>
+
+                                {/* ราคา */}
+                                <TableCell align="right" sx={{ py: 1.25 }}>
+                                  <Typography sx={{ fontFamily: "monospace", fontSize: "0.8rem", color: "#94a3b8" }}>
+                                    {fmt(h.price, 2)}
+                                  </Typography>
+                                </TableCell>
+
+                                {/* P&L */}
+                                <TableCell align="right" sx={{ py: 1.25, pr: 2, minWidth: 110 }}>
+                                  {isOut ? (
+                                    <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 0.4 }}>
+                                      <Typography
+                                        sx={{
+                                          fontFamily: "monospace",
+                                          fontWeight: 700,
+                                          fontSize: "0.88rem",
+                                          color: isWin ? "#10b981" : isLoss ? "#ef4444" : "#64748b",
+                                        }}
+                                      >
+                                        {h.profit > 0 ? "+" : ""}{fmt(h.profit)}
+                                      </Typography>
+                                      {/* mini bar */}
+                                      <Box sx={{ width: 64, height: 3, bgcolor: "rgba(255,255,255,0.04)", borderRadius: 1, overflow: "hidden" }}>
+                                        <Box
+                                          sx={{
+                                            width: `${barPct}%`,
+                                            height: "100%",
+                                            bgcolor: isWin ? "#10b981" : "#ef4444",
+                                            borderRadius: 1,
+                                            opacity: 0.7,
+                                          }}
+                                        />
+                                      </Box>
+                                    </Box>
+                                  ) : (
+                                    <Typography sx={{ color: "#1e293b", fontFamily: "monospace", fontSize: "0.8rem" }}>—</Typography>
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
                         </TableBody>
                       </Table>
                     </Box>
                     <TablePagination
-                      rowsPerPageOptions={[5, 10, 25, 50]}
+                      rowsPerPageOptions={[10, 25, 50]}
                       component="div"
                       count={cryptoHistory.length}
                       rowsPerPage={historyRowsPerPage}
@@ -1238,13 +1441,17 @@ export default function CryptoPage() {
                         setHistoryRowsPerPage(parseInt(event.target.value, 10));
                         setHistoryPage(0);
                       }}
-                      labelRowsPerPage="Rows per page:"
+                      labelRowsPerPage="แถวต่อหน้า:"
+                      labelDisplayedRows={({ from, to, count }) => `${from}–${to} จาก ${count}`}
                       sx={{
-                        color: "#cbd5e1",
-                        borderTop: "1px solid rgba(255,255,255,0.08)",
-                        "& .MuiTablePagination-selectIcon": { color: "#64748b" },
-                        "& .MuiIconButton-root": { color: "#cbd5e1" },
-                        "& .MuiIconButton-root.Mui-disabled": { color: "rgba(255,255,255,0.25)" }
+                        color: "#475569",
+                        fontSize: "0.78rem",
+                        borderTop: "1px solid rgba(255,255,255,0.04)",
+                        "& .MuiTablePagination-selectIcon": { color: "#475569" },
+                        "& .MuiTablePagination-select": { color: "#94a3b8" },
+                        "& .MuiIconButton-root": { color: "#475569" },
+                        "& .MuiIconButton-root.Mui-disabled": { color: "rgba(255,255,255,0.1)" },
+                        "& .MuiTablePagination-displayedRows": { color: "#475569" },
                       }}
                     />
                     </>
@@ -1252,8 +1459,55 @@ export default function CryptoPage() {
                 </CardContent>
               </Card>
           </Box>
+
         </Container>
-      </Box>
+      </Box>{/* end main content */}
+{/* Bot Log Modal */}
+      <Dialog
+        open={logOpen}
+        onClose={() => setLogOpen(false)}
+        maxWidth="md"
+        fullWidth
+        slotProps={{
+          paper: {
+            sx: {
+              bgcolor: "#0d1321",
+              border: "1px solid rgba(255,255,255,0.06)",
+              borderRadius: 1.5,
+              height: "80vh",
+              backgroundImage: "none",
+            },
+          },
+        }}
+      >
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", px: 3, py: 2, borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+          <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
+            <Box sx={{ p: 0.75, borderRadius: 1.5, bgcolor: "rgba(245,158,11,0.1)", display: "flex", color: "#f59e0b" }}>
+              <ScrollText size={16} />
+            </Box>
+            <Box>
+              <Typography variant="subtitle1" sx={{ color: "#fff", fontWeight: 700, lineHeight: 1.2 }}>
+                Bot Activity Log
+              </Typography>
+              <Typography variant="caption" sx={{ color: "#334155" }}>
+                อัปเดตทุก 5 วินาที · เก็บ 200 รายการล่าสุด
+              </Typography>
+            </Box>
+          </Stack>
+          <IconButton onClick={() => setLogOpen(false)} size="small" sx={{ color: "#475569", "&:hover": { color: "#fff" } }}>
+            <X size={18} />
+          </IconButton>
+        </Box>
+        <Box sx={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0 }}>
+          <BotLog
+            fetchLogs={async () => {
+              const data = await api("logs?limit=200");
+              return data.logs ?? [];
+            }}
+          />
+        </Box>
+      </Dialog>
+
 <CryptoBotSettings
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
@@ -1270,6 +1524,8 @@ export default function CryptoPage() {
         setCryptoInput={setCryptoInput}
         onDetectCryptoSymbols={autoDetectCryptoSymbols}
         detectingCryptoSymbols={detectingCryptoSymbols}
+        onValidateSymbols={validateSymbols}
+        validatingSymbols={validatingSymbols}
         allCryptoSymbols={cryptoSymbols}
       />
 
@@ -1375,14 +1631,14 @@ export default function CryptoPage() {
         }}
       >
         <DialogTitle sx={{ color: "#fff", fontWeight: 650 }}>
-          ยืนยันปิด slot
+          Confirm Close Crypto Position
         </DialogTitle>
         <DialogContent>
           {closeCandidate && (
             <Stack spacing={1.25}>
-              <Typography variant="body2" color="text.secondary">
-                ต้องการปิดออเดอร์นี้ด้วยราคาตลาดตอนนี้หรือไม่?
-              </Typography>
+              <Alert severity={closeCandidate.profit >= 0 ? "success" : "warning"}>
+                ต้องการปิด {closeCandidate.symbol} position นี้ด้วยราคาตลาดตอนนี้ใช่ไหม?
+              </Alert>
               <Box
                 sx={{
                   display: "grid",
@@ -1434,7 +1690,7 @@ export default function CryptoPage() {
             onClick={confirmCloseCandidate}
             startIcon={closingTicket ? <CircularProgress size={16} color="inherit" /> : undefined}
           >
-            ยืนยันปิด slot
+            ปิด Position
           </Button>
         </DialogActions>
       </Dialog>

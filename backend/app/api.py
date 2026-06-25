@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from . import mt5_client, strategy, worker
 from .config import settings
+from .market_groups import is_crypto_symbol, market_group
 from .models import AnalyzeRequest
 from .trader import manager
 
@@ -172,19 +173,36 @@ class SettingsUpdateRequest(BaseModel):
     use_ai: bool | None = None
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
+    telegram_enabled: bool | None = None
     symbols: str | None = None
     default_timeframe: str | None = None
     strategy: str | None = None
     risk_per_trade: float | None = None
     max_lot: float | None = None
     magic: int | None = None
+    gold_magic: int | None = None
     atr_sl_mult: float | None = None
+    default_rr: float | None = None
     bot_enabled: bool | None = None
+    gold_bot_enabled: bool | None = None
     auto_trade_interval: int | None = None
     position_sizing_mode: str | None = None
     max_open_trades: int | None = None
+    max_crypto_open_trades: int | None = None
+    max_gold_open_trades: int | None = None
     stake_amount: float | None = None
     api_key: str | None = None
+    stock_bot_enabled: bool | None = None
+    stock_magic: int | None = None
+    max_stock_open_trades: int | None = None
+    stock_timeframe: str | None = None
+    stock_strategy: str | None = None
+    stock_risk_per_trade: float | None = None
+    stock_max_lot: float | None = None
+    stock_atr_sl_mult: float | None = None
+    stock_rr: float | None = None
+    stock_use_ai: bool | None = None
+    stock_auto_trade_interval: int | None = None
 
 
 @app.get("/api/settings", dependencies=[Depends(require_key)])
@@ -202,42 +220,69 @@ async def get_settings_endpoint():
         "use_ai": settings.use_ai,
         "telegram_bot_token": settings.telegram_bot_token,
         "telegram_chat_id": settings.telegram_chat_id,
+        "telegram_enabled": settings.telegram_enabled,
         "symbols": settings.symbols,
         "default_timeframe": settings.default_timeframe,
         "strategy": settings.strategy,
         "risk_per_trade": settings.risk_per_trade,
         "max_lot": settings.max_lot,
         "magic": settings.magic,
+        "gold_magic": settings.gold_magic,
         "atr_sl_mult": settings.atr_sl_mult,
         "default_rr": settings.default_rr,
         "bot_enabled": settings.bot_enabled,
+        "gold_bot_enabled": settings.gold_bot_enabled,
         "auto_trade_interval": settings.auto_trade_interval,
         "position_sizing_mode": settings.position_sizing_mode,
         "max_open_trades": settings.max_open_trades,
+        "max_crypto_open_trades": settings.max_crypto_open_trades,
+        "max_gold_open_trades": settings.max_gold_open_trades,
         "stake_amount": settings.stake_amount,
         "api_key": settings.api_key,
+        "stock_bot_enabled": settings.stock_bot_enabled,
+        "stock_magic": settings.stock_magic,
+        "max_stock_open_trades": settings.max_stock_open_trades,
+        "stock_timeframe": settings.stock_timeframe,
+        "stock_strategy": settings.stock_strategy,
+        "stock_risk_per_trade": settings.stock_risk_per_trade,
+        "stock_max_lot": settings.stock_max_lot,
+        "stock_atr_sl_mult": settings.stock_atr_sl_mult,
+        "stock_rr": settings.stock_rr,
+        "stock_use_ai": settings.stock_use_ai,
+        "stock_auto_trade_interval": settings.stock_auto_trade_interval,
     }
 
 
 @app.post("/api/settings", dependencies=[Depends(require_key)])
 async def update_settings_endpoint(req: SettingsUpdateRequest):
-    updates = {k: v for k, v in req.model_dump().items() if v is not None}
-    
-    # Check if mt5 settings are changed to trigger reconnect
+    # Exclude None; also exclude empty-string passwords so switching profiles
+    # without entering a password doesn't overwrite the stored credential.
+    password_fields = {"mt5_password", "deepseek_api_key", "gemini_api_key",
+                       "telegram_bot_token"}
+    updates = {
+        k: v for k, v in req.model_dump().items()
+        if v is not None and not (k in password_fields and v == "")
+    }
+
+    # Check if MT5 credentials changed to decide whether to reconnect
     mt5_keys = {"mt5_login", "mt5_password", "mt5_server", "mt5_path"}
     mt5_changed = any(k in updates for k in mt5_keys)
-    
+
     settings.update_settings(updates)
-    
+
     warning_msg = None
     if mt5_changed:
-        try:
-            mt5_client.shutdown()
-            mt5_client.connect()
-        except Exception as e:
-            warning_msg = f"Settings saved, but MT5 reconnection failed: {e}"
-            log.warning(warning_msg)
-            
+        # Only reconnect when we have a complete set of credentials
+        if settings.mt5_login and settings.mt5_password and settings.mt5_server:
+            try:
+                mt5_client.shutdown()
+                mt5_client.connect()
+            except Exception as e:
+                warning_msg = f"Settings saved, but MT5 reconnection failed: {e}"
+                log.warning(warning_msg)
+        else:
+            log.info("MT5 settings updated but credentials incomplete — skipping reconnect")
+
     return {"status": "saved", "warning": warning_msg, "restarting": False}
 
 
@@ -287,33 +332,9 @@ async def detect_crypto_symbols():
         def is_crypto(s) -> bool:
             name_upper = s.name.upper()
             path_lower = getattr(s, 'path', '').lower()
-            if 'cryptocurrencies' in path_lower or 'crypto' in path_lower or 'coin' in path_lower:
+            if is_crypto_symbol(name_upper):
                 return True
-            
-            # General crypto naming pattern: ends with USD, USDT, or suffix (e.g. USDm)
-            if (name_upper.endswith("USD") or name_upper.endswith("USDT") or 
-                name_upper.endswith("USDm") or name_upper.endswith("USDTm") or
-                ".USD" in name_upper or "-USD" in name_upper):
-                
-                # Exclude forex
-                forex_prefixes = ("EUR", "GBP", "AUD", "NZD", "CAD", "CHF", "HKD", "SGD", "ZAR", "MXN", "NOK", "SEK", "DKK", "TRY", "CNH", "RUB")
-                if any(name_upper.startswith(prefix) for prefix in forex_prefixes):
-                    clean_name = name_upper.replace("m", "").replace(".ecn", "")
-                    if len(clean_name) == 6:
-                        return False
-                
-                # Exclude metals
-                metal_prefixes = ("XAU", "XAG", "XPD", "XPT", "GOLD", "SILVER")
-                if any(name_upper.startswith(prefix) for prefix in metal_prefixes):
-                    return False
-                
-                return True
-            
-            crypto_pat = re.compile(
-                r'^(BTC|ETH|SOL|XRP|LTC|DOGE|ADA|DOT|LINK|AVAX|SHIB|UNI|GALA|LUNA|ALGO|BCH|XLM|ATOM|ICP|FIL|HBAR|XTZ|GRT|AAVE|MKR|THETA|FTM|BNB|DYDX|OP|ARB|NEAR|TIA|SUI|SEI|APT|RNDR|INJ|FET|AGIX|OCEAN|JUP|WIF|BONK|FLOKI|PEPE)', 
-                re.IGNORECASE
-            )
-            return bool(crypto_pat.match(name_upper))
+            return 'cryptocurrencies' in path_lower or 'crypto' in path_lower or 'coin' in path_lower
             
         detected = []
         for s in raw_symbols:
@@ -418,23 +439,103 @@ async def detect_stock_symbols():
         def is_stock(s) -> bool:
             if is_crypto(s) or is_metal(s) or is_forex(s):
                 return False
+            name = s.name
+            name_upper = name.upper()
             path_lower = getattr(s, 'path', '').lower()
-            if any(x in path_lower for x in ['stock', 'shares', 'equities', 'cfd']):
+
+            # Explicit stock path from broker
+            if any(x in path_lower for x in ['stock', 'shares', 'equities', 'us ', 'uk ', 'eu ']):
                 return True
-            if len(s.name) <= 5 and s.name.isalpha():
-                if s.name.upper() not in ["GOLD", "SILVER"]:
+
+            # Strip common broker prefixes/suffixes to get base ticker
+            # XM uses: AAPL.OQ (NASDAQ), TSLA.OQ, NVDA.OQ
+            #          also: NVDAm (micro), #NVDA, NVDA.US
+            base = re.sub(r'^[#@]|m$|\..*$', '', name, flags=re.IGNORECASE)
+            if 2 <= len(base) <= 6 and base.isalpha():
+                if base.upper() not in {"GOLD", "SILVER", "EURO", "BOND"}:
                     return True
+            # Match XM exchange-suffix pattern: TICKER.OQ / TICKER.N / TICKER.NY
+            if re.match(r'^[A-Z]{2,6}\.(OQ|N|NY|L|T|AX|HK)$', name, re.IGNORECASE):
+                return True
             return False
-            
+
+        EXCLUDE = {"INDEX", "CASH", "FUTURE", "SPOT", "SWAP"}
         detected = []
         for s in raw_symbols:
-            if is_stock(s) and getattr(s, 'trade_mode', 0) > 0:
-                if not any(x in s.name.upper() for x in ["INDEX", "CASH", "FUTURE"]):
+            if is_stock(s):
+                if not any(x in s.name.upper() for x in EXCLUDE):
                     detected.append(s.name)
-                    
-        return {"symbols": sorted(detected)}
+
+        # Sort with popular US names first
+        popular = ["AAPL.OQ", "MSFT.OQ", "NVDA.OQ", "TSLA.OQ", "GOOGL.OQ",
+                   "AMZN.OQ", "META.OQ", "AMD.OQ", "NFLX.OQ",
+                   "AAPL", "MSFT", "NVDA", "TSLA", "GOOGL", "AMZN", "META"]
+        def sort_key(name):
+            try:
+                return (0, popular.index(name.upper()))
+            except ValueError:
+                return (1, name)
+
+        return {"symbols": sorted(detected, key=sort_key)}
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.get("/api/symbols/search", dependencies=[Depends(require_key)])
+async def search_symbols(q: str = ""):
+    """Debug: search all MT5 symbols by name substring. Shows name + path."""
+    try:
+        import MetaTrader5 as mt5
+        mt5_client.connect()
+        raw = mt5.symbols_get()
+        if not raw:
+            return {"results": []}
+        q_up = q.strip().upper()
+        results = [
+            {"name": s.name, "path": getattr(s, "path", ""), "trade_mode": getattr(s, "trade_mode", -1)}
+            for s in raw
+            if not q_up or q_up in s.name.upper()
+        ]
+        return {"count": len(results), "results": results[:200]}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+class ValidateSymbolsRequest(BaseModel):
+    symbols: list[str]
+
+
+@app.post("/api/symbols/validate", dependencies=[Depends(require_key)])
+async def validate_symbols(req: ValidateSymbolsRequest):
+    """Check which symbols are available on MT5. Tries alternate broker formats
+    (e.g. NVDAm, #NVDA) when the exact name is not found."""
+    import MetaTrader5 as mt5
+    valid, invalid = [], []
+    for sym in req.symbols:
+        base = sym.upper().rstrip("M").lstrip("#").split(".")[0]
+        candidates = [
+            sym.upper(),          # as-is
+            f"{base}.OQ",         # XM NASDAQ (AAPL.OQ)
+            f"{base}.N",          # XM NYSE
+            f"{base}.NY",
+            f"{base}.US",
+            base,                 # plain
+            f"{base}m",           # micro
+            f"#{base}",           # prefixed
+        ]
+        found = None
+        for candidate in candidates:
+            try:
+                mt5_client._ensure_symbol(candidate)
+                found = candidate
+                break
+            except Exception:
+                continue
+        if found:
+            valid.append(found)
+        else:
+            invalid.append(sym.upper())
+    return {"valid": valid, "invalid": invalid}
 
 
 @app.post("/api/trade", dependencies=[Depends(require_key)])
@@ -444,22 +545,32 @@ async def direct_trade(req: DirectTradeRequest):
         action = req.action.upper()
         if action not in {"BUY", "SELL"}:
             raise HTTPException(status_code=400, detail="action must be BUY or SELL")
+        symbol = req.symbol.upper()
         action_enum = Action.BUY if action == "BUY" else Action.SELL
         result = mt5_client.order_send(
-            symbol=req.symbol.upper(),
+            symbol=symbol,
             action=action_enum,
             lot=req.lot,
             sl=req.sl,
             tp=req.tp,
-            comment="metabot-direct"
+            comment="metabot-direct",
+            magic=settings.gold_magic if market_group(symbol) == "gold" else settings.magic,
         )
         if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("comment", "Order failed"))
+            mt5_msg = result.get("comment", "Order failed")
+            log.warning("MT5 order rejected — %s %s lot=%.2f: %s", action, symbol, req.lot, mt5_msg)
+            raise HTTPException(status_code=400, detail=mt5_msg)
         return result
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.get("/api/logs", dependencies=[Depends(require_key)])
+async def get_logs(limit: int = 100, level: str | None = None):
+    from . import log_store
+    return {"logs": log_store.get(limit=limit, level=level or None)}
 
 
 @app.get("/api/history", dependencies=[Depends(require_key)])

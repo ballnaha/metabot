@@ -18,6 +18,8 @@ import {
   Typography,
 } from "@mui/material";
 import {
+  BellOff,
+  BellRing,
   Filter,
   Layers,
   Save,
@@ -37,6 +39,7 @@ type BotSettingsForm = {
   position_sizing_mode: string;
   stake_amount: number;
   max_open_trades: number;
+  max_crypto_open_trades?: number;
   magic: number;
   atr_sl_mult: number;
   default_rr: number;
@@ -44,6 +47,7 @@ type BotSettingsForm = {
   auto_trade_interval: number;
   use_ai?: boolean;
   bot_enabled: boolean;
+  telegram_enabled?: boolean;
 };
 
 type CryptoBotSettingsProps = {
@@ -63,6 +67,8 @@ type CryptoBotSettingsProps = {
   onDetectCryptoSymbols: () => void;
   detectingCryptoSymbols: boolean;
   allCryptoSymbols: string[];
+  onValidateSymbols: () => void;
+  validatingSymbols: boolean;
 };
 
 function QuickNumberInput({
@@ -203,6 +209,8 @@ export default function CryptoBotSettings({
   onDetectCryptoSymbols,
   detectingCryptoSymbols,
   allCryptoSymbols,
+  onValidateSymbols,
+  validatingSymbols,
 }: CryptoBotSettingsProps) {
   const [newSymbolInput, setNewSymbolInput] = useState("");
 
@@ -414,6 +422,26 @@ export default function CryptoBotSettings({
                   >
                     {detectingCryptoSymbols ? <CircularProgress size={16} color="inherit" /> : "สแกนเหรียญ"}
                   </Button>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={onValidateSymbols}
+                    disabled={validatingSymbols}
+                    sx={{
+                      height: 40,
+                      borderColor: "rgba(234, 179, 8, 0.25)",
+                      color: "#fbbf24",
+                      fontWeight: 600,
+                      px: 2,
+                      minWidth: "fit-content",
+                      bgcolor: "rgba(234, 179, 8, 0.04)",
+                      "&:hover": { borderColor: "#eab308", bgcolor: "rgba(234, 179, 8, 0.08)" },
+                      "&.Mui-disabled": { color: "rgba(255,255,255,0.2)" },
+                      borderRadius: 1,
+                    }}
+                  >
+                    {validatingSymbols ? <CircularProgress size={16} color="inherit" /> : "กรองเหรียญ"}
+                  </Button>
                 </Stack>
 
                 {/* Render current tags (chips) */}
@@ -477,9 +505,9 @@ export default function CryptoBotSettings({
 
             <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
               <QuickNumberInput
-                label="จำนวนช่องสูงสุด"
-                value={settingsForm.max_open_trades}
-                onChange={(val) => patchSettings({ max_open_trades: val })}
+                label="จำนวนช่องคริปโตสูงสุด"
+                value={settingsForm.max_crypto_open_trades ?? settingsForm.max_open_trades}
+                onChange={(val) => patchSettings({ max_crypto_open_trades: val })}
                 step={1}
                 min={1}
                 precision={0}
@@ -619,6 +647,21 @@ export default function CryptoBotSettings({
                 </Box>
               </Stack>
               <Switch checked={settingsForm.bot_enabled ?? false} onChange={(e) => patchSettings({ bot_enabled: e.target.checked })} color="success" />
+            </Box>
+
+            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", px: 1.25, py: 1, bgcolor: "rgba(255,255,255,0.01)", border: "1px solid rgba(255,255,255,0.03)", borderRadius: 2 }}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                {settingsForm.telegram_enabled ? <BellRing size={16} color="#3b82f6" /> : <BellOff size={16} color="#94a3b8" />}
+                <Box>
+                  <Typography variant="body2" sx={{ fontWeight: 650 }}>
+                    {settingsForm.telegram_enabled ? "เปิดการแจ้งเตือน Telegram" : "ปิดการแจ้งเตือน Telegram"}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {settingsForm.telegram_enabled ? "บอทจะส่งแจ้งเตือนสัญญาณ ปิด position และสรุปรายวัน" : "หยุดส่งข้อความทุกประเภทไปยัง Telegram"}
+                  </Typography>
+                </Box>
+              </Stack>
+              <Switch checked={settingsForm.telegram_enabled ?? true} onChange={(e) => patchSettings({ telegram_enabled: e.target.checked })} color="primary" />
             </Box>
           </Stack>
         </Box>

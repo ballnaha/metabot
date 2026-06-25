@@ -1,9 +1,15 @@
 """Shared pydantic models used across the API, advisor and trader."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from enum import Enum
 from typing import List, Optional
+
+_TZ_TH = timezone(timedelta(hours=7))
+
+
+def _now_th() -> datetime:
+    return datetime.now(_TZ_TH)
 
 from pydantic import BaseModel, Field
 
@@ -77,7 +83,7 @@ class Recommendation(BaseModel):
     ai_used: bool = False
     # "" | "confirmed" | "filtered" | "unavailable" — how AI affected the call
     ai_verdict: str = ""
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_now_th)
 
 
 class PendingTrade(BaseModel):
@@ -87,7 +93,7 @@ class PendingTrade(BaseModel):
     recommendation: Recommendation
     lot: float
     status: str = "pending"  # pending | confirmed | cancelled | executed | failed
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_now_th)
     result: Optional[dict] = None
 
 

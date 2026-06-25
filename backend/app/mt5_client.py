@@ -7,8 +7,10 @@ terminal.
 from __future__ import annotations
 
 import threading
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
+
+TZ_TH = timezone(timedelta(hours=7))
 
 import pandas as pd
 
@@ -110,7 +112,7 @@ def get_rates(symbol: str, timeframe: str, bars: int = 200) -> pd.DataFrame:
         code, msg = mt5.last_error()
         raise MT5Error(f"No rates for {symbol} {timeframe} ({code}): {msg}")
     df = pd.DataFrame(rates)
-    df["time"] = pd.to_datetime(df["time"], unit="s")
+    df["time"] = pd.to_datetime(df["time"], unit="s") + pd.Timedelta(hours=7)
     return df
 
 
@@ -170,7 +172,7 @@ def positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
                 "profit": p.profit,
                 "magic": p.magic,
                 "contract_size": contract_size,
-                "time": datetime.utcfromtimestamp(p.time).isoformat(),
+                "time": datetime.fromtimestamp(p.time, tz=TZ_TH).strftime("%Y-%m-%dT%H:%M:%S"),
             }
         )
     return out
@@ -193,7 +195,7 @@ def history_deals(days: int = 30) -> List[Dict[str, Any]]:
             {
                 "ticket": d.ticket,
                 "order": d.order,
-                "time": datetime.fromtimestamp(d.time).isoformat(),
+                "time": datetime.fromtimestamp(d.time, tz=TZ_TH).strftime("%Y-%m-%dT%H:%M:%S"),
                 "symbol": d.symbol,
                 "type": "BUY" if d.type == mt5.DEAL_TYPE_BUY else "SELL",
                 "entry": "IN" if d.entry == mt5.DEAL_ENTRY_IN else ("OUT" if d.entry == mt5.DEAL_ENTRY_OUT else "INOUT"),
@@ -228,6 +230,7 @@ def order_send(
     tp: Optional[float] = None,
     deviation: int = 20,
     comment: str = "metabot",
+    magic: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Send a market order. Returns a normalised result dict."""
     _require_mt5()
@@ -250,7 +253,7 @@ def order_send(
         "type": order_type,
         "price": price,
         "deviation": deviation,
-        "magic": settings.magic,
+        "magic": settings.magic if magic is None else int(magic),
         "comment": comment,
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": _filling_mode(symbol),

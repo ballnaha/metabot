@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     # Telegram
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
+    telegram_enabled: bool = True
 
     # Trading
     symbols: str = "EURUSD,GOLD,BTCUSD"
@@ -39,13 +40,30 @@ class Settings(BaseSettings):
     risk_per_trade: float = 0.01
     max_lot: float = 1.0
     magic: int = 556677
+    gold_magic: int = 556688
     atr_sl_mult: float = 1.5
     default_rr: float = 2.0
     bot_enabled: bool = True
+    gold_bot_enabled: bool = True
     auto_trade_interval: int = 60
     position_sizing_mode: str = "risk_pct"
     max_open_trades: int = 5
+    max_crypto_open_trades: int = 5
+    max_gold_open_trades: int = 3
     stake_amount: float = 0.0
+
+    # Stocks (US equities) — independent settings
+    stock_bot_enabled: bool = False        # ปิดไว้ก่อนจนกว่าจะตั้งค่าครบ
+    stock_magic: int = 0                   # auto-generated
+    max_stock_open_trades: int = 4         # กระจายไม่เกิน 4 ตัว
+    stock_timeframe: str = "H4"           # H4 เหมาะกับหุ้น — ตัด noise ได้ดี
+    stock_strategy: str = "trend"          # trend follow เหมาะกับหุ้น US
+    stock_risk_per_trade: float = 0.005    # 0.5% conservative สำหรับ CFD
+    stock_max_lot: float = 5.0             # หุ้น CFD lot ใหญ่กว่า crypto
+    stock_atr_sl_mult: float = 2.0         # wide stop — หุ้นมี overnight gap
+    stock_rr: float = 3.0                  # หุ้น trend ได้ไกล R:R ควรสูง
+    stock_use_ai: bool = False
+    stock_auto_trade_interval: int = 900   # 15 นาที — หุ้นไม่ต้องสแกนบ่อย
 
     # API
     api_host: str = "127.0.0.1"
@@ -137,11 +155,17 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
+    import random
     s = Settings()
     if s.magic == 0:
-        import random
         s.magic = random.randint(100000, 999999)
         s.update_settings({"magic": s.magic})
+    if s.gold_magic == 0:
+        s.gold_magic = random.randint(100000, 999999)
+        s.update_settings({"gold_magic": s.gold_magic})
+    if s.stock_magic == 0:
+        s.stock_magic = random.randint(100000, 999999)
+        s.update_settings({"stock_magic": s.stock_magic})
     return s
 
 
