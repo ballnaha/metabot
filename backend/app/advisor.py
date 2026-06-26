@@ -14,6 +14,7 @@ from typing import List, Optional
 import httpx
 
 from .config import settings
+from .market_groups import market_group
 from .models import Action, AIOpinion, IndicatorSnapshot, Recommendation
 
 SYSTEM_PROMPT = (
@@ -166,7 +167,7 @@ def decide(
         else:
             agree = [o for o in valid if o.action == s_action]
             agree_ratio = len(agree) / len(valid)
-            if agree_ratio >= 0.5:
+            if agree_ratio > 0.5:
                 ai_conf = sum(o.confidence for o in agree) / len(agree)
                 action = s_action
                 confidence = round((s_conf + ai_conf) / 2, 2)
@@ -218,12 +219,15 @@ def decide(
 
 
 def _atr_levels(snap, action, sl, tp):
-    atr = snap.atr or (snap.price * 0.005)
-    sl_dist = settings.atr_sl_mult * atr
+    is_stock = market_group(snap.symbol) == "stock"
+    sl_mult  = settings.stock_atr_sl_mult if is_stock else settings.atr_sl_mult
+    rr       = settings.stock_rr          if is_stock else settings.default_rr
+    atr      = snap.atr or (snap.price * 0.005)
+    sl_dist  = sl_mult * atr
     if action == Action.BUY:
         sl = sl or snap.price - sl_dist
-        tp = tp or snap.price + sl_dist * settings.default_rr
+        tp = tp or snap.price + sl_dist * rr
     else:
         sl = sl or snap.price + sl_dist
-        tp = tp or snap.price - sl_dist * settings.default_rr
+        tp = tp or snap.price - sl_dist * rr
     return round(sl, 6), round(tp, 6)

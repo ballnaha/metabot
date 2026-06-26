@@ -29,6 +29,7 @@ from typing import Dict, List, Optional, Type
 import pandas as pd
 
 from .config import settings
+from .market_groups import market_group
 from .models import Action, IndicatorSnapshot, StrategySignal
 
 
@@ -45,18 +46,17 @@ class Strategy:
     def atr_levels(
         self, snap: IndicatorSnapshot, action: Action
     ) -> tuple[Optional[float], Optional[float]]:
-        """Default SL/TP from ATR, respecting settings.atr_sl_mult / default_rr."""
+        """Default SL/TP from ATR, using asset-class-specific multipliers."""
         if action == Action.HOLD:
             return None, None
-        atr = snap.atr or (snap.price * 0.005)
-        dist = settings.atr_sl_mult * atr
+        is_stock = market_group(snap.symbol) == "stock"
+        sl_mult = settings.stock_atr_sl_mult if is_stock else settings.atr_sl_mult
+        rr      = settings.stock_rr          if is_stock else settings.default_rr
+        atr  = snap.atr or (snap.price * 0.005)
+        dist = sl_mult * atr
         if action == Action.BUY:
-            return round(snap.price - dist, 6), round(
-                snap.price + dist * settings.default_rr, 6
-            )
-        return round(snap.price + dist, 6), round(
-            snap.price - dist * settings.default_rr, 6
-        )
+            return round(snap.price - dist, 6), round(snap.price + dist * rr, 6)
+        return round(snap.price + dist, 6), round(snap.price - dist * rr, 6)
 
     @staticmethod
     def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -95,7 +95,7 @@ class Strategy:
                 reasons=bull_reasons + bear_reasons,
             )
 
-        confidence = round(cls._clamp(0.35 + (0.65 * strength)), 2)
+        confidence = round(cls._clamp(0.25 + (0.75 * strength)), 2)
         if net > 0:
             return StrategySignal(action=Action.BUY, confidence=confidence, reasons=bull_reasons)
         return StrategySignal(action=Action.SELL, confidence=confidence, reasons=bear_reasons)
@@ -205,14 +205,14 @@ class EmaMacdRsiStrategy(Strategy):
         if snap.rsi is not None:
             weight = 0.25
             max_score += weight
-            if snap.rsi < 50:
-                strength = self._clamp((50 - snap.rsi) / 20)
+            if snap.rsi < 45:
+                strength = self._clamp((45 - snap.rsi) / 25)
                 bull_score += weight * strength
-                bull.append(f"RSI support {snap.rsi:.0f} ({strength:.0%})")
-            elif snap.rsi > 50:
-                strength = self._clamp((snap.rsi - 50) / 20)
+                bull.append(f"RSI oversold {snap.rsi:.0f} ({strength:.0%})")
+            elif snap.rsi > 55:
+                strength = self._clamp((snap.rsi - 55) / 25)
                 bear_score += weight * strength
-                bear.append(f"RSI pressure {snap.rsi:.0f} ({strength:.0%})")
+                bear.append(f"RSI overbought {snap.rsi:.0f} ({strength:.0%})")
 
         sig = self._weighted_signal(bull_score, bear_score, max_score, bull, bear)
         sig.stop_loss, sig.take_profit = self.atr_levels(snap, sig.action)
@@ -308,19 +308,20 @@ class MeanReversionStrategy(Strategy):
         if snap.rsi is not None:
             weight = 0.45
             max_score += weight
-            if snap.rsi < 50:
-                strength = self._clamp((50 - snap.rsi) / 20)
+            if snap.rsi < 40:
+                strength = self._clamp((40 - snap.rsi) / 20)
                 bull_score += weight * strength
-                bull.append(f"RSI reversion support {snap.rsi:.0f} ({strength:.0%})")
-            elif snap.rsi > 50:
-                strength = self._clamp((snap.rsi - 50) / 20)
+                bull.append(f"RSI oversold {snap.rsi:.0f} ({strength:.0%})")
+            elif snap.rsi > 60:
+                strength = self._clamp((snap.rsi - 60) / 20)
                 bear_score += weight * strength
-                bear.append(f"RSI reversion pressure {snap.rsi:.0f} ({strength:.0%})")
+                bear.append(f"RSI overbought {snap.rsi:.0f} ({strength:.0%})")
 
         sig = self._weighted_signal(bull_score, bear_score, max_score, bull, bear, threshold=0.32)
         if sig.action != Action.HOLD:
             atr = snap.atr or (snap.price * 0.005)
-            dist = settings.atr_sl_mult * atr
+            is_stock = market_group(snap.symbol) == "stock"
+            dist = (settings.stock_atr_sl_mult if is_stock else settings.atr_sl_mult) * atr
             mid = (snap.bb_upper + snap.bb_lower) / 2 if snap.bb_upper else snap.price
             if sig.action == Action.BUY:
                 sig.stop_loss = round(snap.price - dist, 6)

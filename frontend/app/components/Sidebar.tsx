@@ -48,7 +48,6 @@ const NAV_ITEMS: NavItem[] = [
   { label: "คริปโต",   icon: <Coins size={18} />,      path: "/crypto" },
   { label: "ทอง",      icon: <Award size={18} />,       path: "/gold" },
   { label: "หุ้น",     icon: <Globe size={18} />,       path: "/stocks" },
-  { label: "ตั้งค่า",  icon: <Settings size={18} />,   path: "/settings" },
 ];
 
 function SideBtn({
@@ -164,6 +163,16 @@ export default function Sidebar({
         <SideBtn icon={<ScrollText size={18} />} label="Bot Activity Log" color="#f59e0b" onClick={onOpenLog} />
         <SideBtn icon={<RefreshCw size={18} />}  label="ซิงก์ข้อมูล"       onClick={onSync} />
       </Stack>
+
+      <Divider sx={{ width: 32, borderColor: "rgba(255,255,255,0.05)", mt: 1, mb: 1 }} />
+
+      {/* Settings — bottom nav */}
+      <SideBtn
+        icon={<Settings size={18} />}
+        label="ตั้งค่า"
+        active={pathname === "/settings"}
+        onClick={() => router.push("/settings")}
+      />
 
       <Divider sx={{ width: 32, borderColor: "rgba(255,255,255,0.05)", mt: 1, mb: 1 }} />
 

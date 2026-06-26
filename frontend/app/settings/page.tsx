@@ -26,7 +26,7 @@ import {
   DialogTitle,
   IconButton,
 } from "@mui/material";
-import { Bot, Key, Pencil, Plus, Save, Settings, Sliders, Trash2 } from "lucide-react";
+import { Bot, Key, Pencil, Plus, Save, Settings, Sliders, Trash2, ShieldAlert } from "lucide-react";
 
 type MT5Profile = { id: string; label: string; login: number; server: string };
 
@@ -98,6 +98,129 @@ function SectionHeader({
   );
 }
 
+function QuickNumberInput({
+  label,
+  value,
+  onChange,
+  step = 1,
+  min = 0,
+  max = 999999,
+  precision = 0,
+  helperText,
+}: {
+  label: string;
+  value: number;
+  onChange: (val: number) => void;
+  step?: number;
+  min?: number;
+  max?: number;
+  precision?: number;
+  helperText?: string;
+}) {
+  const handleDecrement = () => {
+    const newVal = Math.max(min, Number((value - step).toFixed(precision)));
+    onChange(newVal);
+  };
+
+  const handleIncrement = () => {
+    const newVal = Math.min(max, Number((value + step).toFixed(precision)));
+    onChange(newVal);
+  };
+
+  return (
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5, width: "100%" }}>
+      <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 600, px: 0.5 }}>
+        {label}
+      </Typography>
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          height: 40,
+          bgcolor: "rgba(255, 255, 255, 0.01)",
+          border: "1px solid rgba(255, 255, 255, 0.08)",
+          borderRadius: 2,
+          overflow: "hidden",
+          transition: "all 0.2s",
+          "&:focus-within": {
+            borderColor: "#3b82f6",
+            boxShadow: "0 0 0 1px rgba(59, 130, 246, 0.2)",
+          },
+        }}
+      >
+        <Button
+          onClick={handleDecrement}
+          disabled={value <= min}
+          sx={{
+            minWidth: 40,
+            width: 40,
+            height: "100%",
+            borderRadius: 0,
+            color: "#94a3b8",
+            bgcolor: "transparent",
+            fontSize: "1.2rem",
+            fontWeight: 500,
+            borderRight: "1px solid rgba(255, 255, 255, 0.05)",
+            "&:hover": { bgcolor: "rgba(255, 255, 255, 0.03)", color: "#fff" },
+            "&.Mui-disabled": { color: "rgba(255,255,255,0.05)" },
+          }}
+        >
+          -
+        </Button>
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => {
+            const val = parseFloat(e.target.value);
+            if (!isNaN(val)) {
+              onChange(Math.max(min, Math.min(max, Number(val.toFixed(precision)))));
+            } else if (e.target.value === "") {
+              onChange(min);
+            }
+          }}
+          style={{
+            flexGrow: 1,
+            width: "100%",
+            height: "100%",
+            border: "none",
+            background: "transparent",
+            color: "#fff",
+            textAlign: "center",
+            fontFamily: "ui-monospace, monospace",
+            fontWeight: 600,
+            fontSize: "1rem",
+            outline: "none",
+          }}
+        />
+        <Button
+          onClick={handleIncrement}
+          disabled={value >= max}
+          sx={{
+            minWidth: 40,
+            width: 40,
+            height: "100%",
+            borderRadius: 0,
+            color: "#94a3b8",
+            bgcolor: "transparent",
+            fontSize: "1.2rem",
+            fontWeight: 500,
+            borderLeft: "1px solid rgba(255, 255, 255, 0.05)",
+            "&:hover": { bgcolor: "rgba(255, 255, 255, 0.03)", color: "#fff" },
+            "&.Mui-disabled": { color: "rgba(255,255,255,0.05)" },
+          }}
+        >
+          +
+        </Button>
+      </Box>
+      {helperText && (
+        <Typography variant="caption" sx={{ color: "#64748b", px: 0.5, fontSize: "0.78rem" }}>
+          {helperText}
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
 export default function SettingsPage() {
   const toastr = useToastr();
 
@@ -118,6 +241,8 @@ export default function SettingsPage() {
     telegram_bot_token: "",
     telegram_chat_id: "",
     telegram_enabled: true,
+    max_daily_loss_pct: 0,
+    max_consecutive_losses: 0,
   });
 
   // Account profiles (editable, stored in localStorage)
@@ -468,7 +593,7 @@ export default function SettingsPage() {
               </Card>
             </Box>
 
-            {/* Row 2 — Telegram (full width, contained) */}
+            {/* Row 2 — Telegram & Risk settings */}
             <Box sx={{ display: "grid", gap: 3, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
               <Card>
                 <CardContent sx={{ display: "flex", flexDirection: "column", gap: 2.5 }}>
@@ -498,6 +623,35 @@ export default function SettingsPage() {
                       เปิดใช้การแจ้งเตือน Telegram
                     </Typography>
                   </Stack>
+                </CardContent>
+              </Card>
+
+              {/* Risk Management & Circuit Breakers */}
+              <Card>
+                <CardContent sx={{ display: "flex", flexDirection: "column", gap: 2.5 }}>
+                  <SectionHeader icon={<ShieldAlert size={16} />} title="Risk Management & Circuit Breakers" />
+                  
+                  <QuickNumberInput
+                    label="ขีดจำกัดขาดทุนรายวัน: Max Daily Loss (%)"
+                    value={form.max_daily_loss_pct !== undefined && form.max_daily_loss_pct !== null ? Math.round(form.max_daily_loss_pct * 100) : 0}
+                    onChange={(val) => setForm({ ...form, max_daily_loss_pct: val / 100 })}
+                    step={1}
+                    min={0}
+                    max={100}
+                    precision={0}
+                    helperText="สั่งพักการเทรดอัตโนมัติเมื่อเสียถึง % ของบาลานซ์ในวันนั้น (0 = ปิดใช้งาน เช่น 5 = 5%)"
+                  />
+
+                  <QuickNumberInput
+                    label="จำนวนไม้ที่ขาดทุนติดต่อกัน: Max Consecutive Losses"
+                    value={form.max_consecutive_losses !== undefined && form.max_consecutive_losses !== null ? form.max_consecutive_losses : 0}
+                    onChange={(val) => setForm({ ...form, max_consecutive_losses: val })}
+                    step={1}
+                    min={0}
+                    max={100}
+                    precision={0}
+                    helperText="สั่งพักการเทรดอัตโนมัติเมื่อเสียติดต่อกันตามจำนวนครั้ง (0 = ปิดใช้งาน)"
+                  />
                 </CardContent>
               </Card>
             </Box>

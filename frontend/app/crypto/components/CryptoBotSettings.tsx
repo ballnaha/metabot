@@ -44,7 +44,10 @@ type BotSettingsForm = {
   atr_sl_mult: number;
   default_rr: number;
   strategy: string;
+  crypto_timeframe: string;
   auto_trade_interval: number;
+  scanMins: number;
+  setScanMins: (v: number) => void;
   use_ai?: boolean;
   bot_enabled: boolean;
   telegram_enabled?: boolean;
@@ -69,6 +72,8 @@ type CryptoBotSettingsProps = {
   allCryptoSymbols: string[];
   onValidateSymbols: () => void;
   validatingSymbols: boolean;
+  scanMins: number;
+  setScanMins: (v: number) => void;
 };
 
 function QuickNumberInput({
@@ -213,7 +218,10 @@ export default function CryptoBotSettings({
   allCryptoSymbols,
   onValidateSymbols,
   validatingSymbols,
+  scanMins,
+  setScanMins,
 }: CryptoBotSettingsProps) {
+  const TF_DEFAULTS: Record<string, number> = { M15: 3, M30: 5, H1: 15, H4: 30, D1: 60 };
   const [newSymbolInput, setNewSymbolInput] = useState("");
 
   const handleAddSymbol = () => {
@@ -577,6 +585,45 @@ export default function CryptoBotSettings({
               />
             </Box>
 
+            <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5, width: "100%" }}>
+                <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 600, px: 0.5 }}>
+                  Timeframe
+                </Typography>
+                <Select
+                  size="small"
+                  fullWidth
+                  value={settingsForm.crypto_timeframe || "H4"}
+                  onChange={(e) => {
+                    patchSettings({ crypto_timeframe: e.target.value });
+                    setScanMins(TF_DEFAULTS[e.target.value] ?? 5);
+                  }}
+                  sx={{
+                    height: 40, borderRadius: 2,
+                    bgcolor: "rgba(255,255,255,0.01)",
+                    "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.08)" },
+                    "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.2) !important" },
+                    "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: "#3b82f6 !important" },
+                    "& .MuiSelect-select": { color: "#fff" }
+                  }}
+                >
+                  {["M15","M30","H1","H4","D1"].map((tf) => (
+                    <MenuItem key={tf} value={tf}>{tf}</MenuItem>
+                  ))}
+                </Select>
+              </Box>
+              <QuickNumberInput
+                label="สแกน Signal ทุก (นาที)"
+                value={scanMins}
+                onChange={setScanMins}
+                step={1}
+                min={1}
+                max={120}
+                precision={0}
+                helperText={`default: ${TF_DEFAULTS[settingsForm.crypto_timeframe] ?? 5} นาที สำหรับ ${settingsForm.crypto_timeframe || "H4"}`}
+              />
+            </Box>
+
             <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1.2fr 0.8fr" } }}>
               <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5, width: "100%" }}>
                 <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 600, px: 0.5 }}>
@@ -608,14 +655,6 @@ export default function CryptoBotSettings({
                 </Select>
               </Box>
 
-              <QuickNumberInput
-                label="สแกนทุก (วินาที)"
-                value={settingsForm.auto_trade_interval}
-                onChange={(val) => patchSettings({ auto_trade_interval: val })}
-                step={10}
-                min={10}
-                precision={0}
-              />
             </Box>
 
             {activeStrategy && (

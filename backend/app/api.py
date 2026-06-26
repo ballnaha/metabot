@@ -176,6 +176,9 @@ class SettingsUpdateRequest(BaseModel):
     telegram_enabled: bool | None = None
     symbols: str | None = None
     default_timeframe: str | None = None
+    crypto_timeframe: str | None = None
+    gold_timeframe: str | None = None
+    gold_strategy: str | None = None
     strategy: str | None = None
     risk_per_trade: float | None = None
     max_lot: float | None = None
@@ -203,6 +206,11 @@ class SettingsUpdateRequest(BaseModel):
     stock_rr: float | None = None
     stock_use_ai: bool | None = None
     stock_auto_trade_interval: int | None = None
+    max_spread_points: int | None = None
+    max_daily_loss_pct: float | None = None
+    max_consecutive_losses: int | None = None
+    breakeven_r: float | None = None
+    trailing_stop_r: float | None = None
 
 
 @app.get("/api/settings", dependencies=[Depends(require_key)])
@@ -223,6 +231,9 @@ async def get_settings_endpoint():
         "telegram_enabled": settings.telegram_enabled,
         "symbols": settings.symbols,
         "default_timeframe": settings.default_timeframe,
+        "crypto_timeframe": settings.crypto_timeframe,
+        "gold_timeframe": settings.gold_timeframe,
+        "gold_strategy": settings.gold_strategy,
         "strategy": settings.strategy,
         "risk_per_trade": settings.risk_per_trade,
         "max_lot": settings.max_lot,
@@ -250,6 +261,11 @@ async def get_settings_endpoint():
         "stock_rr": settings.stock_rr,
         "stock_use_ai": settings.stock_use_ai,
         "stock_auto_trade_interval": settings.stock_auto_trade_interval,
+        "max_spread_points": settings.max_spread_points,
+        "max_daily_loss_pct": settings.max_daily_loss_pct,
+        "max_consecutive_losses": settings.max_consecutive_losses,
+        "breakeven_r": settings.breakeven_r,
+        "trailing_stop_r": settings.trailing_stop_r,
     }
 
 

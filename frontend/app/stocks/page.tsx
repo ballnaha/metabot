@@ -50,7 +50,30 @@ import {
   ShieldCheck,
   X,
   Zap,
+  Info,
+  ArrowUp,
+  ArrowDown,
+  TrendingUp,
 } from "lucide-react";
+
+const STRATEGY_CONDITIONS: Record<string, { label: string; buy: string[]; sell: string[]; note?: string }> = {
+  ema_macd_rsi: { label: "EMA + MACD + RSI",
+    buy:  ["EMA12 สูงกว่า EMA26 — แนวโน้มขาขึ้น (40%)", "MACD Histogram > 0 — momentum เป็นบวก (35%)", "RSI < 45 — ยังไม่ overbought (25%)"],
+    sell: ["EMA12 ต่ำกว่า EMA26 — แนวโน้มขาลง (40%)", "MACD Histogram < 0 — momentum เป็นลบ (35%)", "RSI > 55 — ยังไม่ oversold (25%)"],
+    note: "สัญญาณออกเมื่อ weighted score รวมเกิน 22% — ต้องการหลายอย่างพร้อมกัน" },
+  trend: { label: "Trend Follow",
+    buy:  ["ราคาอยู่เหนือ EMA50 (45%)", "EMA50 มีความชันขึ้น — เทรนด์แข็งแกร่ง (30%)", "MACD Histogram > 0 — ยืนยัน momentum (25%)"],
+    sell: ["ราคาอยู่ใต้ EMA50 (45%)", "EMA50 มีความชันลง (30%)", "MACD Histogram < 0 (25%)"],
+    note: "เหมาะกับตลาดที่มีทิศทางชัด threshold 28%" },
+  mean_reversion: { label: "Mean Reversion",
+    buy:  ["ราคาต่ำกว่า Bollinger Band midpoint (55%)", "RSI < 40 — oversold คาดเด้งกลับ (45%)"],
+    sell: ["ราคาสูงกว่า Bollinger Band midpoint (55%)", "RSI > 60 — overbought คาดย้อนกลับ (45%)"],
+    note: "TP คือ Bollinger midpoint — เหมาะตลาดไซด์เวย์ threshold 32%" },
+  breakout: { label: "Breakout",
+    buy:  ["ราคาทะลุสูงสุดของ 20 แท่งก่อนหน้า (65%)", "MACD Histogram > 0 — ยืนยัน momentum (35%)"],
+    sell: ["ราคาทะลุต่ำสุดของ 20 แท่งก่อนหน้า (65%)", "MACD Histogram < 0 (35%)"],
+    note: "threshold สูงที่สุด 35% — ต้องทะลุชัดเจน ระวัง false breakout" },
+};
 
 type Account = {
   login: number;
@@ -68,6 +91,8 @@ type Position = {
   type: string;
   volume: number;
   price_open: number;
+  sl: number;
+  tp: number;
   price_current: number;
   profit: number;
   magic: number;
@@ -346,6 +371,29 @@ export default function StocksPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [scanLoading, setScanLoading] = useState(false);
   const [detecting, setDetecting] = useState(false);
+  const [conditionsOpen, setConditionsOpen] = useState(false);
+  const STOCK_TF_DEFAULTS: Record<string, number> = { M15: 3, M30: 5, H1: 15, H4: 30, D1: 60 };
+  const [stockScanMins, setStockScanMinsRaw] = useState<number>(30);
+  const setStockScanMins = useCallback((v: number) => {
+    setStockScanMinsRaw(v);
+    localStorage.setItem("stock_scan_mins", String(v));
+  }, []);
+  useEffect(() => {
+    const saved = localStorage.getItem("stock_scan_mins");
+    if (saved) { setStockScanMinsRaw(parseInt(saved, 10) || 30); return; }
+    if (settings.stock_timeframe) setStockScanMins(STOCK_TF_DEFAULTS[settings.stock_timeframe] ?? 30);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.stock_timeframe]);
+  const [stockFilterType, setStockFilterType] = useState<string>("liquid_100");
+  const handleSetStockFilterType = useCallback((v: string) => {
+    setStockFilterType(v);
+    localStorage.setItem("stock_filter_type", v);
+  }, []);
+  // Read localStorage after mount
+  useEffect(() => {
+    const saved = localStorage.getItem("stock_filter_type");
+    if (saved) setStockFilterType(saved);
+  }, []);
   const [validating, setValidating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -377,24 +425,21 @@ export default function StocksPage() {
   }, [stockSymbols, priceSearch]);
 
   const stockPositions = useMemo(
-    () => positions.filter((p) => {
-      if (!isStockSymbol(p.symbol)) return false;
-      // Accept positions tagged with stock_magic OR legacy magic (direct_trade bug fix)
-      if (!settings.stock_magic) return true;
-      return p.magic === settings.stock_magic || p.magic === settings.magic;
-    }),
-    [positions, settings.stock_magic, settings.magic]
+    () => positions.filter((p) => isStockSymbol(p.symbol)),
+    [positions]
   );
   const stockHistory = useMemo(
-    () => history.filter((h) => {
-      if (!isStockSymbol(h.symbol)) return false;
-      if (!settings.stock_magic) return true;
-      return h.magic === settings.stock_magic || h.magic === settings.magic;
-    }),
-    [history, settings.stock_magic, settings.magic]
+    () => history.filter((h) => isStockSymbol(h.symbol)),
+    [history]
   );
   const stockOpenPl = stockPositions.reduce((sum, p) => sum + (Number(p.profit) || 0), 0);
-  const realizedStockPl = stockHistory.filter((h) => h.entry === "OUT").reduce((sum, h) => sum + (Number(h.profit) || 0), 0);
+  const _sBotMagics = new Set([settings.stock_magic, settings.magic, settings.gold_magic].filter(Boolean));
+  const stockClosedHistory = stockHistory.filter((h) => h.entry === "OUT");
+  const botStockOpenPl = stockPositions.filter((p) => _sBotMagics.has(p.magic)).reduce((sum, p) => sum + (Number(p.profit) || 0), 0);
+  const manualStockOpenPl = stockPositions.filter((p) => !_sBotMagics.has(p.magic)).reduce((sum, p) => sum + (Number(p.profit) || 0), 0);
+  const realizedStockPl = stockClosedHistory.reduce((sum, h) => sum + (Number(h.profit) || 0), 0);
+  const botRealizedStockPl = stockClosedHistory.filter((h) => _sBotMagics.has(h.magic)).reduce((sum, h) => sum + (Number(h.profit) || 0), 0);
+  const manualRealizedStockPl = stockClosedHistory.filter((h) => !_sBotMagics.has(h.magic)).reduce((sum, h) => sum + (Number(h.profit) || 0), 0);
   const selectedTick = selectedSymbol
     ? (ticks[selectedSymbol] ?? Object.entries(ticks).find(([k]) => k.toUpperCase() === selectedSymbol.toUpperCase())?.[1] ?? null)
     : null;
@@ -486,8 +531,8 @@ export default function StocksPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           symbols: stockSymbols,
-          timeframe: settings.default_timeframe,
-          strategy: settings.strategy,
+          timeframe: settings.stock_timeframe || settings.default_timeframe,
+          strategy: settings.stock_strategy || settings.strategy,
           bars: 220,
         }),
       });
@@ -519,12 +564,12 @@ export default function StocksPage() {
     };
 
     refreshSignals();
-    const intervalId = setInterval(refreshSignals, 30_000);
+    const intervalId = setInterval(refreshSignals, stockScanMins * 60_000);
     return () => {
       active = false;
       clearInterval(intervalId);
     };
-  }, [stockSymbols.join(","), settings.default_timeframe, settings.strategy, runScan]);
+  }, [stockSymbols.join(","), settings.stock_timeframe, settings.strategy, runScan, stockScanMins]);
 
   async function stageTrade(symbol: string) {
     setTradeStagingSymbol(symbol);
@@ -534,10 +579,10 @@ export default function StocksPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           symbol,
-          timeframe: settings.default_timeframe,
+          timeframe: settings.stock_timeframe || settings.default_timeframe,
           bars: 220,
-          strategy: settings.strategy,
-          use_ai: settings.use_ai,
+          strategy: settings.stock_strategy || settings.strategy,
+          use_ai: settings.stock_use_ai ?? settings.use_ai,
           preview: true,
         }),
       });
@@ -664,7 +709,7 @@ export default function StocksPage() {
       setSettings(fresh);
       const cfgStock = (fresh.symbols || "")
         .split(",")
-        .map((s: string) => s.trim().toUpperCase())
+        .map((s: string) => s.trim())
         .filter(Boolean)
         .filter(isStockSymbol);
       setStockInput(cfgStock.length ? cfgStock.join(", ") : "AAPL,MSFT,TSLA,NVDA");
@@ -725,14 +770,42 @@ export default function StocksPage() {
                 label="Open Stock P/L"
                 value={`${stockOpenPl >= 0 ? "+" : ""}${fmt(stockOpenPl)} ${account?.currency || ""}`}
                 tone={stockOpenPl >= 0 ? "#10b981" : "#ef4444"}
-                sub={`${stockPositions.length} positions`}
+                sub={
+                  <Box sx={{ mt: 0.5 }}>
+                    <Typography variant="caption" sx={{ color: "#60a5fa", display: "block", lineHeight: 1.5 }}>
+                      Bot: {botStockOpenPl >= 0 ? "+" : ""}{fmt(botStockOpenPl)}
+                    </Typography>
+                    {manualStockOpenPl !== 0 && (
+                      <Typography variant="caption" sx={{ color: "#94a3b8", display: "block", lineHeight: 1.5 }}>
+                        Manual: {manualStockOpenPl >= 0 ? "+" : ""}{fmt(manualStockOpenPl)}
+                      </Typography>
+                    )}
+                    <Typography variant="caption" sx={{ color: "#64748b", display: "block", lineHeight: 1.5 }}>
+                      {stockPositions.length} positions
+                    </Typography>
+                  </Box>
+                }
               />
               <StatCard
                 icon={<History size={18} />}
                 label="Realized 7D"
                 value={`${realizedStockPl >= 0 ? "+" : ""}${fmt(realizedStockPl)} ${account?.currency || ""}`}
                 tone={realizedStockPl >= 0 ? "#10b981" : "#ef4444"}
-                sub={`${stockHistory.filter((h) => h.entry === "OUT").length} closed deals`}
+                sub={
+                  <Box sx={{ mt: 0.5 }}>
+                    <Typography variant="caption" sx={{ color: "#60a5fa", display: "block", lineHeight: 1.5 }}>
+                      Bot: {botRealizedStockPl >= 0 ? "+" : ""}{fmt(botRealizedStockPl)}
+                    </Typography>
+                    {manualRealizedStockPl !== 0 && (
+                      <Typography variant="caption" sx={{ color: "#94a3b8", display: "block", lineHeight: 1.5 }}>
+                        Manual: {manualRealizedStockPl >= 0 ? "+" : ""}{fmt(manualRealizedStockPl)}
+                      </Typography>
+                    )}
+                    <Typography variant="caption" sx={{ color: "#64748b", display: "block", lineHeight: 1.5 }}>
+                      {stockClosedHistory.length} closed deals
+                    </Typography>
+                  </Box>
+                }
               />
               <StatCard
                 icon={<Gauge size={18} />}
@@ -749,6 +822,93 @@ export default function StocksPage() {
                 }
               />
             </Box>
+
+            {/* Scan info bar */}
+            {(() => {
+              const TF_MINS: Record<string, number> = { M15: 15, M30: 30, H1: 60, H4: 240, D1: 1440 };
+              const tf = settings.stock_timeframe || "H4";
+              const tradeMins = TF_MINS[tf] ?? 240;
+              const stratKey = settings.stock_strategy || settings.strategy;
+              const cond = STRATEGY_CONDITIONS[stratKey];
+              return (
+                <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2, px: 0.5, flexWrap: "wrap" }}>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 0.6, px: 1.25, py: 0.5, borderRadius: 99, bgcolor: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.2)" }}>
+                      <Zap size={12} color="#60a5fa" />
+                      <Typography sx={{ fontSize: "0.72rem", fontWeight: 700, color: "#60a5fa", whiteSpace: "nowrap" }}>สแกน Signal ทุก {stockScanMins} นาที</Typography>
+                    </Box>
+                    <Typography sx={{ fontSize: "0.65rem", color: "#334155" }}>·</Typography>
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 0.6, px: 1.25, py: 0.5, borderRadius: 99, bgcolor: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.18)" }}>
+                      <TrendingUp size={12} color="#10b981" />
+                      <Typography sx={{ fontSize: "0.72rem", fontWeight: 700, color: "#10b981", whiteSpace: "nowrap" }}>ซื้อขายได้ทุก {tradeMins >= 60 ? `${tradeMins / 60} ชม.` : `${tradeMins} นาที`} ({tf})</Typography>
+                    </Box>
+                  </Stack>
+                  {cond && (
+                    <Button size="small" variant="text" startIcon={<Info size={13} />} onClick={() => setConditionsOpen(true)}
+                      sx={{ fontSize: "0.72rem", color: "#475569", px: 1, py: 0.4, minWidth: 0, "&:hover": { color: "#94a3b8", bgcolor: "rgba(255,255,255,0.04)" } }}>
+                      เงื่อนไขเข้าเทรด
+                    </Button>
+                  )}
+                </Box>
+              );
+            })()}
+
+            {/* Conditions Modal */}
+            {(() => {
+              const stratKey = settings.stock_strategy || settings.strategy;
+              const cond = STRATEGY_CONDITIONS[stratKey];
+              if (!cond) return null;
+              return (
+                <Dialog open={conditionsOpen} onClose={() => setConditionsOpen(false)} maxWidth="sm" fullWidth
+                  slotProps={{ paper: { sx: { bgcolor: "#0d1321", border: "1px solid rgba(59,130,246,0.2)", backgroundImage: "none" } } }}>
+                  <DialogTitle sx={{ pb: 1 }}>
+                    <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                      <Info size={16} color="#60a5fa" />
+                      <Box>
+                        <Typography sx={{ fontWeight: 800, color: "#f1f5f9", fontSize: "0.95rem" }}>เงื่อนไขการเข้าเทรด — {cond.label}</Typography>
+                        <Typography variant="caption" sx={{ color: "#475569" }}>{settings.stock_timeframe} · ATR SL ×{settings.stock_atr_sl_mult} · R:R {settings.stock_rr}</Typography>
+                      </Box>
+                    </Stack>
+                  </DialogTitle>
+                  <DialogContent dividers sx={{ borderColor: "rgba(255,255,255,0.07)", pt: 2 }}>
+                    <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}>
+                      <Box sx={{ p: 1.5, borderRadius: 1, bgcolor: "rgba(16,185,129,0.05)", border: "1px solid rgba(16,185,129,0.18)" }}>
+                        <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", mb: 1 }}>
+                          <ArrowUp size={14} color="#10b981" />
+                          <Typography sx={{ fontSize: "0.75rem", fontWeight: 800, color: "#10b981" }}>BUY เมื่อ</Typography>
+                        </Stack>
+                        <Stack spacing={0.6}>{cond.buy.map((c, i) => (
+                          <Stack key={i} direction="row" spacing={0.75} sx={{ alignItems: "flex-start" }}>
+                            <Box sx={{ width: 4, height: 4, borderRadius: "50%", bgcolor: "#10b981", mt: 0.75, flexShrink: 0 }} />
+                            <Typography variant="caption" sx={{ color: "#94a3b8", lineHeight: 1.55 }}>{c}</Typography>
+                          </Stack>
+                        ))}</Stack>
+                      </Box>
+                      <Box sx={{ p: 1.5, borderRadius: 1, bgcolor: "rgba(239,68,68,0.05)", border: "1px solid rgba(239,68,68,0.18)" }}>
+                        <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", mb: 1 }}>
+                          <ArrowDown size={14} color="#ef4444" />
+                          <Typography sx={{ fontSize: "0.75rem", fontWeight: 800, color: "#ef4444" }}>SELL เมื่อ</Typography>
+                        </Stack>
+                        <Stack spacing={0.6}>{cond.sell.map((c, i) => (
+                          <Stack key={i} direction="row" spacing={0.75} sx={{ alignItems: "flex-start" }}>
+                            <Box sx={{ width: 4, height: 4, borderRadius: "50%", bgcolor: "#ef4444", mt: 0.75, flexShrink: 0 }} />
+                            <Typography variant="caption" sx={{ color: "#94a3b8", lineHeight: 1.55 }}>{c}</Typography>
+                          </Stack>
+                        ))}</Stack>
+                      </Box>
+                    </Box>
+                    {cond.note && (
+                      <Box sx={{ mt: 1.5, px: 1.25, py: 0.75, bgcolor: "rgba(59,130,246,0.06)", borderRadius: 1, border: "1px solid rgba(59,130,246,0.15)" }}>
+                        <Typography variant="caption" sx={{ color: "#60a5fa" }}>💡 {cond.note}</Typography>
+                      </Box>
+                    )}
+                  </DialogContent>
+                  <DialogActions sx={{ borderTop: "1px solid rgba(255,255,255,0.07)", px: 2 }}>
+                    <Button size="small" onClick={() => setConditionsOpen(false)} sx={{ color: "#64748b" }}>ปิด</Button>
+                  </DialogActions>
+                </Dialog>
+              );
+            })()}
 
             <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", lg: "1.35fr 0.85fr" }, gap: 2 }}>
               <Card>
@@ -905,6 +1065,8 @@ export default function StocksPage() {
                             : 0;
                           const isProfit = p.profit >= 0;
                           const invested = p.volume * p.price_open * (p.contract_size ?? 1.0);
+                          const botMagics = new Set([settings.stock_magic, settings.magic, (settings as any).gold_magic].filter(Boolean));
+                          const isBot = botMagics.has(p.magic);
                           return (
                             <Box
                               key={p.ticket}
@@ -926,9 +1088,22 @@ export default function StocksPage() {
                                   />
                                   <Box sx={{ minWidth: 0 }}>
                                     <Typography noWrap sx={{ fontWeight: 750, lineHeight: 1.15 }}>{p.symbol}</Typography>
-                                    <Typography variant="caption" color="text.secondary" sx={{ ...MONO, display: "block", lineHeight: 1.2 }}>
-                                      Ticket #{p.ticket}
-                                    </Typography>
+                                    <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mt: 0.2 }}>
+                                      <Typography variant="caption" color="text.secondary" sx={{ ...MONO, lineHeight: 1.2 }}>
+                                        Ticket #{p.ticket}
+                                      </Typography>
+                                      <Chip
+                                        size="small"
+                                        label={isBot ? "Bot" : "Manual"}
+                                        sx={{
+                                          height: 14, fontSize: 9, fontWeight: 800, borderRadius: 0.5,
+                                          bgcolor: isBot ? "rgba(59,130,246,0.12)" : "rgba(148,163,184,0.1)",
+                                          color: isBot ? "#60a5fa" : "#94a3b8",
+                                          border: `1px solid ${isBot ? "rgba(59,130,246,0.25)" : "rgba(148,163,184,0.15)"}`,
+                                          "& .MuiChip-label": { px: 0.6 },
+                                        }}
+                                      />
+                                    </Box>
                                   </Box>
                                 </Stack>
                                 <Stack direction="row" spacing={0.75} sx={{ alignItems: "flex-start", flexShrink: 0 }}>
@@ -956,14 +1131,7 @@ export default function StocksPage() {
                                 </Stack>
                               </Stack>
 
-                              <Box
-                                sx={{
-                                  display: "grid",
-                                  gridTemplateColumns: { xs: "repeat(2,1fr)", sm: "repeat(4,1fr)" },
-                                  gap: 0.75, p: 1, mb: 0.5, borderRadius: 1,
-                                  bgcolor: "rgba(255,255,255,0.025)",
-                                }}
-                              >
+                              <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 0.75, p: 1, mb: 0.75, borderRadius: 1, bgcolor: "rgba(255,255,255,0.025)" }}>
                                 {[
                                   { label: "Lot",      value: fmt(p.volume, 2) },
                                   { label: "ราคาเข้า", value: fmt(p.price_open, 2) },
@@ -971,15 +1139,41 @@ export default function StocksPage() {
                                   { label: "เงินทุน",  value: fmt(invested, 2) },
                                 ].map((cell) => (
                                   <Box key={cell.label} sx={{ minWidth: 0 }}>
-                                    <Typography variant="caption" sx={{ display: "block", color: "#64748b", lineHeight: 1.2 }}>
-                                      {cell.label}
-                                    </Typography>
-                                    <Typography noWrap variant="caption" sx={{ ...MONO, display: "block", color: "#cbd5e1", fontWeight: 650, lineHeight: 1.25 }}>
-                                      {cell.value}
-                                    </Typography>
+                                    <Typography variant="caption" sx={{ display: "block", color: "#64748b", lineHeight: 1.2 }}>{cell.label}</Typography>
+                                    <Typography noWrap variant="caption" sx={{ ...MONO, display: "block", color: "#cbd5e1", fontWeight: 650, lineHeight: 1.25 }}>{cell.value}</Typography>
                                   </Box>
                                 ))}
                               </Box>
+                              {(p.sl > 0 || p.tp > 0) && (() => {
+                                const slPct = p.sl > 0 ? ((p.sl - p.price_open) / p.price_open) * 100 : null;
+                                const tpPct = p.tp > 0 ? ((p.tp - p.price_open) / p.price_open) * 100 : null;
+                                const distToSl = p.sl > 0 ? ((p.sl - p.price_current) / p.price_current) * 100 : null;
+                                const distToTp = p.tp > 0 ? ((p.tp - p.price_current) / p.price_current) * 100 : null;
+                                return (
+                                  <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0.75, px: 1, pb: 1 }}>
+                                    {p.sl > 0 && (
+                                      <Box sx={{ p: 0.75, borderRadius: 1, bgcolor: "rgba(239,68,68,0.07)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                                        <Typography variant="caption" sx={{ color: "#94a3b8", display: "block", fontSize: "0.62rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>Stop Loss</Typography>
+                                        <Typography sx={{ ...MONO, fontSize: "0.82rem", fontWeight: 800, color: "#f87171" }}>{fmt(p.sl, 2)}</Typography>
+                                        <Typography variant="caption" sx={{ ...MONO, color: "#64748b", fontSize: "0.68rem" }}>
+                                          {slPct !== null ? `${slPct >= 0 ? "+" : ""}${slPct.toFixed(2)}% จากเข้า` : ""}
+                                          {distToSl !== null ? `  ·  ${distToSl >= 0 ? "+" : ""}${distToSl.toFixed(2)}% จากปัจจุบัน` : ""}
+                                        </Typography>
+                                      </Box>
+                                    )}
+                                    {p.tp > 0 && (
+                                      <Box sx={{ p: 0.75, borderRadius: 1, bgcolor: "rgba(16,185,129,0.07)", border: "1px solid rgba(16,185,129,0.2)" }}>
+                                        <Typography variant="caption" sx={{ color: "#94a3b8", display: "block", fontSize: "0.62rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>Take Profit</Typography>
+                                        <Typography sx={{ ...MONO, fontSize: "0.82rem", fontWeight: 800, color: "#34d399" }}>{fmt(p.tp, 2)}</Typography>
+                                        <Typography variant="caption" sx={{ ...MONO, color: "#64748b", fontSize: "0.68rem" }}>
+                                          {tpPct !== null ? `${tpPct >= 0 ? "+" : ""}${tpPct.toFixed(2)}% จากเข้า` : ""}
+                                          {distToTp !== null ? `  ·  ${distToTp >= 0 ? "+" : ""}${distToTp.toFixed(2)}% จากปัจจุบัน` : ""}
+                                        </Typography>
+                                      </Box>
+                                    )}
+                                  </Box>
+                                );
+                              })()}
                             </Box>
                           );
                         })
@@ -1000,45 +1194,70 @@ export default function StocksPage() {
                 <Box sx={{ overflowX: "auto", mt: 2 }}>
                   <Table size="small">
                     <TableHead>
-                      <TableRow sx={{ "& th": { bgcolor: "#0d1321", borderBottomColor: "rgba(255,255,255,0.08)" } }}>
-                        <TableCell>เวลา</TableCell>
-                        <TableCell>Symbol</TableCell>
-                        <TableCell>ประเภท</TableCell>
-                        <TableCell align="right">Volume</TableCell>
-                        <TableCell align="right">ราคา</TableCell>
-                        <TableCell align="right">กำไร/ขาดทุน</TableCell>
+                      <TableRow sx={{ "& th": { bgcolor: "#0a1020", borderBottomColor: "rgba(255,255,255,0.08)", py: 1.25 } }}>
+                        <TableCell sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>เวลา</TableCell>
+                        <TableCell sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>Symbol</TableCell>
+                        <TableCell sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>ประเภท</TableCell>
+                        <TableCell align="right" sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>Volume</TableCell>
+                        <TableCell align="right" sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>ราคา</TableCell>
+                        <TableCell align="right" sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>กำไร / ขาดทุน</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {paginatedStockHistory.map((h) => (
-                        <TableRow
-                          key={`${h.ticket}-${h.time}`}
-                          sx={{ "& td": { borderBottomColor: "rgba(255,255,255,0.04)" } }}
-                        >
-                          <TableCell sx={{ ...MONO, color: "#94a3b8", fontSize: "0.78rem" }}>
-                            {formatBangkokTime(h.time)}
-                          </TableCell>
-                          <TableCell sx={{ ...MONO, fontWeight: 800 }}>{h.symbol}</TableCell>
-                          <TableCell>
-                            <Chip
-                              size="small"
-                              label={`${h.entry === "OUT" ? "ปิด" : "เปิด"} ${h.type}`}
-                              color={h.type === "BUY" ? "success" : "error"}
-                              variant="outlined"
-                              sx={{ height: 20, fontSize: "0.7rem", fontWeight: 700, borderRadius: 1 }}
-                            />
-                          </TableCell>
-                          <TableCell align="right" sx={MONO}>{fmt(h.volume, 2)}</TableCell>
-                          <TableCell align="right" sx={MONO}>{fmt(h.price, 2)}</TableCell>
-                          <TableCell
-                            align="right"
-                            sx={{ ...MONO, fontWeight: 800,
-                              color: h.profit > 0 ? "#10b981" : h.profit < 0 ? "#ef4444" : "#64748b" }}
+                      {paginatedStockHistory.map((h) => {
+                        const isLong  = h.entry === "IN" ? h.type === "BUY" : h.type === "SELL";
+                        const isOpen  = h.entry === "IN";
+                        const isBot   = _sBotMagics.has(h.magic);
+                        const ac      = isLong ? "#10b981" : "#ef4444";
+                        const abg     = isLong ? "rgba(16,185,129,0.08)" : "rgba(239,68,68,0.08)";
+                        const aborder = isLong ? "rgba(16,185,129,0.22)" : "rgba(239,68,68,0.22)";
+                        return (
+                          <TableRow
+                            key={`${h.ticket}-${h.time}`}
+                            sx={{ "& td": { borderBottomColor: "rgba(255,255,255,0.04)", py: 0.6 }, "&:hover": { bgcolor: "rgba(255,255,255,0.012)" } }}
                           >
-                            {h.profit > 0 ? "+" : ""}{fmt(h.profit)}
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                            <TableCell sx={{ ...MONO, color: "#64748b", fontSize: "0.75rem", whiteSpace: "nowrap" }}>
+                              {formatBangkokTime(h.time)}
+                            </TableCell>
+                            <TableCell>
+                              <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
+                                <Typography sx={{ ...MONO, fontWeight: 800, fontSize: "0.82rem", color: "#e2e8f0" }}>{h.symbol}</Typography>
+                                <Typography sx={{ ...MONO, fontSize: "0.68rem", color: "#334155" }}>#{h.ticket}</Typography>
+                              </Stack>
+                            </TableCell>
+                            <TableCell>
+                              <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
+                                <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.4, px: 0.75, py: 0.2, borderRadius: 0.75, bgcolor: abg, border: `1px solid ${aborder}` }}>
+                                  <Box sx={{ width: 4, height: 4, borderRadius: "50%", bgcolor: ac, flexShrink: 0 }} />
+                                  <Typography sx={{ fontSize: "0.7rem", fontWeight: 800, color: ac, whiteSpace: "nowrap" }}>
+                                    {isOpen ? "Open" : "Close"} {isLong ? "Long" : "Short"}
+                                  </Typography>
+                                </Box>
+                                <Box sx={{ display: "inline-flex", px: 0.6, py: 0.15, borderRadius: 0.5, bgcolor: isBot ? "rgba(59,130,246,0.1)" : "rgba(100,116,139,0.1)", border: `1px solid ${isBot ? "rgba(59,130,246,0.2)" : "rgba(100,116,139,0.15)"}` }}>
+                                  <Typography sx={{ fontSize: "0.62rem", fontWeight: 800, color: isBot ? "#60a5fa" : "#64748b", letterSpacing: "0.03em" }}>
+                                    {isBot ? "Bot" : "Manual"}
+                                  </Typography>
+                                </Box>
+                              </Stack>
+                            </TableCell>
+                            <TableCell align="right" sx={{ ...MONO, color: "#94a3b8", fontSize: "0.78rem" }}>{fmt(h.volume, 2)}</TableCell>
+                            <TableCell align="right">
+                              <Typography sx={{ ...MONO, color: "#94a3b8", fontSize: "0.78rem" }}>{fmt(h.price, 2)}</Typography>
+                              <Typography sx={{ ...MONO, color: "#475569", fontSize: "0.68rem" }}>≈ {fmt(h.price * h.volume, 2)} {account?.currency || ""}</Typography>
+                            </TableCell>
+                            <TableCell align="right">
+                              <Stack direction="row" spacing={0.75} sx={{ justifyContent: "flex-end", alignItems: "center" }}>
+                                {h.commission !== 0 && (
+                                  <Typography sx={{ ...MONO, fontSize: "0.68rem", color: "#475569" }}>comm {fmt(h.commission)}</Typography>
+                                )}
+                                <Typography sx={{ ...MONO, fontWeight: 800, fontSize: "0.85rem", color: h.profit > 0 ? "#10b981" : h.profit < 0 ? "#ef4444" : "#64748b" }}>
+                                  {h.profit > 0 ? "+" : ""}{fmt(h.profit)}
+                                </Typography>
+                              </Stack>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                       {stockHistory.length === 0 && (
                         <TableRow>
                           <TableCell colSpan={6}>
@@ -1090,6 +1309,10 @@ export default function StocksPage() {
         setStockInput={setStockInput}
         onDetectStockSymbols={detectStockSymbols}
         detectingStockSymbols={detecting}
+        stockFilterType={stockFilterType}
+        setStockFilterType={handleSetStockFilterType}
+        scanMins={stockScanMins}
+        setScanMins={setStockScanMins}
         allStockSymbols={stockSymbols}
         onValidateSymbols={validateStockSymbols}
         validatingSymbols={validating}

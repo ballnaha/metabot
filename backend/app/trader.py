@@ -272,6 +272,10 @@ class TradeManager:
             log.warning("risk_lot fallback (%s): %s", symbol, e)
             return 0.01
 
+        is_stock  = market_group(symbol) == "stock"
+        max_lot   = settings.stock_max_lot      if is_stock else settings.max_lot
+        risk_pct  = settings.stock_risk_per_trade if is_stock else settings.risk_per_trade
+
         # Freqtrade-style equal slots division sizing
         if settings.position_sizing_mode == "equal_slots":
             max_slots = max_slots_for_symbol(symbol)
@@ -279,32 +283,32 @@ class TradeManager:
                 stake_amount = settings.stake_amount
             else:
                 stake_amount = acct["equity"] / max_slots
-            
-            entry_price = rec.price
+
+            entry_price   = rec.price
             contract_size = info.get("trade_contract_size", 1.0) or 1.0
-            
+
             if entry_price <= 0 or contract_size <= 0:
                 return mt5_client.normalize_lot(symbol, info["volume_min"])
-                
+
             lot = stake_amount / (entry_price * contract_size)
-            lot = min(lot, settings.max_lot)
+            lot = min(lot, max_lot)
             return mt5_client.normalize_lot(symbol, lot)
-            
+
         else:
-            # Risk Sizing based on Stop Loss distance (1% risk)
-            risk_amount = acct["equity"] * settings.risk_per_trade
+            # Risk sizing based on SL distance
+            risk_amount = acct["equity"] * risk_pct
             if not rec.stop_loss:
                 return mt5_client.normalize_lot(symbol, info["volume_min"])
 
-            sl_dist = abs(rec.price - rec.stop_loss)
-            tick_size = info["trade_tick_size"] or info["point"]
+            sl_dist    = abs(rec.price - rec.stop_loss)
+            tick_size  = info["trade_tick_size"] or info["point"]
             tick_value = info["trade_tick_value"] or 1.0
             if sl_dist <= 0 or tick_size <= 0 or tick_value <= 0:
                 return mt5_client.normalize_lot(symbol, info["volume_min"])
 
             loss_per_lot = (sl_dist / tick_size) * tick_value
             lot = risk_amount / loss_per_lot if loss_per_lot > 0 else info["volume_min"]
-            lot = min(lot, settings.max_lot)
+            lot = min(lot, max_lot)
             return mt5_client.normalize_lot(symbol, lot)
 
     # ------------------------------------------------------------------ #

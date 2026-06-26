@@ -53,7 +53,30 @@ import {
   ShieldCheck,
   X,
   Zap,
+  Info,
+  ArrowUp,
+  ArrowDown,
+  TrendingUp,
 } from "lucide-react";
+
+const STRATEGY_CONDITIONS: Record<string, { label: string; buy: string[]; sell: string[]; note?: string }> = {
+  ema_macd_rsi: { label: "EMA + MACD + RSI",
+    buy:  ["EMA12 สูงกว่า EMA26 — แนวโน้มขาขึ้น (40%)", "MACD Histogram > 0 — momentum เป็นบวก (35%)", "RSI < 45 — ยังไม่ overbought (25%)"],
+    sell: ["EMA12 ต่ำกว่า EMA26 — แนวโน้มขาลง (40%)", "MACD Histogram < 0 — momentum เป็นลบ (35%)", "RSI > 55 — ยังไม่ oversold (25%)"],
+    note: "สัญญาณออกเมื่อ weighted score รวมเกิน 22% — ต้องการหลายอย่างพร้อมกัน" },
+  trend: { label: "Trend Follow",
+    buy:  ["ราคาอยู่เหนือ EMA50 (45%)", "EMA50 มีความชันขึ้น — เทรนด์แข็งแกร่ง (30%)", "MACD Histogram > 0 — ยืนยัน momentum (25%)"],
+    sell: ["ราคาอยู่ใต้ EMA50 (45%)", "EMA50 มีความชันลง (30%)", "MACD Histogram < 0 (25%)"],
+    note: "เหมาะกับตลาดที่มีทิศทางชัด threshold 28%" },
+  mean_reversion: { label: "Mean Reversion",
+    buy:  ["ราคาต่ำกว่า Bollinger Band midpoint (55%)", "RSI < 40 — oversold คาดเด้งกลับ (45%)"],
+    sell: ["ราคาสูงกว่า Bollinger Band midpoint (55%)", "RSI > 60 — overbought คาดย้อนกลับ (45%)"],
+    note: "TP คือ Bollinger midpoint — เหมาะตลาดไซด์เวย์ threshold 32%" },
+  breakout: { label: "Breakout",
+    buy:  ["ราคาทะลุสูงสุดของ 20 แท่งก่อนหน้า (65%)", "MACD Histogram > 0 — ยืนยัน momentum (35%)"],
+    sell: ["ราคาทะลุต่ำสุดของ 20 แท่งก่อนหน้า (65%)", "MACD Histogram < 0 (35%)"],
+    note: "threshold สูงที่สุด 35% — ต้องทะลุชัดเจน ระวัง false breakout" },
+};
 
 type Account = {
   login: number;
@@ -71,6 +94,8 @@ type Position = {
   type: string;
   volume: number;
   price_open: number;
+  sl: number;
+  tp: number;
   price_current: number;
   profit: number;
   magic: number;
@@ -336,8 +361,9 @@ export default function GoldPage() {
   const [ticks, setTicks] = useState<Record<string, Tick>>({});
   const [settings, setSettings] = useState<any>({
     symbols: "",
-    default_timeframe: "M15",
-    strategy: "ema_macd_rsi",
+    gold_timeframe: "H4",
+    gold_strategy: "",
+    strategy: "",
     risk_per_trade: 0.01,
     max_lot: 1,
     gold_magic: 556688,
@@ -380,6 +406,19 @@ export default function GoldPage() {
   const [detecting, setDetecting] = useState(false);
   const [validating, setValidating] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [conditionsOpen, setConditionsOpen] = useState(false);
+  const GOLD_TF_DEFAULTS: Record<string, number> = { M15: 3, M30: 5, H1: 15, H4: 30, D1: 60 };
+  const [goldScanMins, setGoldScanMinsRaw] = useState<number>(30);
+  const setGoldScanMins = useCallback((v: number) => {
+    setGoldScanMinsRaw(v);
+    localStorage.setItem("gold_scan_mins", String(v));
+  }, []);
+  useEffect(() => {
+    const saved = localStorage.getItem("gold_scan_mins");
+    if (saved) { setGoldScanMinsRaw(parseInt(saved, 10) || 30); return; }
+    if (settings.gold_timeframe) setGoldScanMins(GOLD_TF_DEFAULTS[settings.gold_timeframe] ?? 30);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.gold_timeframe]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsOpenRef = useRef(false);
   const [logOpen, setLogOpen] = useState(false);
@@ -409,15 +448,21 @@ export default function GoldPage() {
   }, [goldSymbols, priceSearch]);
 
   const goldPositions = useMemo(
-    () => positions.filter((p) => isGoldSymbol(p.symbol) && (!settings.gold_magic || p.magic === settings.gold_magic)),
-    [positions, settings.gold_magic]
+    () => positions.filter((p) => isGoldSymbol(p.symbol)),
+    [positions]
   );
   const goldHistory = useMemo(
-    () => history.filter((h) => isGoldSymbol(h.symbol) && (!settings.gold_magic || h.magic === settings.gold_magic)),
-    [history, settings.gold_magic]
+    () => history.filter((h) => isGoldSymbol(h.symbol)),
+    [history]
   );
   const goldOpenPl = goldPositions.reduce((sum, p) => sum + (Number(p.profit) || 0), 0);
-  const realizedGoldPl = goldHistory.filter((h) => h.entry === "OUT").reduce((sum, h) => sum + (Number(h.profit) || 0), 0);
+  const _gBotMagics = new Set([settings.gold_magic, settings.magic, settings.stock_magic].filter(Boolean));
+  const goldClosedHistory = goldHistory.filter((h) => h.entry === "OUT");
+  const botGoldOpenPl = goldPositions.filter((p) => _gBotMagics.has(p.magic)).reduce((sum, p) => sum + (Number(p.profit) || 0), 0);
+  const manualGoldOpenPl = goldPositions.filter((p) => !_gBotMagics.has(p.magic)).reduce((sum, p) => sum + (Number(p.profit) || 0), 0);
+  const realizedGoldPl = goldClosedHistory.reduce((sum, h) => sum + (Number(h.profit) || 0), 0);
+  const botRealizedGoldPl = goldClosedHistory.filter((h) => _gBotMagics.has(h.magic)).reduce((sum, h) => sum + (Number(h.profit) || 0), 0);
+  const manualRealizedGoldPl = goldClosedHistory.filter((h) => !_gBotMagics.has(h.magic)).reduce((sum, h) => sum + (Number(h.profit) || 0), 0);
   const selectedTick = selectedSymbol ? ticks[selectedSymbol] : null;
   const spread = selectedTick ? Math.abs((selectedTick.ask || 0) - (selectedTick.bid || 0)) : null;
   const goldSlotLimit = settings.max_gold_open_trades ?? settings.max_open_trades ?? 3;
@@ -511,8 +556,8 @@ export default function GoldPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           symbols: goldSymbols,
-          timeframe: settings.default_timeframe,
-          strategy: settings.strategy,
+          timeframe: settings.gold_timeframe,
+          strategy: settings.gold_strategy,
           bars: 220,
         }),
       });
@@ -523,7 +568,7 @@ export default function GoldPage() {
     } finally {
       setScanLoading(false);
     }
-  }, [goldSymbols, settings.default_timeframe, settings.strategy, toastr]);
+  }, [goldSymbols, settings.gold_timeframe, settings.gold_strategy, toastr]);
 
   useEffect(() => {
     if (!goldSymbols.length) {
@@ -544,12 +589,12 @@ export default function GoldPage() {
     };
 
     refreshSignals();
-    const intervalId = setInterval(refreshSignals, 30_000);
+    const intervalId = setInterval(refreshSignals, goldScanMins * 60_000);
     return () => {
       active = false;
       clearInterval(intervalId);
     };
-  }, [goldSymbols.join(","), settings.default_timeframe, settings.strategy, runScan]);
+  }, [goldSymbols.join(","), settings.gold_timeframe, settings.gold_strategy, runScan, goldScanMins]);
 
   async function stageTrade(symbol: string) {
     setTradeStagingSymbol(symbol);
@@ -559,9 +604,9 @@ export default function GoldPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           symbol,
-          timeframe: settings.default_timeframe,
+          timeframe: settings.gold_timeframe,
           bars: 220,
-          strategy: settings.strategy,
+          strategy: settings.gold_strategy,
           use_ai: settings.use_ai,
           preview: true,
         }),
@@ -665,8 +710,8 @@ export default function GoldPage() {
     try {
       const next = {
         symbols: nextSymbols,
-        default_timeframe: settings.default_timeframe,
-        strategy: settings.strategy,
+        gold_timeframe: settings.gold_timeframe,
+        gold_strategy: settings.gold_strategy,
         auto_trade_interval: settings.auto_trade_interval,
         risk_per_trade: settings.risk_per_trade,
         max_lot: settings.max_lot,
@@ -721,7 +766,7 @@ export default function GoldPage() {
           currency={account?.currency || "USD"}
           openPl={goldOpenPl}
           botEnabled={goldBotActive}
-          strategy={settings.strategy}
+          strategy={settings.gold_strategy || ""}
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
@@ -746,14 +791,42 @@ export default function GoldPage() {
                 label="Open Gold P/L"
                 value={`${goldOpenPl >= 0 ? "+" : ""}${fmt(goldOpenPl)} ${account?.currency || ""}`}
                 tone={goldOpenPl >= 0 ? "#10b981" : "#ef4444"}
-                sub={`${goldPositions.length} positions`}
+                sub={
+                  <Box sx={{ mt: 0.5 }}>
+                    <Typography variant="caption" sx={{ color: "#60a5fa", display: "block", lineHeight: 1.5 }}>
+                      Bot: {botGoldOpenPl >= 0 ? "+" : ""}{fmt(botGoldOpenPl)}
+                    </Typography>
+                    {manualGoldOpenPl !== 0 && (
+                      <Typography variant="caption" sx={{ color: "#94a3b8", display: "block", lineHeight: 1.5 }}>
+                        Manual: {manualGoldOpenPl >= 0 ? "+" : ""}{fmt(manualGoldOpenPl)}
+                      </Typography>
+                    )}
+                    <Typography variant="caption" sx={{ color: "#64748b", display: "block", lineHeight: 1.5 }}>
+                      {goldPositions.length} positions
+                    </Typography>
+                  </Box>
+                }
               />
               <StatCard
                 icon={<History size={18} />}
                 label="Realized 7D"
                 value={`${realizedGoldPl >= 0 ? "+" : ""}${fmt(realizedGoldPl)} ${account?.currency || ""}`}
                 tone={realizedGoldPl >= 0 ? "#10b981" : "#ef4444"}
-                sub={`${goldHistory.filter((h) => h.entry === "OUT").length} closed deals`}
+                sub={
+                  <Box sx={{ mt: 0.5 }}>
+                    <Typography variant="caption" sx={{ color: "#60a5fa", display: "block", lineHeight: 1.5 }}>
+                      Bot: {botRealizedGoldPl >= 0 ? "+" : ""}{fmt(botRealizedGoldPl)}
+                    </Typography>
+                    {manualRealizedGoldPl !== 0 && (
+                      <Typography variant="caption" sx={{ color: "#94a3b8", display: "block", lineHeight: 1.5 }}>
+                        Manual: {manualRealizedGoldPl >= 0 ? "+" : ""}{fmt(manualRealizedGoldPl)}
+                      </Typography>
+                    )}
+                    <Typography variant="caption" sx={{ color: "#64748b", display: "block", lineHeight: 1.5 }}>
+                      {goldClosedHistory.length} closed deals
+                    </Typography>
+                  </Box>
+                }
               />
               <StatCard
                 icon={<Gauge size={18} />}
@@ -770,6 +843,91 @@ export default function GoldPage() {
                 }
               />
             </Box>
+
+            {/* Scan info bar */}
+            {(() => {
+              const TF_MINS: Record<string, number> = { M15: 15, M30: 30, H1: 60, H4: 240, D1: 1440 };
+              const tf = settings.gold_timeframe || "H4";
+              const tradeMins = TF_MINS[tf] ?? 240;
+              const cond = STRATEGY_CONDITIONS[settings.gold_strategy];
+              return (
+                <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2, px: 0.5, flexWrap: "wrap" }}>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 0.6, px: 1.25, py: 0.5, borderRadius: 99, bgcolor: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.2)" }}>
+                      <Zap size={12} color="#60a5fa" />
+                      <Typography sx={{ fontSize: "0.72rem", fontWeight: 700, color: "#60a5fa", whiteSpace: "nowrap" }}>สแกน Signal ทุก {goldScanMins} นาที</Typography>
+                    </Box>
+                    <Typography sx={{ fontSize: "0.65rem", color: "#334155" }}>·</Typography>
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 0.6, px: 1.25, py: 0.5, borderRadius: 99, bgcolor: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.18)" }}>
+                      <TrendingUp size={12} color="#10b981" />
+                      <Typography sx={{ fontSize: "0.72rem", fontWeight: 700, color: "#10b981", whiteSpace: "nowrap" }}>ซื้อขายได้ทุก {tradeMins >= 60 ? `${tradeMins / 60} ชม.` : `${tradeMins} นาที`} ({tf})</Typography>
+                    </Box>
+                  </Stack>
+                  {cond && (
+                    <Button size="small" variant="text" startIcon={<Info size={13} />} onClick={() => setConditionsOpen(true)}
+                      sx={{ fontSize: "0.72rem", color: "#475569", px: 1, py: 0.4, minWidth: 0, "&:hover": { color: "#94a3b8", bgcolor: "rgba(255,255,255,0.04)" } }}>
+                      เงื่อนไขเข้าเทรด
+                    </Button>
+                  )}
+                </Box>
+              );
+            })()}
+
+            {/* Conditions Modal */}
+            {(() => {
+              const cond = STRATEGY_CONDITIONS[settings.gold_strategy];
+              if (!cond) return null;
+              return (
+                <Dialog open={conditionsOpen} onClose={() => setConditionsOpen(false)} maxWidth="sm" fullWidth
+                  slotProps={{ paper: { sx: { bgcolor: "#0d1321", border: "1px solid rgba(245,158,11,0.2)", backgroundImage: "none" } } }}>
+                  <DialogTitle sx={{ pb: 1 }}>
+                    <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                      <Info size={16} color="#fbbf24" />
+                      <Box>
+                        <Typography sx={{ fontWeight: 800, color: "#f1f5f9", fontSize: "0.95rem" }}>เงื่อนไขการเข้าเทรด — {cond.label}</Typography>
+                        <Typography variant="caption" sx={{ color: "#475569" }}>{settings.gold_timeframe} · ATR SL ×{settings.atr_sl_mult} · R:R {settings.default_rr}</Typography>
+                      </Box>
+                    </Stack>
+                  </DialogTitle>
+                  <DialogContent dividers sx={{ borderColor: "rgba(255,255,255,0.07)", pt: 2 }}>
+                    <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}>
+                      <Box sx={{ p: 1.5, borderRadius: 1, bgcolor: "rgba(16,185,129,0.05)", border: "1px solid rgba(16,185,129,0.18)" }}>
+                        <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", mb: 1 }}>
+                          <ArrowUp size={14} color="#10b981" />
+                          <Typography sx={{ fontSize: "0.75rem", fontWeight: 800, color: "#10b981" }}>BUY เมื่อ</Typography>
+                        </Stack>
+                        <Stack spacing={0.6}>{cond.buy.map((c, i) => (
+                          <Stack key={i} direction="row" spacing={0.75} sx={{ alignItems: "flex-start" }}>
+                            <Box sx={{ width: 4, height: 4, borderRadius: "50%", bgcolor: "#10b981", mt: 0.75, flexShrink: 0 }} />
+                            <Typography variant="caption" sx={{ color: "#94a3b8", lineHeight: 1.55 }}>{c}</Typography>
+                          </Stack>
+                        ))}</Stack>
+                      </Box>
+                      <Box sx={{ p: 1.5, borderRadius: 1, bgcolor: "rgba(239,68,68,0.05)", border: "1px solid rgba(239,68,68,0.18)" }}>
+                        <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", mb: 1 }}>
+                          <ArrowDown size={14} color="#ef4444" />
+                          <Typography sx={{ fontSize: "0.75rem", fontWeight: 800, color: "#ef4444" }}>SELL เมื่อ</Typography>
+                        </Stack>
+                        <Stack spacing={0.6}>{cond.sell.map((c, i) => (
+                          <Stack key={i} direction="row" spacing={0.75} sx={{ alignItems: "flex-start" }}>
+                            <Box sx={{ width: 4, height: 4, borderRadius: "50%", bgcolor: "#ef4444", mt: 0.75, flexShrink: 0 }} />
+                            <Typography variant="caption" sx={{ color: "#94a3b8", lineHeight: 1.55 }}>{c}</Typography>
+                          </Stack>
+                        ))}</Stack>
+                      </Box>
+                    </Box>
+                    {cond.note && (
+                      <Box sx={{ mt: 1.5, px: 1.25, py: 0.75, bgcolor: "rgba(245,158,11,0.06)", borderRadius: 1, border: "1px solid rgba(245,158,11,0.15)" }}>
+                        <Typography variant="caption" sx={{ color: "#fbbf24" }}>💡 {cond.note}</Typography>
+                      </Box>
+                    )}
+                  </DialogContent>
+                  <DialogActions sx={{ borderTop: "1px solid rgba(255,255,255,0.07)", px: 2 }}>
+                    <Button size="small" onClick={() => setConditionsOpen(false)} sx={{ color: "#64748b" }}>ปิด</Button>
+                  </DialogActions>
+                </Dialog>
+              );
+            })()}
 
             <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", lg: "1.35fr 0.85fr" }, gap: 2 }}>
               <Card>
@@ -905,6 +1063,8 @@ export default function GoldPage() {
                             : 0;
                           const isProfit = p.profit >= 0;
                           const invested = p.volume * p.price_open * (p.contract_size ?? 1.0);
+                          const botMagics = new Set([settings.gold_magic, settings.magic, (settings as any).stock_magic].filter(Boolean));
+                          const isBot = botMagics.has(p.magic);
                           return (
                             <Box
                               key={p.ticket}
@@ -926,9 +1086,22 @@ export default function GoldPage() {
                                   />
                                   <Box sx={{ minWidth: 0 }}>
                                     <Typography noWrap sx={{ fontWeight: 750, lineHeight: 1.15 }}>{p.symbol}</Typography>
-                                    <Typography variant="caption" color="text.secondary" sx={{ ...MONO, display: "block", lineHeight: 1.2 }}>
-                                      Ticket #{p.ticket}
-                                    </Typography>
+                                    <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mt: 0.2 }}>
+                                      <Typography variant="caption" color="text.secondary" sx={{ ...MONO, lineHeight: 1.2 }}>
+                                        Ticket #{p.ticket}
+                                      </Typography>
+                                      <Chip
+                                        size="small"
+                                        label={isBot ? "Bot" : "Manual"}
+                                        sx={{
+                                          height: 14, fontSize: 9, fontWeight: 800, borderRadius: 0.5,
+                                          bgcolor: isBot ? "rgba(59,130,246,0.12)" : "rgba(148,163,184,0.1)",
+                                          color: isBot ? "#60a5fa" : "#94a3b8",
+                                          border: `1px solid ${isBot ? "rgba(59,130,246,0.25)" : "rgba(148,163,184,0.15)"}`,
+                                          "& .MuiChip-label": { px: 0.6 },
+                                        }}
+                                      />
+                                    </Box>
                                   </Box>
                                 </Stack>
                                 <Stack direction="row" spacing={0.75} sx={{ alignItems: "flex-start", flexShrink: 0 }}>
@@ -956,14 +1129,7 @@ export default function GoldPage() {
                                 </Stack>
                               </Stack>
 
-                              <Box
-                                sx={{
-                                  display: "grid",
-                                  gridTemplateColumns: { xs: "repeat(2,1fr)", sm: "repeat(4,1fr)" },
-                                  gap: 0.75, p: 1, borderRadius: 1,
-                                  bgcolor: "rgba(255,255,255,0.025)",
-                                }}
-                              >
+                              <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 0.75, p: 1, borderRadius: 1, bgcolor: "rgba(255,255,255,0.025)", mb: 0.75 }}>
                                 {[
                                   { label: "Lot",      value: fmt(p.volume, 2) },
                                   { label: "ราคาเข้า", value: fmt(p.price_open, 2) },
@@ -971,15 +1137,41 @@ export default function GoldPage() {
                                   { label: "เงินทุน",  value: fmt(invested, 2) },
                                 ].map((cell) => (
                                   <Box key={cell.label} sx={{ minWidth: 0 }}>
-                                    <Typography variant="caption" sx={{ display: "block", color: "#64748b", lineHeight: 1.2 }}>
-                                      {cell.label}
-                                    </Typography>
-                                    <Typography noWrap variant="caption" sx={{ ...MONO, display: "block", color: "#cbd5e1", fontWeight: 650, lineHeight: 1.25 }}>
-                                      {cell.value}
-                                    </Typography>
+                                    <Typography variant="caption" sx={{ display: "block", color: "#64748b", lineHeight: 1.2 }}>{cell.label}</Typography>
+                                    <Typography noWrap variant="caption" sx={{ ...MONO, display: "block", color: "#cbd5e1", fontWeight: 650, lineHeight: 1.25 }}>{cell.value}</Typography>
                                   </Box>
                                 ))}
                               </Box>
+                              {(p.sl > 0 || p.tp > 0) && (() => {
+                                const slPct = p.sl > 0 ? ((p.sl - p.price_open) / p.price_open) * 100 : null;
+                                const tpPct = p.tp > 0 ? ((p.tp - p.price_open) / p.price_open) * 100 : null;
+                                const distToSl = p.sl > 0 ? ((p.sl - p.price_current) / p.price_current) * 100 : null;
+                                const distToTp = p.tp > 0 ? ((p.tp - p.price_current) / p.price_current) * 100 : null;
+                                return (
+                                  <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0.75, px: 1, pb: 1 }}>
+                                    {p.sl > 0 && (
+                                      <Box sx={{ p: 0.75, borderRadius: 1, bgcolor: "rgba(239,68,68,0.07)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                                        <Typography variant="caption" sx={{ color: "#94a3b8", display: "block", fontSize: "0.62rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>Stop Loss</Typography>
+                                        <Typography sx={{ ...MONO, fontSize: "0.82rem", fontWeight: 800, color: "#f87171" }}>{fmt(p.sl, 2)}</Typography>
+                                        <Typography variant="caption" sx={{ ...MONO, color: "#64748b", fontSize: "0.68rem" }}>
+                                          {slPct !== null ? `${slPct >= 0 ? "+" : ""}${slPct.toFixed(2)}% จากเข้า` : ""}
+                                          {distToSl !== null ? `  ·  ${distToSl >= 0 ? "+" : ""}${distToSl.toFixed(2)}% จากปัจจุบัน` : ""}
+                                        </Typography>
+                                      </Box>
+                                    )}
+                                    {p.tp > 0 && (
+                                      <Box sx={{ p: 0.75, borderRadius: 1, bgcolor: "rgba(16,185,129,0.07)", border: "1px solid rgba(16,185,129,0.2)" }}>
+                                        <Typography variant="caption" sx={{ color: "#94a3b8", display: "block", fontSize: "0.62rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>Take Profit</Typography>
+                                        <Typography sx={{ ...MONO, fontSize: "0.82rem", fontWeight: 800, color: "#34d399" }}>{fmt(p.tp, 2)}</Typography>
+                                        <Typography variant="caption" sx={{ ...MONO, color: "#64748b", fontSize: "0.68rem" }}>
+                                          {tpPct !== null ? `${tpPct >= 0 ? "+" : ""}${tpPct.toFixed(2)}% จากเข้า` : ""}
+                                          {distToTp !== null ? `  ·  ${distToTp >= 0 ? "+" : ""}${distToTp.toFixed(2)}% จากปัจจุบัน` : ""}
+                                        </Typography>
+                                      </Box>
+                                    )}
+                                  </Box>
+                                );
+                              })()}
                             </Box>
                           );
                         })
@@ -1000,43 +1192,65 @@ export default function GoldPage() {
                 <Box sx={{ overflowX: "auto", mt: 2 }}>
                   <Table size="small">
                     <TableHead>
-                      <TableRow sx={{ "& th": { bgcolor: "#0d1321", borderBottomColor: "rgba(255,255,255,0.08)" } }}>
-                        <TableCell>เวลา</TableCell>
-                        <TableCell>Symbol</TableCell>
-                        <TableCell>ประเภท</TableCell>
-                        <TableCell align="right">Volume</TableCell>
-                        <TableCell align="right">ราคา</TableCell>
-                        <TableCell align="right">กำไร/ขาดทุน</TableCell>
+                      <TableRow sx={{ "& th": { bgcolor: "#0a1020", borderBottomColor: "rgba(255,255,255,0.08)", py: 1.25 } }}>
+                        <TableCell sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>เวลา</TableCell>
+                        <TableCell sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>Symbol</TableCell>
+                        <TableCell sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>ประเภท</TableCell>
+                        <TableCell align="right" sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>Volume</TableCell>
+                        <TableCell align="right" sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>ราคา</TableCell>
+                        <TableCell align="right" sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>กำไร / ขาดทุน</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {paginatedGoldHistory.map((h) => (
-                        <TableRow key={`${h.ticket}-${h.time}`} sx={{ "& td": { borderBottomColor: "rgba(255,255,255,0.04)" } }}>
-                          <TableCell sx={{ ...MONO, color: "#94a3b8", fontSize: "0.78rem" }}>{formatBangkokTime(h.time)}</TableCell>
-                          <TableCell sx={{ ...MONO, fontWeight: 800 }}>{h.symbol}</TableCell>
-                          <TableCell>
-                            <Chip
-                              size="small"
-                              label={`${h.entry === "OUT" ? "ปิด" : "เปิด"} ${h.type}`}
-                              color={h.type === "BUY" ? "success" : "error"}
-                              variant="outlined"
-                              sx={{ height: 20, fontSize: "0.7rem", fontWeight: 700, borderRadius: 1 }}
-                            />
-                          </TableCell>
-                          <TableCell align="right" sx={MONO}>{fmt(h.volume, 2)}</TableCell>
-                          <TableCell align="right" sx={MONO}>{fmt(h.price, 2)}</TableCell>
-                          <TableCell
-                            align="right"
-                            sx={{
-                              ...MONO,
-                              color: h.profit > 0 ? "#10b981" : h.profit < 0 ? "#ef4444" : "#64748b",
-                              fontWeight: 800,
-                            }}
-                          >
-                            {h.profit > 0 ? "+" : ""}{fmt(h.profit)}
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                      {paginatedGoldHistory.map((h) => {
+                        const isLong   = h.entry === "IN" ? h.type === "BUY" : h.type === "SELL";
+                        const isOpen   = h.entry === "IN";
+                        const isBot    = _gBotMagics.has(h.magic);
+                        const ac       = isLong ? "#10b981" : "#ef4444";
+                        const abg      = isLong ? "rgba(16,185,129,0.08)" : "rgba(239,68,68,0.08)";
+                        const aborder  = isLong ? "rgba(16,185,129,0.22)" : "rgba(239,68,68,0.22)";
+                        return (
+                          <TableRow key={`${h.ticket}-${h.time}`} sx={{ "& td": { borderBottomColor: "rgba(255,255,255,0.04)", py: 0.6 }, "&:hover": { bgcolor: "rgba(255,255,255,0.012)" } }}>
+                            <TableCell sx={{ ...MONO, color: "#64748b", fontSize: "0.75rem", whiteSpace: "nowrap" }}>{formatBangkokTime(h.time)}</TableCell>
+                            <TableCell>
+                              <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
+                                <Typography sx={{ ...MONO, fontWeight: 800, fontSize: "0.82rem", color: "#e2e8f0" }}>{h.symbol}</Typography>
+                                <Typography sx={{ ...MONO, fontSize: "0.68rem", color: "#334155" }}>#{h.ticket}</Typography>
+                              </Stack>
+                            </TableCell>
+                            <TableCell>
+                              <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
+                                <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.4, px: 0.75, py: 0.2, borderRadius: 0.75, bgcolor: abg, border: `1px solid ${aborder}` }}>
+                                  <Box sx={{ width: 4, height: 4, borderRadius: "50%", bgcolor: ac, flexShrink: 0 }} />
+                                  <Typography sx={{ fontSize: "0.7rem", fontWeight: 800, color: ac, whiteSpace: "nowrap" }}>
+                                    {isOpen ? "Open" : "Close"} {isLong ? "Long" : "Short"}
+                                  </Typography>
+                                </Box>
+                                <Box sx={{ display: "inline-flex", px: 0.6, py: 0.15, borderRadius: 0.5, bgcolor: isBot ? "rgba(59,130,246,0.1)" : "rgba(100,116,139,0.1)", border: `1px solid ${isBot ? "rgba(59,130,246,0.2)" : "rgba(100,116,139,0.15)"}` }}>
+                                  <Typography sx={{ fontSize: "0.62rem", fontWeight: 800, color: isBot ? "#60a5fa" : "#64748b", letterSpacing: "0.03em" }}>
+                                    {isBot ? "Bot" : "Manual"}
+                                  </Typography>
+                                </Box>
+                              </Stack>
+                            </TableCell>
+                            <TableCell align="right" sx={{ ...MONO, color: "#94a3b8", fontSize: "0.78rem" }}>{fmt(h.volume, 2)}</TableCell>
+                            <TableCell align="right">
+                              <Typography sx={{ ...MONO, color: "#94a3b8", fontSize: "0.78rem" }}>{fmt(h.price, 2)}</Typography>
+                              <Typography sx={{ ...MONO, color: "#475569", fontSize: "0.68rem" }}>≈ {fmt(h.price * h.volume, 2)} {account?.currency || ""}</Typography>
+                            </TableCell>
+                            <TableCell align="right">
+                              <Stack direction="row" spacing={0.75} sx={{ justifyContent: "flex-end", alignItems: "center" }}>
+                                {h.commission !== 0 && (
+                                  <Typography sx={{ ...MONO, fontSize: "0.68rem", color: "#475569" }}>comm {fmt(h.commission)}</Typography>
+                                )}
+                                <Typography sx={{ ...MONO, fontWeight: 800, fontSize: "0.85rem", color: h.profit > 0 ? "#10b981" : h.profit < 0 ? "#ef4444" : "#64748b" }}>
+                                  {h.profit > 0 ? "+" : ""}{fmt(h.profit)}
+                                </Typography>
+                              </Stack>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                       {goldHistory.length === 0 && (
                         <TableRow>
                           <TableCell colSpan={6}>
@@ -1311,18 +1525,26 @@ export default function GoldPage() {
                   การตั้งค่าการสแกน
                 </Typography>
                 <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: "1fr 1fr" }}>
-                  <FormControl size="small" fullWidth>
-                    <InputLabel sx={{ color: "#94a3b8" }}>Timeframe</InputLabel>
+                  <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5, width: "100%" }}>
+                    <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 600, px: 0.5 }}>
+                      Timeframe
+                    </Typography>
                     <Select
-                      label="Timeframe"
-                      value={settings.default_timeframe || "M15"}
-                      onChange={(e) => patchSettings({ default_timeframe: e.target.value })}
+                      size="small"
+                      value={settings.gold_timeframe || "H4"}
+                      onChange={(e) => {
+                        patchSettings({ gold_timeframe: e.target.value });
+                        setGoldScanMins(GOLD_TF_DEFAULTS[e.target.value] ?? 30);
+                      }}
                       sx={{
+                        height: 40,
                         bgcolor: "rgba(255,255,255,0.01)",
+                        color: "#fff",
+                        borderRadius: 2,
                         "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.08)" },
                         "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.2) !important" },
                         "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: "#fbbf24 !important" },
-                        "& .MuiSelect-select": { color: "#fff" }
+                        "& .MuiSelect-select": { color: "#fff" },
                       }}
                     >
                       {[
@@ -1333,42 +1555,20 @@ export default function GoldPage() {
                         { v: "H1", l: "H1 — 1 ชั่วโมง" },
                         { v: "H4", l: "H4 — 4 ชั่วโมง" },
                         { v: "D1", l: "D1 — รายวัน" },
-                      ].map(({ v, l }) => (
-                        <MenuItem key={v} value={v}>
-                          {l}
-                        </MenuItem>
-                      ))}
+                      ].map(({ v, l }) => <MenuItem key={v} value={v}>{l}</MenuItem>)}
                     </Select>
-                  </FormControl>
+                  </Box>
 
-                  <FormControl size="small" fullWidth>
-                    <InputLabel sx={{ color: "#94a3b8" }}>สแกนซ้ำทุก</InputLabel>
-                    <Select
-                      label="สแกนซ้ำทุก"
-                      value={settings.auto_trade_interval || 60}
-                      onChange={(e) => patchSettings({ auto_trade_interval: Number(e.target.value) })}
-                      sx={{
-                        bgcolor: "rgba(255,255,255,0.01)",
-                        "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.08)" },
-                        "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.2) !important" },
-                        "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: "#fbbf24 !important" },
-                        "& .MuiSelect-select": { color: "#fff" }
-                      }}
-                    >
-                      {[
-                        { v: 10, l: "10 วินาที" },
-                        { v: 30, l: "30 วินาที" },
-                        { v: 60, l: "1 นาที" },
-                        { v: 300, l: "5 นาที" },
-                        { v: 600, l: "10 นาที" },
-                        { v: 900, l: "15 นาที" },
-                      ].map(({ v, l }) => (
-                        <MenuItem key={v} value={v}>
-                          {l}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
+                  <QuickNumberInput
+                    label="สแกน Signal ทุก (นาที)"
+                    value={goldScanMins}
+                    onChange={setGoldScanMins}
+                    step={1}
+                    min={1}
+                    max={120}
+                    precision={0}
+                    helperText={`default: ${GOLD_TF_DEFAULTS[settings.gold_timeframe] ?? 30} นาที สำหรับ ${settings.gold_timeframe || "H4"}`}
+                  />
                 </Box>
               </Box>
 
@@ -1455,8 +1655,8 @@ export default function GoldPage() {
                   <Select
                     size="small"
                     fullWidth
-                    value={settings.strategy || "ema_macd_rsi"}
-                    onChange={(e) => patchSettings({ strategy: e.target.value })}
+                    value={settings.gold_strategy || "ema_macd_rsi"}
+                    onChange={(e) => patchSettings({ gold_strategy: e.target.value })}
                     sx={{
                       height: 40,
                       borderRadius: 2,

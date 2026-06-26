@@ -5,6 +5,7 @@ import { useToastr } from "./components/Toastr";
 import Sidebar, { SIDEBAR_W } from "./components/Sidebar";
 import TopBar from "./components/TopBar";
 import BotLog from "./crypto/components/BotLog";
+import { PixelBotAvatar, SlotCapacity } from "./components/PixelBotStatus";
 import {
   Alert,
   Box,
@@ -40,6 +41,7 @@ import {
   X,
   Coins,
   Sparkles,
+  Brain,
 } from "lucide-react";
 
 type Account = {
@@ -143,6 +145,7 @@ export default function Dashboard() {
   }, [connected]);
   const [positions, setPositions] = useState<Position[]>([]);
   const [history, setHistory] = useState<HistoryDeal[]>([]);
+  const [botLogs, setBotLogs] = useState<any[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const [closingTicket, setClosingTicket] = useState<number | null>(null);
@@ -165,10 +168,11 @@ export default function Dashboard() {
   const refresh = useCallback(async () => {
     try {
       setHistoryLoading(true);
-      const [a, p, h] = await Promise.all([
+      const [a, p, h, lg] = await Promise.all([
         api("account"),
         api("positions"),
         api("history?days=7").catch(() => ({ history: [] })),
+        api("logs?limit=8").catch(() => ({ logs: [] })),
       ]);
       setAccount(a);
       if (connectedRef.current === false) {
@@ -177,6 +181,7 @@ export default function Dashboard() {
       setConnected(true);
       setPositions(p.positions ?? []);
       setHistory(h.history ?? []);
+      setBotLogs(lg.logs ?? []);
     } catch (e: any) {
       if (connectedRef.current !== false) {
         toastr.error(`MT5 connection lost: ${e.message}`);
@@ -215,6 +220,44 @@ export default function Dashboard() {
       setClosingTicket(null);
     }
   }
+
+  const handleDisableLossLimit = async () => {
+    try {
+      const updatedForm = {
+        ...settingsForm,
+        max_consecutive_losses: 0
+      };
+      await api("settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updatedForm),
+      });
+      toastr.success("ปลดล็อกบอทและปิดตัวจำกัดขาดทุนติดต่อกันสำเร็จ!");
+      refresh();
+      fetchSettings();
+    } catch (e: any) {
+      toastr.error(`ปลดล็อกไม่สำเร็จ: ${e.message}`);
+    }
+  };
+
+  const handleDisableDailyLossLimit = async () => {
+    try {
+      const updatedForm = {
+        ...settingsForm,
+        max_daily_loss_pct: 0
+      };
+      await api("settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updatedForm),
+      });
+      toastr.success("ปลดล็อกบอทและปิดขีดจำกัดขาดทุนรายวันสำเร็จ!");
+      refresh();
+      fetchSettings();
+    } catch (e: any) {
+      toastr.error(`ปลดล็อกไม่สำเร็จ: ${e.message}`);
+    }
+  };
 
   const isCryptoSymbol = (sym: string) => {
     const s = sym.toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -308,6 +351,41 @@ export default function Dashboard() {
     );
   };
 
+  // Circuit Breaker detection logic
+  const maxConsecutive = settingsForm.max_consecutive_losses ?? 0;
+  const botMagics = new Set([settingsForm.magic, settingsForm.gold_magic, settingsForm.stock_magic].filter(Boolean));
+  
+  const closedDeals = history
+    .filter((d) => d.entry === "OUT" && botMagics.has(d.magic))
+    .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
+
+  const recentDeals = closedDeals.slice(0, maxConsecutive);
+  const isCircuitBreakerActive = 
+    maxConsecutive > 0 &&
+    recentDeals.length === maxConsecutive &&
+    recentDeals.every((d) => (d.profit ?? 0) + (d.commission ?? 0) + (d.swap ?? 0) < 0);
+
+  // Daily Loss detection logic
+  const maxDailyLoss = settingsForm.max_daily_loss_pct ?? 0;
+  const balance = account?.balance ?? 1;
+  const curD = new Date();
+  const yyyy = curD.getFullYear();
+  const mm = String(curD.getMonth() + 1).padStart(2, '0');
+  const dd = String(curD.getDate()).padStart(2, '0');
+  const todayStr = `${yyyy}-${mm}-${dd}`;
+
+  const todayClosed = history.filter((d) => 
+    d.entry === "OUT" && 
+    d.time.startsWith(todayStr) && 
+    botMagics.has(d.magic)
+  );
+
+  const todayPnl = todayClosed.reduce((sum, d) => sum + (d.profit ?? 0) + (d.commission ?? 0) + (d.swap ?? 0), 0);
+  const isDailyLossLimitActive = 
+    maxDailyLoss > 0 && 
+    todayPnl < 0 && 
+    Math.abs(todayPnl) / balance >= maxDailyLoss;
+
   return (
     <Box sx={{ display: "flex", minHeight: "100vh", bgcolor: "#090d16", color: "#e2e8f0" }}>
       <Sidebar
@@ -336,55 +414,152 @@ export default function Dashboard() {
         <Container maxWidth={false} sx={{ width: "100%", maxWidth: "none", px: { xs: 2, md: 3 }, py: 3, flexGrow: 1, overflowY: "auto" }}>
           <Stack spacing={3.5}>
             
+            {/* Circuit Breaker Alerts */}
+            {isCircuitBreakerActive && (
+              <Alert 
+                severity="error" 
+                variant="outlined"
+                action={
+                  <Button 
+                    color="error" 
+                    variant="outlined"
+                    size="small" 
+                    onClick={handleDisableLossLimit}
+                    sx={{ 
+                      fontWeight: 800, 
+                      fontSize: "0.72rem",
+                      borderColor: "rgba(234, 57, 67, 0.5)", 
+                      bgcolor: "rgba(234, 57, 67, 0.06)",
+                      color: "#f87171",
+                      px: 2,
+                      borderRadius: 1,
+                      "&:hover": { 
+                        borderColor: "#ea3943", 
+                        bgcolor: "rgba(234, 57, 67, 0.15)" 
+                      } 
+                    }}
+                  >
+                    Resume Trading (ปลดล็อกและเริ่มเทรดต่อ)
+                  </Button>
+                }
+                sx={{ 
+                  borderRadius: 1.5, 
+                  bgcolor: "rgba(234, 57, 67, 0.03)", 
+                  borderColor: "rgba(234, 57, 67, 0.25)",
+                  boxShadow: "0 4px 15px rgba(234, 57, 67, 0.08)",
+                  color: "#f87171", 
+                  fontWeight: 700,
+                  "& .MuiAlert-icon": { color: "#ef4444" }
+                }}
+              >
+                ⛔ Circuit Breaker Active: ขาดทุนติดต่อกันครบ {maxConsecutive} ไม้ล่าสุด บอทสั่งหยุดเทรดอัตโนมัติชั่วคราว
+              </Alert>
+            )}
+
+            {isDailyLossLimitActive && (
+              <Alert 
+                severity="error" 
+                variant="outlined"
+                action={
+                  <Button 
+                    color="error" 
+                    variant="outlined"
+                    size="small" 
+                    onClick={handleDisableDailyLossLimit}
+                    sx={{ 
+                      fontWeight: 800, 
+                      fontSize: "0.72rem",
+                      borderColor: "rgba(234, 57, 67, 0.5)", 
+                      bgcolor: "rgba(234, 57, 67, 0.06)",
+                      color: "#f87171",
+                      px: 2,
+                      borderRadius: 1,
+                      "&:hover": { 
+                        borderColor: "#ea3943", 
+                        bgcolor: "rgba(234, 57, 67, 0.15)" 
+                      } 
+                    }}
+                  >
+                    Resume Trading (ปลดล็อกและเริ่มเทรดต่อ)
+                  </Button>
+                }
+                sx={{ 
+                  borderRadius: 1.5, 
+                  bgcolor: "rgba(234, 57, 67, 0.03)", 
+                  borderColor: "rgba(234, 57, 67, 0.25)",
+                  boxShadow: "0 4px 15px rgba(234, 57, 67, 0.08)",
+                  color: "#f87171", 
+                  fontWeight: 700,
+                  "& .MuiAlert-icon": { color: "#ef4444" }
+                }}
+              >
+                ⛔ Circuit Breaker Active: วันนี้ขาดทุนถึงขีดจำกัดสูงสุด {maxDailyLoss * 100}% ของบาลานซ์แล้ว (P/L: {todayPnl.toFixed(2)} {ccy}) บอทหยุดเทรดถึงวันพรุ่งนี้
+              </Alert>
+            )}
+
             {/* Asset Bot Health & Performance Overview */}
             <Box sx={{ display: "grid", gap: 3, gridTemplateColumns: { xs: "1fr", md: "repeat(3, minmax(0, 1fr))" } }}>
               
               {/* Crypto Bot */}
               <Card sx={{ border: "1px solid rgba(255, 255, 255, 0.04)", bgcolor: "#0d1321" }}>
                 <CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}>
-                  <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "flex-start", mb: 2 }}>
-                    <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
-                      <Box sx={{ p: 1, borderRadius: 2, bgcolor: "rgba(59, 130, 246, 0.08)", display: "flex" }}>
-                        <Coins size={20} color="#3b82f6" />
-                      </Box>
-                      <Box>
-                        <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
-                          Crypto Advisor
-                        </Typography>
-                        <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontSize: 10, ...MONO }}>
-                          Strategy: {settingsForm.strategy || "—"}
-                        </Typography>
-                      </Box>
-                    </Stack>
-                    <Chip
-                      size="small"
-                      label={settingsForm.bot_enabled ? "ACTIVE" : "INACTIVE"}
-                      color={settingsForm.bot_enabled ? "success" : "default"}
-                      sx={{ fontWeight: 800, fontSize: 9 }}
+                  <Stack direction="row" spacing={2} sx={{ alignItems: "center", mb: 2 }}>
+                    <PixelBotAvatar
+                      botEnabled={settingsForm.bot_enabled ?? false}
+                      assetType="crypto"
+                      recentLogs={botLogs}
                     />
+                    <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                      <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 800, display: "flex", alignItems: "center", gap: 1 }}>
+                          <Coins size={16} color="#3b82f6" /> Crypto Advisor
+                        </Typography>
+                        <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
+                          <Chip
+                            size="small"
+                            label={settingsForm.bot_enabled ? "ACTIVE" : "INACTIVE"}
+                            color={settingsForm.bot_enabled ? "success" : "default"}
+                            sx={{ fontWeight: 800, fontSize: 9, height: 18 }}
+                          />
+                          <Chip
+                            size="small"
+                            icon={<Brain size={10} style={{ color: settingsForm.use_ai ? "#60a5fa" : "#64748b" }} />}
+                            label={settingsForm.use_ai ? "AI" : "NO AI"}
+                            variant="outlined"
+                            sx={{
+                              fontWeight: 800,
+                              fontSize: 9,
+                              height: 18,
+                              color: settingsForm.use_ai ? "#60a5fa" : "#64748b",
+                              borderColor: settingsForm.use_ai ? "rgba(59,130,246,0.3)" : "rgba(255,255,255,0.08)",
+                              bgcolor: settingsForm.use_ai ? "rgba(59,130,246,0.05)" : "transparent",
+                              "& .MuiChip-icon": { color: "inherit" }
+                            }}
+                          />
+                        </Stack>
+                      </Stack>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontSize: 10, ...MONO, mb: 1 }}>
+                        Strategy: {settingsForm.strategy || "—"}
+                      </Typography>
+                    </Box>
                   </Stack>
 
-                  <Stack spacing={1.75} sx={{ mb: 2.5 }}>
-                    <Box>
-                      <Stack direction="row" sx={{ justifyContent: "space-between", mb: 0.5 }}>
-                        <Typography variant="caption" color="text.secondary">
-                          Crypto Slots Capacity
-                        </Typography>
-                        <Typography variant="caption" sx={{ ...MONO, fontWeight: 700 }}>
-                          {cryptoPositions.length} / {maxCryptoLimit}
-                        </Typography>
-                      </Stack>
-                      <LinearProgress
-                        variant="determinate"
-                        value={Math.min(100, (cryptoPositions.length / Math.max(1, maxCryptoLimit)) * 100)}
-                        sx={{
-                          height: 5,
-                          borderRadius: 99,
-                          bgcolor: "rgba(255, 255, 255, 0.04)",
-                          "& .MuiLinearProgress-bar": { bgcolor: "#3b82f6" },
-                        }}
-                      />
-                    </Box>
+                  <Stack spacing={1.5} sx={{ mb: 2.5, bgcolor: "rgba(255, 255, 255, 0.015)", border: "1px solid rgba(255,255,255,0.03)", borderRadius: 1.5, p: 1.5 }}>
+                    <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }}>
+                      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                        Capacity Channels
+                      </Typography>
+                      <Typography variant="caption" sx={{ ...MONO, fontWeight: 800, color: "#60a5fa" }}>
+                        {cryptoPositions.length} / {maxCryptoLimit}
+                      </Typography>
+                    </Stack>
+                    <SlotCapacity
+                      used={cryptoPositions.length}
+                      max={maxCryptoLimit}
+                      on={settingsForm.bot_enabled ?? false}
+                      color="#3b82f6"
+                      glowColor="rgba(59, 130, 246, 0.4)"
+                    />
                   </Stack>
 
                   <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5, pt: 1.5, borderTop: "1px solid rgba(255, 255, 255, 0.05)" }}>
@@ -407,49 +582,63 @@ export default function Dashboard() {
               {/* Gold Bot */}
               <Card sx={{ border: "1px solid rgba(255, 255, 255, 0.04)", bgcolor: "#0d1321" }}>
                 <CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}>
-                  <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "flex-start", mb: 2 }}>
-                    <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
-                      <Box sx={{ p: 1, borderRadius: 2, bgcolor: "rgba(245, 158, 11, 0.08)", display: "flex" }}>
-                        <Sparkles size={20} color="#f59e0b" />
-                      </Box>
-                      <Box>
-                        <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
-                          Gold Advisor
-                        </Typography>
-                        <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontSize: 10, ...MONO }}>
-                          Strategy: {settingsForm.strategy || "—"}
-                        </Typography>
-                      </Box>
-                    </Stack>
-                    <Chip
-                      size="small"
-                      label={settingsForm.gold_bot_enabled ? "ACTIVE" : "INACTIVE"}
-                      color={settingsForm.gold_bot_enabled ? "success" : "default"}
-                      sx={{ fontWeight: 800, fontSize: 9 }}
+                  <Stack direction="row" spacing={2} sx={{ alignItems: "center", mb: 2 }}>
+                    <PixelBotAvatar
+                      botEnabled={settingsForm.gold_bot_enabled ?? false}
+                      assetType="gold"
+                      recentLogs={botLogs}
                     />
+                    <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                      <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 800, display: "flex", alignItems: "center", gap: 1 }}>
+                          <Sparkles size={16} color="#f59e0b" /> Gold Advisor
+                        </Typography>
+                        <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
+                          <Chip
+                            size="small"
+                            label={settingsForm.gold_bot_enabled ? "ACTIVE" : "INACTIVE"}
+                            color={settingsForm.gold_bot_enabled ? "success" : "default"}
+                            sx={{ fontWeight: 800, fontSize: 9, height: 18 }}
+                          />
+                          <Chip
+                            size="small"
+                            icon={<Brain size={10} style={{ color: settingsForm.use_ai ? "#60a5fa" : "#64748b" }} />}
+                            label={settingsForm.use_ai ? "AI" : "NO AI"}
+                            variant="outlined"
+                            sx={{
+                              fontWeight: 800,
+                              fontSize: 9,
+                              height: 18,
+                              color: settingsForm.use_ai ? "#60a5fa" : "#64748b",
+                              borderColor: settingsForm.use_ai ? "rgba(59,130,246,0.3)" : "rgba(255,255,255,0.08)",
+                              bgcolor: settingsForm.use_ai ? "rgba(59,130,246,0.05)" : "transparent",
+                              "& .MuiChip-icon": { color: "inherit" }
+                            }}
+                          />
+                        </Stack>
+                      </Stack>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontSize: 10, ...MONO, mb: 1 }}>
+                        Strategy: {settingsForm.gold_strategy || "—"}
+                      </Typography>
+                    </Box>
                   </Stack>
 
-                  <Stack spacing={1.75} sx={{ mb: 2.5 }}>
-                    <Box>
-                      <Stack direction="row" sx={{ justifyContent: "space-between", mb: 0.5 }}>
-                        <Typography variant="caption" color="text.secondary">
-                          Gold Slots Capacity
-                        </Typography>
-                        <Typography variant="caption" sx={{ ...MONO, fontWeight: 700 }}>
-                          {goldPositions.length} / {maxGoldLimit}
-                        </Typography>
-                      </Stack>
-                      <LinearProgress
-                        variant="determinate"
-                        value={Math.min(100, (goldPositions.length / Math.max(1, maxGoldLimit)) * 100)}
-                        sx={{
-                          height: 5,
-                          borderRadius: 99,
-                          bgcolor: "rgba(255, 255, 255, 0.04)",
-                          "& .MuiLinearProgress-bar": { bgcolor: "#f59e0b" },
-                        }}
-                      />
-                    </Box>
+                  <Stack spacing={1.5} sx={{ mb: 2.5, bgcolor: "rgba(255, 255, 255, 0.015)", border: "1px solid rgba(255,255,255,0.03)", borderRadius: 1.5, p: 1.5 }}>
+                    <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }}>
+                      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                        Capacity Channels
+                      </Typography>
+                      <Typography variant="caption" sx={{ ...MONO, fontWeight: 800, color: "#fbbf24" }}>
+                        {goldPositions.length} / {maxGoldLimit}
+                      </Typography>
+                    </Stack>
+                    <SlotCapacity
+                      used={goldPositions.length}
+                      max={maxGoldLimit}
+                      on={settingsForm.gold_bot_enabled ?? false}
+                      color="#f59e0b"
+                      glowColor="rgba(245, 158, 11, 0.4)"
+                    />
                   </Stack>
 
                   <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5, pt: 1.5, borderTop: "1px solid rgba(255, 255, 255, 0.05)" }}>
@@ -472,49 +661,63 @@ export default function Dashboard() {
               {/* Stock Bot */}
               <Card sx={{ border: "1px solid rgba(255, 255, 255, 0.04)", bgcolor: "#0d1321" }}>
                 <CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}>
-                  <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "flex-start", mb: 2 }}>
-                    <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
-                      <Box sx={{ p: 1, borderRadius: 2, bgcolor: "rgba(168, 85, 247, 0.08)", display: "flex" }}>
-                        <Activity size={20} color="#a855f7" />
-                      </Box>
-                      <Box>
-                        <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
-                          US Stock Advisor
-                        </Typography>
-                        <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontSize: 10, ...MONO }}>
-                          Strategy: {settingsForm.stock_strategy || "—"}
-                        </Typography>
-                      </Box>
-                    </Stack>
-                    <Chip
-                      size="small"
-                      label={settingsForm.stock_bot_enabled ? "ACTIVE" : "INACTIVE"}
-                      color={settingsForm.stock_bot_enabled ? "success" : "default"}
-                      sx={{ fontWeight: 800, fontSize: 9 }}
+                  <Stack direction="row" spacing={2} sx={{ alignItems: "center", mb: 2 }}>
+                    <PixelBotAvatar
+                      botEnabled={settingsForm.stock_bot_enabled ?? false}
+                      assetType="stock"
+                      recentLogs={botLogs}
                     />
+                    <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                      <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 800, display: "flex", alignItems: "center", gap: 1 }}>
+                          <Activity size={16} color="#a855f7" /> US Stock Advisor
+                        </Typography>
+                        <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
+                          <Chip
+                            size="small"
+                            label={settingsForm.stock_bot_enabled ? "ACTIVE" : "INACTIVE"}
+                            color={settingsForm.stock_bot_enabled ? "success" : "default"}
+                            sx={{ fontWeight: 800, fontSize: 9, height: 18 }}
+                          />
+                          <Chip
+                            size="small"
+                            icon={<Brain size={10} style={{ color: settingsForm.stock_use_ai ? "#60a5fa" : "#64748b" }} />}
+                            label={settingsForm.stock_use_ai ? "AI" : "NO AI"}
+                            variant="outlined"
+                            sx={{
+                              fontWeight: 800,
+                              fontSize: 9,
+                              height: 18,
+                              color: settingsForm.stock_use_ai ? "#60a5fa" : "#64748b",
+                              borderColor: settingsForm.stock_use_ai ? "rgba(59,130,246,0.3)" : "rgba(255,255,255,0.08)",
+                              bgcolor: settingsForm.stock_use_ai ? "rgba(59,130,246,0.05)" : "transparent",
+                              "& .MuiChip-icon": { color: "inherit" }
+                            }}
+                          />
+                        </Stack>
+                      </Stack>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontSize: 10, ...MONO, mb: 1 }}>
+                        Strategy: {settingsForm.stock_strategy || "—"}
+                      </Typography>
+                    </Box>
                   </Stack>
 
-                  <Stack spacing={1.75} sx={{ mb: 2.5 }}>
-                    <Box>
-                      <Stack direction="row" sx={{ justifyContent: "space-between", mb: 0.5 }}>
-                        <Typography variant="caption" color="text.secondary">
-                          Stock Slots Capacity
-                        </Typography>
-                        <Typography variant="caption" sx={{ ...MONO, fontWeight: 700 }}>
-                          {stockPositions.length} / {maxStockLimit}
-                        </Typography>
-                      </Stack>
-                      <LinearProgress
-                        variant="determinate"
-                        value={Math.min(100, (stockPositions.length / Math.max(1, maxStockLimit)) * 100)}
-                        sx={{
-                          height: 5,
-                          borderRadius: 99,
-                          bgcolor: "rgba(255, 255, 255, 0.04)",
-                          "& .MuiLinearProgress-bar": { bgcolor: "#a855f7" },
-                        }}
-                      />
-                    </Box>
+                  <Stack spacing={1.5} sx={{ mb: 2.5, bgcolor: "rgba(255, 255, 255, 0.015)", border: "1px solid rgba(255,255,255,0.03)", borderRadius: 1.5, p: 1.5 }}>
+                    <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }}>
+                      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                        Capacity Channels
+                      </Typography>
+                      <Typography variant="caption" sx={{ ...MONO, fontWeight: 800, color: "#c084fc" }}>
+                        {stockPositions.length} / {maxStockLimit}
+                      </Typography>
+                    </Stack>
+                    <SlotCapacity
+                      used={stockPositions.length}
+                      max={maxStockLimit}
+                      on={settingsForm.stock_bot_enabled ?? false}
+                      color="#a855f7"
+                      glowColor="rgba(168, 85, 247, 0.4)"
+                    />
                   </Stack>
 
                   <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5, pt: 1.5, borderTop: "1px solid rgba(255, 255, 255, 0.05)" }}>

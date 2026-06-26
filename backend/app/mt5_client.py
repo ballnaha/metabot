@@ -149,6 +149,7 @@ def symbol_info(symbol: str) -> Dict[str, Any]:
         "name": s.name,
         "digits": s.digits,
         "point": s.point,
+        "spread": getattr(s, "spread", 0),
         "volume_min": s.volume_min,
         "volume_max": s.volume_max,
         "volume_step": s.volume_step,
@@ -291,6 +292,31 @@ def normalize_lot(symbol: str, lot: float) -> float:
     # round down to the nearest step
     steps = round(lot / step)
     return round(steps * step, 2)
+
+
+def modify_position_sl(ticket: int, sl: float, tp: Optional[float] = None) -> Dict[str, Any]:
+    """Move stop-loss (and optionally take-profit) on an open position."""
+    _require_mt5()
+    pos = mt5.positions_get(ticket=ticket)
+    if not pos:
+        raise MT5Error(f"Position {ticket} not found")
+    p = pos[0]
+    request = {
+        "action": mt5.TRADE_ACTION_SLTP,
+        "symbol": p.symbol,
+        "position": ticket,
+        "sl": float(sl),
+        "tp": float(tp) if tp is not None else p.tp,
+    }
+    result = mt5.order_send(request)
+    if result is None:
+        code, msg = mt5.last_error()
+        raise MT5Error(f"modify SL returned None ({code}): {msg}")
+    return {
+        "ok": result.retcode == mt5.TRADE_RETCODE_DONE,
+        "retcode": result.retcode,
+        "comment": result.comment,
+    }
 
 
 def order_send(

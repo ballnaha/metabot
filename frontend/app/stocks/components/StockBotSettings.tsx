@@ -59,9 +59,13 @@ type StockBotSettingsProps = {
   setStockInput: (val: string) => void;
   onDetectStockSymbols: (filterType: string) => void;
   detectingStockSymbols: boolean;
+  stockFilterType: string;
+  setStockFilterType: (v: string) => void;
   allStockSymbols: string[];
   onValidateSymbols: () => void;
   validatingSymbols: boolean;
+  scanMins: number;
+  setScanMins: (v: number) => void;
 };
 
 function QuickNumberInput({
@@ -161,9 +165,11 @@ export default function StockBotSettings({
   savingSettings, onSave, stockInput, setStockInput,
   onDetectStockSymbols, detectingStockSymbols, allStockSymbols,
   onValidateSymbols, validatingSymbols,
+  stockFilterType, setStockFilterType,
+  scanMins, setScanMins,
 }: StockBotSettingsProps) {
+  const TF_DEFAULTS: Record<string, number> = { M15: 3, M30: 5, H1: 15, H4: 30, D1: 60 };
   const [newSymbolInput, setNewSymbolInput] = useState("");
-  const [stockFilterType, setStockFilterType] = useState("liquid_100");
 
   // Keep original casing — broker symbols are case-sensitive (e.g. "Apple").
   const currentList = stockInput
@@ -402,13 +408,27 @@ export default function StockBotSettings({
                 การตั้งค่าการสแกน
               </Typography>
               <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: "1fr 1fr" }}>
-                <FormControl size="small" fullWidth>
-                  <InputLabel sx={{ color: "#94a3b8" }}>Timeframe</InputLabel>
+                <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5, width: "100%" }}>
+                  <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 600, px: 0.5 }}>
+                    Timeframe
+                  </Typography>
                   <Select
-                    label="Timeframe"
+                    size="small"
                     value={settings.stock_timeframe || "H4"}
-                    onChange={(e) => patch({ stock_timeframe: e.target.value })}
-                    sx={{ bgcolor: "rgba(255,255,255,0.01)", "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.08)" } }}
+                    onChange={(e) => {
+                      patch({ stock_timeframe: e.target.value });
+                      setScanMins(TF_DEFAULTS[e.target.value] ?? 30);
+                    }}
+                    sx={{
+                      height: 40,
+                      bgcolor: "rgba(255,255,255,0.01)",
+                      color: "#fff",
+                      borderRadius: 2,
+                      "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.08)" },
+                      "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.2) !important" },
+                      "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: "#3b82f6 !important" },
+                      "& .MuiSelect-select": { color: "#fff" },
+                    }}
                   >
                     {[
                       { v: "M15", l: "M15 — 15 นาที" },
@@ -416,31 +436,20 @@ export default function StockBotSettings({
                       { v: "H1", l: "H1 — 1 ชั่วโมง" },
                       { v: "H4", l: "H4 — 4 ชั่วโมง" },
                       { v: "D1", l: "D1 — รายวัน" },
-                    ].map(({ v, l }) => (
-                      <MenuItem key={v} value={v}>{l}</MenuItem>
-                    ))}
+                    ].map(({ v, l }) => <MenuItem key={v} value={v}>{l}</MenuItem>)}
                   </Select>
-                </FormControl>
+                </Box>
 
-                <FormControl size="small" fullWidth>
-                  <InputLabel sx={{ color: "#94a3b8" }}>สแกนซ้ำทุก</InputLabel>
-                  <Select
-                    label="สแกนซ้ำทุก"
-                    value={settings.stock_auto_trade_interval}
-                    onChange={(e) => patch({ stock_auto_trade_interval: Number(e.target.value) })}
-                    sx={{ bgcolor: "rgba(255,255,255,0.01)", "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.08)" } }}
-                  >
-                    {[
-                      { v: 300, l: "5 นาที" },
-                      { v: 600, l: "10 นาที" },
-                      { v: 900, l: "15 นาที" },
-                      { v: 1800, l: "30 นาที" },
-                      { v: 3600, l: "1 ชั่วโมง" },
-                    ].map(({ v, l }) => (
-                      <MenuItem key={v} value={v}>{l}</MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
+                <QuickNumberInput
+                  label="สแกน Signal ทุก (นาที)"
+                  value={scanMins}
+                  onChange={setScanMins}
+                  step={1}
+                  min={1}
+                  max={120}
+                  precision={0}
+                  helperText={`default: ${TF_DEFAULTS[settings.stock_timeframe] ?? 30} นาที สำหรับ ${settings.stock_timeframe || "H4"}`}
+                />
               </Box>
             </Box>
 

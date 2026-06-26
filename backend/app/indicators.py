@@ -57,7 +57,7 @@ def compute(df: pd.DataFrame, symbol: str, timeframe: str) -> IndicatorSnapshot:
     atr_s = atr(df)
     bb_up, bb_low = bollinger(close)
 
-    last = -1
+    last = -2  # always evaluate on the last CLOSED candle, not the forming one
 
     def val(s: pd.Series):
         v = s.iloc[last]

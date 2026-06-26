@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 
 from .config import settings
 from .market_groups import market_group
-from .trader import manager, get_group_slot_status, can_open_new_trade
+from .trader import manager, get_group_slot_status, can_open_new_trade, _is_bot_position
 from .models import Action, Recommendation
 from . import log_store
 
@@ -58,14 +58,17 @@ def _symbol_bot_enabled(symbol: str) -> bool:
 
 
 def _symbol_timeframe(symbol: str) -> str:
-    if market_group(symbol) == "stock":
-        return settings.stock_timeframe
+    group = market_group(symbol)
+    if group == "stock":  return settings.stock_timeframe
+    if group == "gold":   return settings.gold_timeframe
+    if group == "crypto": return settings.crypto_timeframe
     return settings.default_timeframe
 
 
 def _symbol_strategy(symbol: str) -> str:
-    if market_group(symbol) == "stock":
-        return settings.stock_strategy
+    group = market_group(symbol)
+    if group == "stock": return settings.stock_strategy
+    if group == "gold":  return settings.gold_strategy
     return settings.strategy
 
 
@@ -200,6 +203,9 @@ async def position_monitor_loop() -> None:
     await asyncio.sleep(10)
 
     known_positions: dict[int, dict] = {}
+    breakeven_set: set[int] = set()
+    peak_prices: dict[int, float] = {}      # ticket → best price seen (max for BUY, min for SELL)
+    original_sl_map: dict[int, float] = {}  # ticket → SL price at time of first detection
     session_equity_high: float | None = None
     equity_alert_cooldown = 0
     last_summary_date = None
@@ -223,12 +229,102 @@ async def position_monitor_loop() -> None:
 
             for ticket, old in known_positions.items():
                 if ticket not in current:
+                    breakeven_set.discard(ticket)
+                    peak_prices.pop(ticket, None)
+                    original_sl_map.pop(ticket, None)
                     try:
                         _notify_position_closed(old)
                     except Exception as e:
                         log.error("Close notify error ticket %s: %s", ticket, e)
 
             known_positions = current
+
+            # ---- Breakeven SL management ----------------------------------------
+            if settings.breakeven_r > 0 and current:
+                for ticket, pos in current.items():
+                    if not _is_bot_position(pos) or ticket in breakeven_set:
+                        continue
+                    entry = pos["price_open"]
+                    sl = pos.get("sl") or 0.0
+                    tp = pos.get("tp") or 0.0
+                    cur = pos["price_current"]
+                    if sl == 0 or abs(sl - entry) < 1e-9:
+                        continue  # no SL or already at breakeven
+                    sl_dist = abs(entry - sl)
+                    triggered = (
+                        pos["type"] == "BUY"  and cur - entry >= sl_dist * settings.breakeven_r and sl < entry
+                        or
+                        pos["type"] == "SELL" and entry - cur >= sl_dist * settings.breakeven_r and sl > entry
+                    )
+                    if triggered:
+                        try:
+                            mt5_client.modify_position_sl(ticket, entry, tp or None)
+                            breakeven_set.add(ticket)
+                            msg = f"Breakeven SL → {pos['symbol']} {pos['type']} #{ticket} entry {entry:.5f}"
+                            log.info(msg)
+                            log_store.push("info", "breakeven", msg, {"symbol": pos["symbol"], "ticket": ticket, "entry": entry})
+                            send_telegram_notification(
+                                f"🔒 *Breakeven SL*\n`{pos['symbol']}` {pos['type']} #{ticket}\nSL → Entry `{entry:.5f}`"
+                            )
+                        except Exception as e:
+                            log.error("Breakeven SL failed %s #%s: %s", pos["symbol"], ticket, e)
+            # ---- End breakeven SL -----------------------------------------------
+
+            # ---- Trailing Stop --------------------------------------------------
+            if settings.trailing_stop_r > 0 and current:
+                for ticket, pos in current.items():
+                    if not _is_bot_position(pos):
+                        continue
+
+                    entry = pos["price_open"]
+                    sl    = pos.get("sl") or 0.0
+                    tp    = pos.get("tp") or 0.0
+                    cur   = pos["price_current"]
+
+                    # Record original SL on first sight
+                    if ticket not in original_sl_map and sl > 0:
+                        original_sl_map[ticket] = sl
+
+                    orig_sl = original_sl_map.get(ticket, 0.0)
+                    if sl == 0 or orig_sl == 0:
+                        continue
+
+                    sl_dist = abs(entry - orig_sl)
+                    if sl_dist <= 0:
+                        continue
+
+                    # Update peak price
+                    if pos["type"] == "BUY":
+                        peak = max(peak_prices.get(ticket, cur), cur)
+                    else:
+                        peak = min(peak_prices.get(ticket, cur), cur)
+                    peak_prices[ticket] = peak
+
+                    # Compute trail SL and apply if it improves current SL
+                    try:
+                        if pos["type"] == "BUY":
+                            profit_dist = peak - entry
+                            if profit_dist < settings.trailing_stop_r * sl_dist:
+                                continue  # not yet at trigger point
+                            trail_sl = round(peak - sl_dist, 6)
+                            if trail_sl > sl:
+                                mt5_client.modify_position_sl(ticket, trail_sl, tp or None)
+                                msg = f"Trail SL → {pos['symbol']} BUY #{ticket}  {sl:.5f} → {trail_sl:.5f}  (peak {peak:.5f})"
+                                log.info(msg)
+                                log_store.push("info", "trailing_sl", msg, {"symbol": pos["symbol"], "ticket": ticket, "trail_sl": trail_sl, "peak": peak})
+                        elif pos["type"] == "SELL":
+                            profit_dist = entry - peak
+                            if profit_dist < settings.trailing_stop_r * sl_dist:
+                                continue
+                            trail_sl = round(peak + sl_dist, 6)
+                            if trail_sl < sl:
+                                mt5_client.modify_position_sl(ticket, trail_sl, tp or None)
+                                msg = f"Trail SL → {pos['symbol']} SELL #{ticket}  {sl:.5f} → {trail_sl:.5f}  (peak {peak:.5f})"
+                                log.info(msg)
+                                log_store.push("info", "trailing_sl", msg, {"symbol": pos["symbol"], "ticket": ticket, "trail_sl": trail_sl, "peak": peak})
+                    except Exception as e:
+                        log.error("Trailing SL failed %s #%s: %s", pos["symbol"], ticket, e)
+            # ---- End trailing stop ----------------------------------------------
 
             if current:
                 try:
@@ -261,8 +357,8 @@ async def auto_trade_loop() -> None:
 
     last_processed_candles: dict[tuple, str] = {}
     unavailable_symbols: set[str] = set()
-    _is_first_scan = True
-    _last_summary_time = 0.0  # monotonic time of last periodic summary
+    _last_summary_time = 0.0
+    _last_cb_notify_time = 0.0  # circuit breaker notification cooldown
     _scan_count = 0
 
     while True:
@@ -272,6 +368,60 @@ async def auto_trade_loop() -> None:
 
             _scan_count += 1
             now_mono = _time.monotonic()
+
+            # ---- Circuit breakers ------------------------------------------------
+            _skip_cycle = False
+            _cb_msg = ""
+            if settings.max_daily_loss_pct > 0 or settings.max_consecutive_losses > 0:
+                try:
+                    _acct = mt5_client.account_info()
+                    _deals = mt5_client.history_deals(days=1)
+                    _bot_magics = {settings.magic, settings.gold_magic, settings.stock_magic}
+
+                    if not _skip_cycle and settings.max_daily_loss_pct > 0:
+                        _today = datetime.now(TZ_TH).strftime("%Y-%m-%d")
+                        _today_closed = [
+                            d for d in _deals
+                            if d.get("entry") == "OUT"
+                            and d["time"].startswith(_today)
+                            and d.get("magic", 0) in _bot_magics
+                        ]
+                        _today_pnl = sum(
+                            d.get("profit", 0) + d.get("commission", 0) + d.get("swap", 0)
+                            for d in _today_closed
+                        )
+                        _bal = max(_acct["balance"], 1)
+                        if _today_pnl < 0 and abs(_today_pnl) / _bal >= settings.max_daily_loss_pct:
+                            _cb_msg = (
+                                f"Daily loss limit {settings.max_daily_loss_pct:.0%} reached "
+                                f"(P/L: {_today_pnl:.2f}, {abs(_today_pnl)/_bal:.1%} of balance) "
+                                f"— trading paused until tomorrow"
+                            )
+                            _skip_cycle = True
+
+                    if not _skip_cycle and settings.max_consecutive_losses > 0:
+                        _n = settings.max_consecutive_losses
+                        _closed_all = [d for d in _deals if d.get("entry") == "OUT" and d.get("magic", 0) in _bot_magics]
+                        _recent = _closed_all[:_n]
+                        if len(_recent) == _n and all(
+                            d.get("profit", 0) + d.get("commission", 0) + d.get("swap", 0) < 0
+                            for d in _recent
+                        ):
+                            _cb_msg = f"Last {_n} consecutive trades all losses — trading paused"
+                            _skip_cycle = True
+
+                except Exception as _e:
+                    log.error("Circuit breaker check: %s", _e)
+
+            if _skip_cycle:
+                log.warning(_cb_msg)
+                log_store.push("warning", "circuit_breaker", _cb_msg)
+                if now_mono - _last_cb_notify_time > 1800:
+                    send_telegram_notification(f"⛔ *Circuit Breaker*\n{_cb_msg}")
+                    _last_cb_notify_time = now_mono
+                await asyncio.sleep(max(10, settings.auto_trade_interval))
+                continue
+            # ---- End circuit breakers -------------------------------------------
 
             # Group active symbols by market group
             active_symbols = [
@@ -338,16 +488,10 @@ async def auto_trade_loop() -> None:
                             cache_key = (symbol.upper(), timeframe.upper())
 
                             if cache_key not in last_processed_candles:
-                                # First time seeing this symbol — initialize cache
                                 last_processed_candles[cache_key] = latest_candle_time
-                                if _is_first_scan:
-                                    # On first startup scan, allow immediate evaluation
-                                    log.debug("First scan: evaluating %s (%s) at candle %s", symbol, timeframe, latest_candle_time)
-                                else:
-                                    # Symbol was added later — wait for next candle
-                                    log.info("New symbol %s (%s) cached at %s, waiting for next candle.", symbol, timeframe, latest_candle_time)
-                                    cycle_same_candle += 1
-                                    continue
+                                log.info("Initialized %s (%s) at %s — waiting for confirmed candle.", symbol, timeframe, latest_candle_time[-19:])
+                                cycle_same_candle += 1
+                                continue
 
                             elif last_processed_candles.get(cache_key) == latest_candle_time:
                                 cycle_same_candle += 1
@@ -362,8 +506,19 @@ async def auto_trade_loop() -> None:
                             last_processed_candles[cache_key] = latest_candle_time
                             cycle_new_candle += 1
 
-                            # Compute technical signal locally (fast, no AI)
-                            # Need 200 bars for indicators, not just 3
+                            # Spread filter — skip high-spread conditions
+                            if settings.max_spread_points > 0:
+                                try:
+                                    _sym_info = mt5_client.symbol_info(symbol)
+                                    _spread = _sym_info.get("spread", 0)
+                                    if _spread > settings.max_spread_points:
+                                        log.info("%s spread %d > limit %d — skipped", symbol, _spread, settings.max_spread_points)
+                                        log_store.push("warning", "spread_filter", f"{symbol} spread {_spread} > {settings.max_spread_points} pts — skipped")
+                                        cycle_holds += 1
+                                        continue
+                                except Exception as _e:
+                                    log.debug("Spread check %s: %s", symbol, _e)
+
                             snap, sig = manager.evaluate_technical_signal(symbol, timeframe, _symbol_strategy(symbol))
 
                             if sig.action != Action.HOLD:
@@ -451,7 +606,7 @@ async def auto_trade_loop() -> None:
             log.info(cycle_summary)
 
             # Push to log_store only when something interesting happened
-            if cycle_new_candle > 0 or cycle_trades > 0 or _is_first_scan:
+            if cycle_new_candle > 0 or cycle_trades > 0:
                 log_store.push(
                     "info", "scan_cycle",
                     cycle_summary,
@@ -476,8 +631,6 @@ async def auto_trade_loop() -> None:
                     )
                 except Exception:
                     pass
-
-            _is_first_scan = False
 
         except Exception as e:
             log_store.push("error", "system", f"Worker error: {str(e)[:120]}")
