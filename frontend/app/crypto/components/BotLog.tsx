@@ -154,7 +154,7 @@ export default function BotLog({ fetchLogs }: { fetchLogs: () => Promise<LogEntr
       } catch {}
     };
     poll();
-    const id = setInterval(poll, 5000);
+    const id = setInterval(poll, 15000);
     return () => { active = false; clearInterval(id); };
   }, [fetchLogs]);
 

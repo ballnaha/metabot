@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +20,9 @@ from .trader import manager, magic_for_symbol
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("metabot.api")
+
+TICK_CACHE_TTL_SECONDS = 8.0
+_tick_cache: dict[str, tuple[float, dict]] = {}
 
 app = FastAPI(title="MetaBot API", version="0.1.0")
 
@@ -323,12 +327,20 @@ async def get_symbol_tick(symbol: str):
 async def get_bulk_ticks(symbols: str):
     try:
         sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+        cache_key = ",".join(sym_list)
+        now = time.monotonic()
+        cached = _tick_cache.get(cache_key)
+        if cached and now - cached[0] < TICK_CACHE_TTL_SECONDS:
+            return cached[1]
+
         results = {}
         for sym in sym_list:
             try:
                 results[sym] = mt5_client.get_tick(sym)
             except Exception as e:
                 results[sym] = {"error": str(e)}
+
+        _tick_cache[cache_key] = (now, results)
         return results
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))

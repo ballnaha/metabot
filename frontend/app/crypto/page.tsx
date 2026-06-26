@@ -546,7 +546,7 @@ export default function CryptoPage() {
     };
 
     fetchAllTicks();
-    const intervalId = setInterval(fetchAllTicks, 2000);
+    const intervalId = setInterval(fetchAllTicks, 10000);
 
     return () => {
       active = false;
