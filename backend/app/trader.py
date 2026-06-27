@@ -36,6 +36,7 @@ def max_slots_for_symbol(symbol: str) -> int:
     if group == "crypto": return max(1, settings.max_crypto_open_trades or settings.max_open_trades)
     if group == "gold":   return max(1, settings.max_gold_open_trades   or settings.max_open_trades)
     if group == "stock":  return max(1, settings.max_stock_open_trades  or settings.max_open_trades)
+    if group == "forex":  return max(1, settings.max_forex_open_trades  or settings.max_open_trades)
     return max(1, settings.max_open_trades)
 
 
@@ -59,6 +60,7 @@ def get_group_slot_status(group: str) -> tuple[int, int]:
     if group == "crypto":   max_slots = max(1, settings.max_crypto_open_trades or settings.max_open_trades)
     elif group == "gold":   max_slots = max(1, settings.max_gold_open_trades   or settings.max_open_trades)
     elif group == "stock":  max_slots = max(1, settings.max_stock_open_trades  or settings.max_open_trades)
+    elif group == "forex":  max_slots = max(1, settings.max_forex_open_trades  or settings.max_open_trades)
     else:                   max_slots = max(1, settings.max_open_trades)
     
     used_slots = len(group_positions) + reserved_group_count

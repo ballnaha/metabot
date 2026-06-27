@@ -57,6 +57,10 @@ import {
   ArrowUp,
   ArrowDown,
   TrendingUp,
+  BellRing,
+  BellOff,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 
 const STRATEGY_CONDITIONS: Record<string, { label: string; buy: string[]; sell: string[]; note?: string }> = {
@@ -161,6 +165,16 @@ async function api(path: string, opts?: RequestInit) {
 const MONO = { fontFamily: "ui-monospace, monospace", fontVariantNumeric: "tabular-nums" };
 const fmt = (n: number | null | undefined, d = 2) =>
   n === null || n === undefined || Number.isNaN(Number(n)) ? "-" : Number(n).toFixed(d);
+const fmtP = (n: number | null | undefined): string => {
+  if (n === null || n === undefined || !Number.isFinite(Number(n))) return "—";
+  const v = Number(n);
+  if (v >= 10000) return Math.round(v).toLocaleString("en-US");
+  if (v >= 1000)  return v.toFixed(1);
+  if (v >= 100)   return v.toFixed(2);
+  if (v >= 1)     return v.toFixed(3);
+  if (v >= 0.01)  return v.toFixed(5);
+  return v.toFixed(7);
+};
 const formatBangkokTime = (value: string) => {
   const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(value);
   const date = new Date(hasTimezone ? value : `${value}+07:00`);
@@ -229,7 +243,7 @@ function StatCard({
 }) {
   return (
     <Card sx={{ height: "100%" }}>
-      <CardContent sx={{ p: 2, "&:last-child": { pb: 2 } }}>
+      <CardContent sx={{ p: 2, "&:last-child": { pb: 2 }, display: { xs: "none", md: "block" } }}>
         <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", gap: 1 }}>
           <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
             {label}
@@ -244,6 +258,19 @@ function StatCard({
             {sub}
           </Typography>
         )}
+      </CardContent>
+      <CardContent sx={{ p: 1.25, "&:last-child": { pb: 1.25 }, display: { xs: "block", md: "none" } }}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+          <Box sx={{ color: tone, display: "flex", flexShrink: 0, opacity: 0.7 }}>{icon}</Box>
+          <Box sx={{ minWidth: 0, flex: 1 }}>
+            <Typography sx={{ fontSize: "0.6rem", fontWeight: 700, color: "#64748b", lineHeight: 1.2, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+              {label}
+            </Typography>
+            <Typography noWrap sx={{ ...MONO, color: tone, fontSize: "1.05rem", fontWeight: 800, lineHeight: 1.2, mt: 0.15 }}>
+              {value}
+            </Typography>
+          </Box>
+        </Stack>
       </CardContent>
     </Card>
   );
@@ -429,6 +456,10 @@ export default function GoldPage() {
   const [closeCandidate, setCloseCandidate] = useState<Position | null>(null);
   const [historyPage, setHistoryPage] = useState(0);
   const [historyRowsPerPage, setHistoryRowsPerPage] = useState(10);
+
+  // Mobile collapse state — collapsed by default on mobile
+  const [priceTableOpen, setPriceTableOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const goldSymbols = useMemo(() => {
     const fromConfig: string[] = (settings.symbols || "")
@@ -720,6 +751,7 @@ export default function GoldPage() {
         default_rr: settings.default_rr,
         gold_bot_enabled: settings.gold_bot_enabled,
         use_ai: settings.use_ai,
+        telegram_enabled: settings.telegram_enabled,
       };
       await api("settings", {
         method: "POST",
@@ -744,6 +776,24 @@ export default function GoldPage() {
     }
   }
 
+  const handleDirectChangeStrategy = async (newStrat: string) => {
+    try {
+      const next = {
+        ...settings,
+        gold_strategy: newStrat
+      };
+      await api("settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(next),
+      });
+      setSettings(next);
+      toastr.success("เปลี่ยนกลยุทธ์สำเร็จ");
+    } catch (e: any) {
+      toastr.error(`เปลี่ยนกลยุทธ์ไม่สำเร็จ: ${e.message}`);
+    }
+  };
+
   const patchSettings = (patch: Record<string, any>) => setSettings((prev: any) => ({ ...prev, ...patch }));
 
   return (
@@ -755,7 +805,7 @@ export default function GoldPage() {
         onOpenLog={() => setLogOpen(true)}
         onSync={refresh}
       />
-      <Box sx={{ ml: `${SIDEBAR_W}px` }}>
+      <Box sx={{ ml: { xs: 0, md: `${SIDEBAR_W}px` }, pb: { xs: "72px", md: 0 } }}>
         <TopBar
           pageTitle="Gold Bot Terminal"
           pageIcon={<Award size={18} />}
@@ -767,6 +817,9 @@ export default function GoldPage() {
           openPl={goldOpenPl}
           botEnabled={goldBotActive}
           strategy={settings.gold_strategy || ""}
+          aiEnabled={settings.use_ai}
+          assetType="gold"
+          onChangeStrategy={handleDirectChangeStrategy}
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
@@ -775,8 +828,8 @@ export default function GoldPage() {
             <Box
               sx={{
                 display: "grid",
-                gridTemplateColumns: { xs: "1fr", md: "repeat(4, minmax(0, 1fr))" },
-                gap: 1.5,
+                gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4, minmax(0, 1fr))" },
+                gap: { xs: 0.75, md: 1.5 },
               }}
             >
               <StatCard
@@ -934,18 +987,29 @@ export default function GoldPage() {
                 <CardContent sx={{ p: 0, "&:last-child": { pb: 0 } }}>
                   <Stack
                     direction={{ xs: "column", md: "row" }}
-                    sx={{ alignItems: { xs: "stretch", md: "center" }, justifyContent: "space-between", gap: 1.5, p: 2 }}
+                    sx={{ alignItems: { xs: "stretch", md: "center" }, justifyContent: "space-between", gap: 1.5, p: 2, cursor: { xs: "pointer", md: "default" } }}
+                    onClick={(e) => {
+                      const target = e.target as HTMLElement;
+                      if (window.innerWidth < 900 && !target.closest("input, button")) {
+                        setPriceTableOpen((v) => !v);
+                      }
+                    }}
                   >
                     <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                       <Award size={18} color="#fbbf24" />
                       <Box>
-                        <Typography sx={{ fontWeight: 800 }}>ราคาทองและสัญญาณบอท</Typography>
+                        <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                          <Typography sx={{ fontWeight: 800 }}>ราคาทองและสัญญาณบอท</Typography>
+                          <Box sx={{ display: { xs: "flex", md: "none" }, color: "#475569" }}>
+                            {priceTableOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                          </Box>
+                        </Stack>
                         <Typography variant="caption" color="text.secondary">
                           เลือก symbol แล้วให้บอทวิเคราะห์ก่อนส่งออเดอร์
                         </Typography>
                       </Box>
                     </Stack>
-                    <Stack direction="row" spacing={1}>
+                    <Stack direction="row" spacing={1} sx={{ display: { xs: priceTableOpen ? "flex" : "none", md: "flex" } }}>
                       <TextField
                         size="small"
                         value={priceSearch}
@@ -963,99 +1027,206 @@ export default function GoldPage() {
                       </Button>
                     </Stack>
                   </Stack>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow sx={{ "& th": { bgcolor: "#0d1321", borderBottomColor: "rgba(255,255,255,0.08)" } }}>
-                        <TableCell>Symbol</TableCell>
-                        <TableCell align="right">Bid</TableCell>
-                        <TableCell align="right">Ask</TableCell>
-                        <TableCell align="right">Spread</TableCell>
-                        <TableCell align="center">Signal</TableCell>
-                        <TableCell align="right">Action</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
+                  <Box sx={{ display: priceTableOpen ? undefined : { xs: "none", md: "block" } }}>
+                    {/* DESKTOP TABLE — sm and up */}
+                    <Box sx={{ display: { xs: "none", sm: "block" }, overflowX: "auto" }}>
+                      <Table size="small">
+                        <TableHead>
+                          <TableRow sx={{ "& th": { bgcolor: "#0d1321", borderBottomColor: "rgba(255,255,255,0.08)" } }}>
+                            <TableCell>Symbol</TableCell>
+                            <TableCell align="right">Bid</TableCell>
+                            <TableCell align="right">Ask</TableCell>
+                            <TableCell align="right">Spread</TableCell>
+                            <TableCell align="center">Signal</TableCell>
+                            <TableCell align="right">Action</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {initialLoading ? (
+                            <TableRow>
+                              <TableCell colSpan={6} align="center" sx={{ py: 4 }}>
+                                <CircularProgress size={22} sx={{ color: "#fbbf24" }} />
+                              </TableCell>
+                            </TableRow>
+                          ) : filteredGoldSymbols.length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={6}>
+                                <Alert severity="warning">ยังไม่มี symbol ทอง กดตั้งค่าแล้วสแกนจาก MT5 ได้เลย</Alert>
+                              </TableCell>
+                            </TableRow>
+                          ) : (
+                            filteredGoldSymbols.map((sym) => {
+                              const tick = ticks[sym];
+                              const scan = scanResults.find((r) => r.symbol.toUpperCase() === sym.toUpperCase());
+                              const rowSpread = tick ? Math.abs((tick.ask || 0) - (tick.bid || 0)) : null;
+                              const selected = selectedSymbol === sym;
+                              return (
+                                <TableRow
+                                  key={sym}
+                                  hover
+                                  onClick={() => setSelectedSymbol(sym)}
+                                  sx={{
+                                    cursor: "pointer",
+                                    bgcolor: selected ? "rgba(251,191,36,0.08)" : "transparent",
+                                    "& td": { borderBottomColor: "rgba(255,255,255,0.04)" },
+                                  }}
+                                >
+                                  <TableCell>
+                                    <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                                      <Award size={15} color="#fbbf24" />
+                                      <Typography sx={{ ...MONO, fontWeight: 800 }}>{sym}</Typography>
+                                    </Stack>
+                                  </TableCell>
+                                  <TableCell align="right" sx={MONO}>{tick?.error ? "" : fmt(tick?.bid, 2)}</TableCell>
+                                  <TableCell align="right" sx={MONO}>{tick?.error ? "" : fmt(tick?.ask, 2)}</TableCell>
+                                  <TableCell align="right" sx={MONO}>{rowSpread === null ? "" : fmt(rowSpread, 2)}</TableCell>
+                                  <TableCell align="center">
+                                    <Chip
+                                      size="small"
+                                      color={actionColor(scan?.action)}
+                                      label={scan ? `${actionLabel(scan.action)} ${Math.round(scan.confidence * 100)}%` : "รอสแกน"}
+                                      variant={scan ? "filled" : "outlined"}
+                                    />
+                                  </TableCell>
+                                  <TableCell align="right">
+                                    <Button
+                                      size="small"
+                                      variant="outlined"
+                                      disabled={tradeStagingSymbol === sym}
+                                      onClick={(e) => { e.stopPropagation(); stageTrade(sym); }}
+                                      startIcon={tradeStagingSymbol === sym ? <CircularProgress size={14} color="inherit" /> : <Bot size={14} />}
+                                    >
+                                      วิเคราะห์ & เทรด
+                                    </Button>
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })
+                          )}
+                        </TableBody>
+                      </Table>
+                    </Box>
+
+                    {/* MOBILE COMPACT LIST — xs only */}
+                    <Box sx={{ display: { xs: "block", sm: "none" } }}>
                       {initialLoading ? (
-                        <TableRow>
-                          <TableCell colSpan={6} align="center" sx={{ py: 4 }}>
-                            <CircularProgress size={22} sx={{ color: "#fbbf24" }} />
-                          </TableCell>
-                        </TableRow>
+                        <Box sx={{ py: 4, textAlign: "center" }}>
+                          <CircularProgress size={20} sx={{ color: "#fbbf24" }} />
+                        </Box>
                       ) : filteredGoldSymbols.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={6}>
-                            <Alert severity="warning">ยังไม่มี symbol ทอง กดตั้งค่าแล้วสแกนจาก MT5 ได้เลย</Alert>
-                          </TableCell>
-                        </TableRow>
+                        <Box sx={{ p: 2 }}>
+                          <Alert severity="warning">ยังไม่มี symbol ทอง กดตั้งค่าแล้วสแกนจาก MT5 ได้เลย</Alert>
+                        </Box>
                       ) : (
                         filteredGoldSymbols.map((sym) => {
                           const tick = ticks[sym];
                           const scan = scanResults.find((r) => r.symbol.toUpperCase() === sym.toUpperCase());
-                          const rowSpread = tick ? Math.abs((tick.ask || 0) - (tick.bid || 0)) : null;
+                          const hasPrice = tick && !tick.error && (tick.bid > 0 || tick.ask > 0);
+                          const rowSpread = hasPrice ? Math.abs((tick!.ask || 0) - (tick!.bid || 0)) : null;
                           const selected = selectedSymbol === sym;
+                          const scanScore = scan ? Math.round(scan.confidence * 100) : null;
                           return (
-                            <TableRow
+                            <Box
                               key={sym}
-                              hover
                               onClick={() => setSelectedSymbol(sym)}
                               sx={{
-                                cursor: "pointer",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 1.25,
+                                px: 1.5,
+                                py: 1.25,
+                                borderBottom: "1px solid rgba(255,255,255,0.04)",
                                 bgcolor: selected ? "rgba(251,191,36,0.08)" : "transparent",
-                                "& td": { borderBottomColor: "rgba(255,255,255,0.04)" },
+                                cursor: "pointer",
+                                transition: "background-color 0.12s",
+                                "&:active": { bgcolor: "rgba(251,191,36,0.14)" },
                               }}
                             >
-                              <TableCell>
-                                <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                                  <Award size={15} color="#fbbf24" />
-                                  <Typography sx={{ ...MONO, fontWeight: 800 }}>{sym}</Typography>
+                              {/* Symbol + spread */}
+                              <Box sx={{ minWidth: 0, flex: "0 0 auto", width: 88 }}>
+                                <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
+                                  <Award size={14} color={selected ? "#fbbf24" : "#78716c"} />
+                                  <Typography noWrap sx={{ ...MONO, fontWeight: 800, fontSize: "0.82rem", color: selected ? "#fbbf24" : "#e2e8f0" }}>
+                                    {sym}
+                                  </Typography>
                                 </Stack>
-                              </TableCell>
-                              <TableCell align="right" sx={MONO}>{tick?.error ? "-" : fmt(tick?.bid, 2)}</TableCell>
-                              <TableCell align="right" sx={MONO}>{tick?.error ? "-" : fmt(tick?.ask, 2)}</TableCell>
-                              <TableCell align="right" sx={MONO}>{rowSpread === null ? "-" : fmt(rowSpread, 2)}</TableCell>
-                              <TableCell align="center">
+                                <Typography sx={{ ...MONO, fontSize: "0.6rem", color: "#475569", mt: 0.15, pl: 2.25 }}>
+                                  {rowSpread !== null ? `spd ${fmtP(rowSpread)}` : ""}
+                                </Typography>
+                              </Box>
+
+                              {/* Bid + Ask */}
+                              <Box sx={{ flex: 1, textAlign: "right", minWidth: 0 }}>
+                                <Typography sx={{ ...MONO, fontSize: "0.88rem", fontWeight: 700, color: hasPrice ? "#cbd5e1" : "#475569", lineHeight: 1.2 }}>
+                                  {hasPrice ? fmtP(tick!.bid) : ""}
+                                </Typography>
+                                <Typography sx={{ ...MONO, fontSize: "0.58rem", color: "#475569", mt: 0.1 }}>
+                                  {hasPrice ? `ask ${fmtP(tick!.ask)}` : ""}
+                                </Typography>
+                              </Box>
+
+                              {/* Signal + เทรด */}
+                              <Stack spacing={0.5} sx={{ alignItems: "flex-end", flex: "0 0 auto" }}>
                                 <Chip
                                   size="small"
                                   color={actionColor(scan?.action)}
-                                  label={scan ? `${actionLabel(scan.action)} ${Math.round(scan.confidence * 100)}%` : "รอสแกน"}
-                                  variant={scan ? "filled" : "outlined"}
+                                  label={scanScore !== null ? `${actionLabel(scan?.action)} ${scanScore}%` : scanLoading ? "..." : "—"}
+                                  variant={scanScore !== null ? "filled" : "outlined"}
+                                  sx={{ height: 20, borderRadius: 0.75, fontWeight: 800, fontSize: "0.65rem", "& .MuiChip-label": { px: 0.6 } }}
                                 />
-                              </TableCell>
-                              <TableCell align="right">
-                                <Button
-                                  size="small"
-                                  variant="outlined"
+                                <Box
+                                  component="button"
+                                  onClick={(e: React.MouseEvent) => { e.stopPropagation(); stageTrade(sym); }}
                                   disabled={tradeStagingSymbol === sym}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    stageTrade(sym);
+                                  sx={{
+                                    all: "unset",
+                                    cursor: tradeStagingSymbol === sym ? "wait" : "pointer",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 0.3,
+                                    color: "#fbbf24",
+                                    fontSize: "0.62rem",
+                                    fontWeight: 700,
+                                    opacity: tradeStagingSymbol === sym ? 0.4 : 1,
+                                    "&:active": { opacity: 0.6 },
                                   }}
-                                  startIcon={tradeStagingSymbol === sym ? <CircularProgress size={14} color="inherit" /> : <Bot size={14} />}
                                 >
-                                  วิเคราะห์ & เทรด
-                                </Button>
-                              </TableCell>
-                            </TableRow>
+                                  {tradeStagingSymbol === sym ? <CircularProgress size={10} color="inherit" /> : <Bot size={10} />}
+                                  เทรด
+                                </Box>
+                              </Stack>
+                            </Box>
                           );
                         })
                       )}
-                    </TableBody>
-                  </Table>
+                    </Box>
+                  </Box>{/* end collapsible price table body */}
                 </CardContent>
               </Card>
 
               <Stack spacing={2}>
-                <Card>
-                  <CardContent>
-                    <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", mb: 1.5 }}>
+                <Card sx={{ bgcolor: "#0d1321", border: { xs: "none", md: "1px solid rgba(255,255,255,0.03)" }, borderRadius: { xs: 0, md: 1 }, position: { lg: "sticky" }, top: { lg: 16 }, mx: { xs: -1.5, md: 0 } }}>
+                  <CardContent sx={{ p: { xs: 0, md: 2 }, "&:last-child": { pb: { xs: 0, md: 2 } } }}>
+                    <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 1.25, px: { xs: 1.5, md: 0 }, pt: { xs: 1.25, md: 0 } }}>
                       <Typography sx={{ fontWeight: 800 }}>Open Gold Positions</Typography>
-                      <Chip size="small" label={`${goldPositions.length} open`} />
+                      {goldPositions.length > 0 && (
+                        <Chip
+                          size="small"
+                          label={`${goldOpenPl >= 0 ? "+" : ""}${fmt(goldOpenPl)} ${account?.currency || ""}`}
+                          color={goldOpenPl >= 0 ? "success" : "error"}
+                          sx={{ fontWeight: 800, px: 1 }}
+                        />
+                      )}
                     </Stack>
-                    <Stack spacing={1}>
-                      {goldPositions.length === 0 ? (
-                        <Typography color="text.secondary" variant="body2">ยังไม่มี position ทองที่เปิดอยู่</Typography>
-                      ) : (
-                        goldPositions.map((p) => {
+                    {goldPositions.length === 0 ? (
+                      <Box sx={{ py: 4, textAlign: "center", px: 2 }}>
+                        <Typography variant="body2" color="text.secondary" sx={{ fontStyle: "italic" }}>
+                          ยังไม่มีออเดอร์ที่เปิดอยู่
+                        </Typography>
+                      </Box>
+                    ) : (
+                      <Box>
+                        {goldPositions.map((p) => {
                           const pct = p.price_open > 0
                             ? (p.type === "BUY"
                                 ? ((p.price_current - p.price_open) / p.price_open) * 100
@@ -1063,91 +1234,160 @@ export default function GoldPage() {
                             : 0;
                           const isProfit = p.profit >= 0;
                           const invested = p.volume * p.price_open * (p.contract_size ?? 1.0);
-                          const botMagics = new Set([settings.gold_magic, settings.magic, (settings as any).stock_magic].filter(Boolean));
-                          const isBot = botMagics.has(p.magic);
+                          const isBot = _gBotMagics.has(p.magic);
+                          const slPct = p.sl > 0 ? ((p.sl - p.price_open) / p.price_open) * 100 : null;
+                          const tpPct = p.tp > 0 ? ((p.tp - p.price_open) / p.price_open) * 100 : null;
+                          const distToSl = p.sl > 0 ? ((p.sl - p.price_current) / p.price_current) * 100 : null;
+                          const distToTp = p.tp > 0 ? ((p.tp - p.price_current) / p.price_current) * 100 : null;
+                          const sideColor = p.type === "BUY" ? "#10b981" : "#ef4444";
                           return (
-                            <Box
-                              key={p.ticket}
-                              sx={{
-                                p: 1.25,
-                                borderRadius: 1,
-                                bgcolor: p.type === "BUY" ? "rgba(16,185,129,0.04)" : "rgba(239,68,68,0.04)",
-                                border: `1px solid ${p.type === "BUY" ? "rgba(16,185,129,0.18)" : "rgba(239,68,68,0.18)"}`,
-                              }}
-                            >
-                              <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start", justifyContent: "space-between", mb: 1 }}>
-                                <Stack direction="row" spacing={1} sx={{ alignItems: "center", minWidth: 0 }}>
-                                  <Chip
-                                    size="small"
-                                    label={actionLabel(p.type)}
-                                    color={actionColor(p.type)}
-                                    variant="outlined"
-                                    sx={{ flexShrink: 0, height: 22, borderRadius: 1, fontWeight: 800, fontSize: 10 }}
-                                  />
-                                  <Box sx={{ minWidth: 0 }}>
-                                    <Typography noWrap sx={{ fontWeight: 750, lineHeight: 1.15 }}>{p.symbol}</Typography>
-                                    <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mt: 0.2 }}>
-                                      <Typography variant="caption" color="text.secondary" sx={{ ...MONO, lineHeight: 1.2 }}>
-                                        Ticket #{p.ticket}
+                            <Box key={p.ticket}>
+                              {/* ── MOBILE: flat list row ── */}
+                              <Box
+                                sx={{
+                                  display: { xs: "block", md: "none" },
+                                  borderBottom: "1px solid rgba(255,255,255,0.04)",
+                                  borderLeft: `3px solid ${sideColor}`,
+                                  pl: 1.25, pr: 1, py: 0.85,
+                                  bgcolor: isProfit ? "rgba(16,185,129,0.015)" : "rgba(239,68,68,0.015)",
+                                }}
+                              >
+                                {/* Row 1: [Symbol · L/S · BOT]  [P&L / % · ×] */}
+                                <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", gap: 1 }}>
+                                  {/* left */}
+                                  <Stack direction="row" spacing={0.6} sx={{ alignItems: "center", minWidth: 0, overflow: "hidden" }}>
+                                    <Typography noWrap sx={{ fontWeight: 800, fontSize: "0.88rem", color: "#f8fafc", lineHeight: 1.1, flexShrink: 0 }}>
+                                      {p.symbol}
+                                    </Typography>
+                                    <Box sx={{ px: 0.6, py: 0.2, borderRadius: 0.5, bgcolor: p.type === "BUY" ? "rgba(16,185,129,0.18)" : "rgba(239,68,68,0.18)", border: `1px solid ${p.type === "BUY" ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)"}`, flexShrink: 0 }}>
+                                      <Typography sx={{ fontSize: "0.62rem", fontWeight: 900, color: sideColor, lineHeight: 1.3, letterSpacing: "0.05em" }}>
+                                        {p.type === "BUY" ? "LONG" : "SHORT"}
                                       </Typography>
-                                      <Chip
-                                        size="small"
-                                        label={isBot ? "Bot" : "Manual"}
-                                        sx={{
-                                          height: 14, fontSize: 9, fontWeight: 800, borderRadius: 0.5,
-                                          bgcolor: isBot ? "rgba(59,130,246,0.12)" : "rgba(148,163,184,0.1)",
-                                          color: isBot ? "#60a5fa" : "#94a3b8",
-                                          border: `1px solid ${isBot ? "rgba(59,130,246,0.25)" : "rgba(148,163,184,0.15)"}`,
-                                          "& .MuiChip-label": { px: 0.6 },
-                                        }}
-                                      />
                                     </Box>
-                                  </Box>
+                                    {isBot && (
+                                      <Box sx={{ px: 0.5, py: 0.2, borderRadius: 0.4, bgcolor: "rgba(59,130,246,0.15)", border: "1px solid rgba(59,130,246,0.25)", flexShrink: 0 }}>
+                                        <Typography sx={{ fontSize: "0.58rem", fontWeight: 800, color: "#93c5fd", lineHeight: 1.3 }}>BOT</Typography>
+                                      </Box>
+                                    )}
+                                  </Stack>
+                                  {/* right */}
+                                  <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", flexShrink: 0 }}>
+                                    <Stack sx={{ alignItems: "flex-end" }}>
+                                      <Typography sx={{ ...MONO, fontWeight: 800, fontSize: "0.95rem", color: isProfit ? "#4ade80" : "#fb7185", lineHeight: 1 }}>
+                                        {isProfit ? "+" : ""}{fmt(p.profit)}
+                                      </Typography>
+                                      <Typography sx={{ ...MONO, fontSize: "0.68rem", fontWeight: 700, color: isProfit ? "#86efac" : "#fda4af", lineHeight: 1.2 }}>
+                                        {pct >= 0 ? "+" : ""}{pct.toFixed(2)}%
+                                      </Typography>
+                                    </Stack>
+                                    <IconButton
+                                      size="small"
+                                      disabled={closingTicket === p.ticket}
+                                      onClick={() => setCloseCandidate(p)}
+                                      sx={{ width: 22, height: 22, p: 0, color: "#94a3b8", flexShrink: 0, "&:hover": { color: "#fb7185" }, "&:active": { color: "#ef4444" } }}
+                                    >
+                                      {closingTicket === p.ticket ? <CircularProgress size={13} color="inherit" /> : <X size={15} />}
+                                    </IconButton>
+                                  </Stack>
                                 </Stack>
-                                <Stack direction="row" spacing={0.75} sx={{ alignItems: "flex-start", flexShrink: 0 }}>
-                                  <Box sx={{ textAlign: "right" }}>
-                                    <Typography sx={{ ...MONO, fontWeight: 850, lineHeight: 1.15, color: isProfit ? "#10b981" : "#ef4444" }}>
-                                      {isProfit ? "+" : ""}{fmt(p.profit)} {account?.currency || ""}
-                                    </Typography>
-                                    <Typography variant="caption" sx={{ ...MONO, display: "block", lineHeight: 1.2, color: isProfit ? "#10b981" : "#ef4444", fontWeight: 700 }}>
-                                      {pct >= 0 ? "+" : ""}{pct.toFixed(2)}%
-                                    </Typography>
-                                  </Box>
-                                  <IconButton
-                                    size="small"
-                                    disabled={closingTicket === p.ticket}
-                                    onClick={() => setCloseCandidate(p)}
-                                    sx={{
-                                      width: 28, height: 28, borderRadius: 1,
-                                      border: "1px solid rgba(239,68,68,0.28)",
-                                      bgcolor: "rgba(239,68,68,0.06)", color: "#f87171", flexShrink: 0,
-                                      "&:hover": { borderColor: "#ef4444", bgcolor: "rgba(239,68,68,0.13)" },
-                                    }}
-                                  >
-                                    {closingTicket === p.ticket ? <CircularProgress size={14} color="inherit" /> : <X size={15} />}
-                                  </IconButton>
-                                </Stack>
-                              </Stack>
 
-                              <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 0.75, p: 1, borderRadius: 1, bgcolor: "rgba(255,255,255,0.025)", mb: 0.75 }}>
-                                {[
-                                  { label: "Lot",      value: fmt(p.volume, 2) },
-                                  { label: "ราคาเข้า", value: fmt(p.price_open, 2) },
-                                  { label: "ปัจจุบัน", value: fmt(p.price_current, 2) },
-                                  { label: "เงินทุน",  value: fmt(invested, 2) },
-                                ].map((cell) => (
-                                  <Box key={cell.label} sx={{ minWidth: 0 }}>
-                                    <Typography variant="caption" sx={{ display: "block", color: "#64748b", lineHeight: 1.2 }}>{cell.label}</Typography>
-                                    <Typography noWrap variant="caption" sx={{ ...MONO, display: "block", color: "#cbd5e1", fontWeight: 650, lineHeight: 1.25 }}>{cell.value}</Typography>
-                                  </Box>
-                                ))}
+                                {/* Row 2: [entry › current · lot]  [SL xxx · TP xxx] */}
+                                <Stack direction="row" sx={{ mt: 0.5, alignItems: "center", justifyContent: "space-between", gap: 1 }}>
+                                  {/* price movement */}
+                                  <Typography sx={{ ...MONO, fontSize: "0.72rem", lineHeight: 1, flexShrink: 0 }}>
+                                    <Box component="span" sx={{ color: "#94a3b8" }}>{fmtP(p.price_open)}</Box>
+                                    <Box component="span" sx={{ color: "#64748b", mx: "4px" }}>›</Box>
+                                    <Box component="span" sx={{ color: "#e2e8f0", fontWeight: 700 }}>{fmtP(p.price_current)}</Box>
+                                    <Box component="span" sx={{ color: "#475569", mx: "4px" }}>·</Box>
+                                    <Box component="span" sx={{ color: "#94a3b8" }}>{fmt(p.volume, 2)}L</Box>
+                                  </Typography>
+                                  {/* SL / TP compact */}
+                                  {(p.sl > 0 || p.tp > 0) && (
+                                    <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", flexShrink: 0 }}>
+                                      {p.sl > 0 && (
+                                        <Typography sx={{ ...MONO, fontSize: "0.68rem", lineHeight: 1 }}>
+                                          <Box component="span" sx={{ color: "#cbd5e1" }}>SL </Box>
+                                          <Box component="span" sx={{ color: "#fb7185", fontWeight: 700 }}>{fmtP(p.sl)}</Box>
+                                        </Typography>
+                                      )}
+                                      {p.sl > 0 && p.tp > 0 && <Box sx={{ width: "1px", height: 11, bgcolor: "#475569" }} />}
+                                      {p.tp > 0 && (
+                                        <Typography sx={{ ...MONO, fontSize: "0.68rem", lineHeight: 1 }}>
+                                          <Box component="span" sx={{ color: "#cbd5e1" }}>TP </Box>
+                                          <Box component="span" sx={{ color: "#4ade80", fontWeight: 700 }}>{fmtP(p.tp)}</Box>
+                                        </Typography>
+                                      )}
+                                    </Stack>
+                                  )}
+                                </Stack>
                               </Box>
-                              {(p.sl > 0 || p.tp > 0) && (() => {
-                                const slPct = p.sl > 0 ? ((p.sl - p.price_open) / p.price_open) * 100 : null;
-                                const tpPct = p.tp > 0 ? ((p.tp - p.price_open) / p.price_open) * 100 : null;
-                                const distToSl = p.sl > 0 ? ((p.sl - p.price_current) / p.price_current) * 100 : null;
-                                const distToTp = p.tp > 0 ? ((p.tp - p.price_current) / p.price_current) * 100 : null;
-                                return (
+
+                              {/* ── DESKTOP full view ── */}
+                              <Box sx={{ display: { xs: "none", md: "block" }, p: 1.25 }}>
+                                <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start", justifyContent: "space-between", mb: 1 }}>
+                                  <Stack direction="row" spacing={1} sx={{ alignItems: "center", minWidth: 0 }}>
+                                    <Chip
+                                      size="small"
+                                      label={actionLabel(p.type)}
+                                      color={actionColor(p.type)}
+                                      variant="outlined"
+                                      sx={{ flexShrink: 0, height: 22, borderRadius: 1, fontWeight: 800, fontSize: 10 }}
+                                    />
+                                    <Box sx={{ minWidth: 0 }}>
+                                      <Typography noWrap sx={{ fontWeight: 750, lineHeight: 1.15 }}>{p.symbol}</Typography>
+                                      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mt: 0.2 }}>
+                                        <Typography variant="caption" color="text.secondary" sx={{ ...MONO, lineHeight: 1.2 }}>
+                                          Ticket #{p.ticket}
+                                        </Typography>
+                                        <Chip
+                                          size="small"
+                                          label={isBot ? "Bot" : "Manual"}
+                                          sx={{
+                                            height: 14, fontSize: 9, fontWeight: 800, borderRadius: 0.5,
+                                            bgcolor: isBot ? "rgba(59,130,246,0.12)" : "rgba(148,163,184,0.1)",
+                                            color: isBot ? "#60a5fa" : "#94a3b8",
+                                            border: `1px solid ${isBot ? "rgba(59,130,246,0.25)" : "rgba(148,163,184,0.15)"}`,
+                                            "& .MuiChip-label": { px: 0.6 },
+                                          }}
+                                        />
+                                      </Box>
+                                    </Box>
+                                  </Stack>
+                                  <Stack direction="row" spacing={0.75} sx={{ alignItems: "flex-start", flexShrink: 0 }}>
+                                    <Box sx={{ textAlign: "right" }}>
+                                      <Typography sx={{ ...MONO, fontWeight: 850, lineHeight: 1.15, color: isProfit ? "#10b981" : "#ef4444" }}>
+                                        {isProfit ? "+" : ""}{fmt(p.profit)} {account?.currency || ""}
+                                      </Typography>
+                                      <Typography variant="caption" sx={{ ...MONO, display: "block", lineHeight: 1.2, color: isProfit ? "#10b981" : "#ef4444", fontWeight: 700 }}>
+                                        {pct >= 0 ? "+" : ""}{pct.toFixed(2)}%
+                                      </Typography>
+                                    </Box>
+                                    <IconButton
+                                      size="small"
+                                      color="error"
+                                      disabled={closingTicket === p.ticket}
+                                      onClick={() => setCloseCandidate(p)}
+                                      sx={{ width: 28, height: 28, borderRadius: 1, border: "1px solid rgba(239,68,68,0.28)", bgcolor: "rgba(239,68,68,0.06)", color: "#f87171", flexShrink: 0, "&:hover": { borderColor: "#ef4444", bgcolor: "rgba(239,68,68,0.13)" } }}
+                                    >
+                                      {closingTicket === p.ticket ? <CircularProgress size={14} color="inherit" /> : <X size={15} />}
+                                    </IconButton>
+                                  </Stack>
+                                </Stack>
+
+                                <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 0.75, p: 1, borderRadius: 1, bgcolor: "rgba(255,255,255,0.025)", mb: 0.75 }}>
+                                  {[
+                                    { label: "Lot",      value: fmt(p.volume, 2) },
+                                    { label: "ราคาเข้า", value: fmt(p.price_open, 2) },
+                                    { label: "ปัจจุบัน", value: fmt(p.price_current, 2) },
+                                    { label: "เงินทุน",  value: fmt(invested, 2) },
+                                  ].map((cell) => (
+                                    <Box key={cell.label} sx={{ minWidth: 0 }}>
+                                      <Typography variant="caption" sx={{ display: "block", color: "#64748b", lineHeight: 1.2 }}>{cell.label}</Typography>
+                                      <Typography noWrap variant="caption" sx={{ ...MONO, display: "block", color: "#cbd5e1", fontWeight: 650, lineHeight: 1.25 }}>{cell.value}</Typography>
+                                    </Box>
+                                  ))}
+                                </Box>
+                                {(p.sl > 0 || p.tp > 0) && (
                                   <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0.75, px: 1, pb: 1 }}>
                                     {p.sl > 0 && (
                                       <Box sx={{ p: 0.75, borderRadius: 1, bgcolor: "rgba(239,68,68,0.07)", border: "1px solid rgba(239,68,68,0.2)" }}>
@@ -1170,13 +1410,13 @@ export default function GoldPage() {
                                       </Box>
                                     )}
                                   </Box>
-                                );
-                              })()}
+                                )}
+                              </Box>
                             </Box>
                           );
-                        })
-                      )}
-                    </Stack>
+                        })}
+                      </Box>
+                    )}
                   </CardContent>
                 </Card>
               </Stack>
@@ -1184,10 +1424,20 @@ export default function GoldPage() {
 
             <Card>
               <CardContent>
-                <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 2 }}>
-                  <History size={18} color="#60a5fa" />
-                  <Typography sx={{ fontWeight: 800 }}>Gold Trade History 7D</Typography>
+                <Stack
+                  direction="row"
+                  sx={{ justifyContent: "space-between", alignItems: "center", mb: { xs: historyOpen ? 2 : 0, md: 2 }, cursor: { xs: "pointer", md: "default" } }}
+                  onClick={() => { if (window.innerWidth < 900) setHistoryOpen((v) => !v); }}
+                >
+                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                    <History size={18} color="#60a5fa" />
+                    <Typography sx={{ fontWeight: 800 }}>Gold Trade History 7D</Typography>
+                    <Box sx={{ display: { xs: "flex", md: "none" }, color: "#475569" }}>
+                      {historyOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                    </Box>
+                  </Stack>
                 </Stack>
+                <Box sx={{ display: historyOpen ? undefined : { xs: "none", md: "block" } }}>
                 <PnLChart deals={goldHistory} />
                 <Box sx={{ overflowX: "auto", mt: 2 }}>
                   <Table size="small">
@@ -1206,12 +1456,15 @@ export default function GoldPage() {
                         const isLong   = h.entry === "IN" ? h.type === "BUY" : h.type === "SELL";
                         const isOpen   = h.entry === "IN";
                         const isBot    = _gBotMagics.has(h.magic);
-                        const ac       = isLong ? "#10b981" : "#ef4444";
-                        const abg      = isLong ? "rgba(16,185,129,0.08)" : "rgba(239,68,68,0.08)";
-                        const aborder  = isLong ? "rgba(16,185,129,0.22)" : "rgba(239,68,68,0.22)";
+                        // IN (open) = blue · OUT (close) = green/red based on realized P/L
+                        const ac       = isOpen ? "#60a5fa" : h.profit > 0 ? "#10b981" : h.profit < 0 ? "#ef4444" : "#64748b";
+                        const abg      = isOpen ? "rgba(59,130,246,0.1)"   : h.profit > 0 ? "rgba(16,185,129,0.08)"  : h.profit < 0 ? "rgba(239,68,68,0.08)"  : "rgba(100,116,139,0.08)";
+                        const aborder  = isOpen ? "rgba(59,130,246,0.25)"  : h.profit > 0 ? "rgba(16,185,129,0.22)"  : h.profit < 0 ? "rgba(239,68,68,0.22)"  : "rgba(100,116,139,0.15)";
+                        const rowBg    = isOpen ? "rgba(59,130,246,0.022)" : h.profit > 0 ? "rgba(16,185,129,0.02)"  : h.profit < 0 ? "rgba(239,68,68,0.02)"  : "transparent";
+                        const accentBorder = isOpen ? "rgba(59,130,246,0.45)" : h.profit > 0 ? "rgba(16,185,129,0.45)" : h.profit < 0 ? "rgba(239,68,68,0.45)" : "rgba(100,116,139,0.25)";
                         return (
-                          <TableRow key={`${h.ticket}-${h.time}`} sx={{ "& td": { borderBottomColor: "rgba(255,255,255,0.04)", py: 0.6 }, "&:hover": { bgcolor: "rgba(255,255,255,0.012)" } }}>
-                            <TableCell sx={{ ...MONO, color: "#64748b", fontSize: "0.75rem", whiteSpace: "nowrap" }}>{formatBangkokTime(h.time)}</TableCell>
+                          <TableRow key={`${h.ticket}-${h.time}`} sx={{ bgcolor: rowBg, "& td": { borderBottomColor: "rgba(255,255,255,0.04)", py: 0.6 }, "&:hover": { bgcolor: `${rowBg} !important`, filter: "brightness(1.4)" } }}>
+                            <TableCell sx={{ ...MONO, color: "#64748b", fontSize: "0.75rem", whiteSpace: "nowrap", borderLeft: `3px solid ${accentBorder}`, pl: 2 }}>{formatBangkokTime(h.time)}</TableCell>
                             <TableCell>
                               <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
                                 <Typography sx={{ ...MONO, fontWeight: 800, fontSize: "0.82rem", color: "#e2e8f0" }}>{h.symbol}</Typography>
@@ -1221,7 +1474,7 @@ export default function GoldPage() {
                             <TableCell>
                               <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
                                 <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.4, px: 0.75, py: 0.2, borderRadius: 0.75, bgcolor: abg, border: `1px solid ${aborder}` }}>
-                                  <Box sx={{ width: 4, height: 4, borderRadius: "50%", bgcolor: ac, flexShrink: 0 }} />
+                                  <Box sx={{ width: 4, height: 4, borderRadius: isOpen ? "50%" : "1px", bgcolor: ac, flexShrink: 0 }} />
                                   <Typography sx={{ fontSize: "0.7rem", fontWeight: 800, color: ac, whiteSpace: "nowrap" }}>
                                     {isOpen ? "Open" : "Close"} {isLong ? "Long" : "Short"}
                                   </Typography>
@@ -1243,9 +1496,13 @@ export default function GoldPage() {
                                 {h.commission !== 0 && (
                                   <Typography sx={{ ...MONO, fontSize: "0.68rem", color: "#475569" }}>comm {fmt(h.commission)}</Typography>
                                 )}
-                                <Typography sx={{ ...MONO, fontWeight: 800, fontSize: "0.85rem", color: h.profit > 0 ? "#10b981" : h.profit < 0 ? "#ef4444" : "#64748b" }}>
-                                  {h.profit > 0 ? "+" : ""}{fmt(h.profit)}
-                                </Typography>
+                                {isOpen ? (
+                                  <Typography sx={{ ...MONO, fontWeight: 700, fontSize: "0.78rem", color: "#475569", fontStyle: "italic" }}>—</Typography>
+                                ) : (
+                                  <Typography sx={{ ...MONO, fontWeight: 800, fontSize: "0.85rem", color: h.profit > 0 ? "#10b981" : h.profit < 0 ? "#ef4444" : "#64748b" }}>
+                                    {h.profit > 0 ? "+" : ""}{fmt(h.profit)}
+                                  </Typography>
+                                )}
                               </Stack>
                             </TableCell>
                           </TableRow>
@@ -1284,6 +1541,7 @@ export default function GoldPage() {
                     }}
                   />
                 </Box>
+                </Box>{/* end collapsible history body */}
               </CardContent>
             </Card>
           </Stack>
@@ -1700,6 +1958,46 @@ export default function GoldPage() {
                 <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
                   <Box
                     sx={{
+                      color: settings.use_ai ? "#3b82f6" : "#64748b",
+                      display: "flex",
+                      p: 0.5,
+                      borderRadius: 1.5,
+                      bgcolor: settings.use_ai ? "rgba(59,130,246,0.08)" : "rgba(255,255,255,0.03)",
+                    }}
+                  >
+                    {settings.use_ai ? <ShieldCheck size={16} /> : <ShieldAlert size={16} />}
+                  </Box>
+                  <Box>
+                    <Typography variant="body2" sx={{ fontWeight: 650, color: "#fff" }}>
+                      {settings.use_ai ? "เปิดให้ AI ตรวจซ้ำ" : "ใช้กลยุทธ์อย่างเดียว"}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {settings.use_ai ? "AI ต้องเห็นด้วยก่อนส่งสัญญาณซื้อ/ขาย" : "บอทจะทำตามกลยุทธ์ที่เลือกโดยตรง"}
+                    </Typography>
+                  </Box>
+                </Stack>
+                <Switch
+                  checked={settings.use_ai ?? false}
+                  onChange={(e) => patchSettings({ use_ai: e.target.checked })}
+                  color="primary"
+                />
+              </Box>
+
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  px: 2,
+                  py: 1.5,
+                  bgcolor: "rgba(255,255,255,0.01)",
+                  border: "1px solid rgba(255,255,255,0.03)",
+                  borderRadius: 1,
+                }}
+              >
+                <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
+                  <Box
+                    sx={{
                       color: settings.gold_bot_enabled ? "#10b981" : "#ef4444",
                       display: "flex",
                       p: 0.5,
@@ -1740,27 +2038,27 @@ export default function GoldPage() {
                 <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
                   <Box
                     sx={{
-                      color: settings.use_ai ? "#3b82f6" : "#64748b",
+                      color: settings.telegram_enabled ? "#3b82f6" : "#64748b",
                       display: "flex",
                       p: 0.5,
                       borderRadius: 1.5,
-                      bgcolor: settings.use_ai ? "rgba(59,130,246,0.08)" : "rgba(255,255,255,0.03)",
+                      bgcolor: settings.telegram_enabled ? "rgba(59,130,246,0.08)" : "rgba(255,255,255,0.03)",
                     }}
                   >
-                    {settings.use_ai ? <ShieldCheck size={16} /> : <ShieldAlert size={16} />}
+                    {settings.telegram_enabled ? <BellRing size={16} /> : <BellOff size={16} />}
                   </Box>
                   <Box>
                     <Typography variant="body2" sx={{ fontWeight: 650, color: "#fff" }}>
-                      {settings.use_ai ? "เปิดให้ AI ตรวจซ้ำ" : "ใช้กลยุทธ์อย่างเดียว"}
+                      {settings.telegram_enabled ? "เปิดการแจ้งเตือน Telegram" : "ปิดการแจ้งเตือน Telegram"}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
-                      {settings.use_ai ? "AI ต้องเห็นด้วยก่อนส่งสัญญาณซื้อ/ขาย" : "บอทจะทำตามกลยุทธ์ที่เลือกโดยตรง"}
+                      {settings.telegram_enabled ? "บอทจะส่งแจ้งเตือนสัญญาณ ปิด position และสรุปรายวัน" : "หยุดส่งข้อความทุกประเภทไปยัง Telegram"}
                     </Typography>
                   </Box>
                 </Stack>
                 <Switch
-                  checked={settings.use_ai ?? false}
-                  onChange={(e) => patchSettings({ use_ai: e.target.checked })}
+                  checked={settings.telegram_enabled ?? true}
+                  onChange={(e) => patchSettings({ telegram_enabled: e.target.checked })}
                   color="primary"
                 />
               </Box>

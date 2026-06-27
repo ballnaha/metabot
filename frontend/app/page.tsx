@@ -30,6 +30,8 @@ import {
   Tabs,
   Tab,
   LinearProgress,
+  useMediaQuery,
+  useTheme,
 } from "@mui/material";
 import {
   Activity,
@@ -42,6 +44,7 @@ import {
   Coins,
   Sparkles,
   Brain,
+  BarChart2,
 } from "lucide-react";
 
 type Account = {
@@ -87,6 +90,17 @@ async function api(path: string, opts?: RequestInit) {
 
 const fmt = (n: number | null | undefined, d = 2) =>
   n === null || n === undefined ? "—" : Number(n).toFixed(d);
+
+const fmtP = (n: number | null | undefined): string => {
+  if (n === null || n === undefined || !Number.isFinite(Number(n))) return "—";
+  const v = Number(n);
+  if (v >= 10000) return Math.round(v).toLocaleString("en-US");
+  if (v >= 1000)  return v.toFixed(1);
+  if (v >= 100)   return v.toFixed(2);
+  if (v >= 1)     return v.toFixed(3);
+  if (v >= 0.01)  return v.toFixed(5);
+  return v.toFixed(7);
+};
 
 const MONO = { fontFamily: "ui-monospace, monospace", fontVariantNumeric: "tabular-nums" };
 
@@ -136,6 +150,8 @@ const CRYPTO_BASES = [
 const CRYPTO_QUOTES = ["USD", "USDT", "BTC", "ETH", "EUR"];
 
 export default function Dashboard() {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
   const toastr = useToastr();
   const [account, setAccount] = useState<Account | null>(null);
   const [connected, setConnected] = useState<boolean | null>(null);
@@ -157,12 +173,16 @@ export default function Dashboard() {
     bot_enabled: false,
     gold_bot_enabled: false,
     stock_bot_enabled: false,
+    forex_bot_enabled: false,
     strategy: "",
     stock_strategy: "",
+    forex_strategy: "",
     max_crypto_open_trades: 5,
     max_open_trades: 5,
     max_gold_open_trades: 3,
     max_stock_open_trades: 4,
+    max_forex_open_trades: 5,
+    forex_use_ai: false,
   });
 
   const refresh = useCallback(async () => {
@@ -273,7 +293,7 @@ export default function Dashboard() {
   const FOREX_PREFIXES = ["EUR", "GBP", "AUD", "NZD", "CAD", "CHF", "HKD", "SGD", "ZAR", "MXN", "NOK", "SEK", "DKK", "TRY", "CNH", "RUB", "USD", "JPY"];
 
   const isForexSymbol = (sym: string) => {
-    const s = sym.toUpperCase().replace(/[^A-Z]/g, "");
+    const s = sym.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 6);
     return s.length === 6 && FOREX_PREFIXES.some((p) => s.startsWith(p)) && !isCryptoSymbol(sym) && !isMetalSymbol(sym);
   };
 
@@ -291,11 +311,13 @@ export default function Dashboard() {
   const cryptoOpenPl = cryptoPositions.reduce((sum, p) => sum + (p.profit ?? 0), 0);
   const goldOpenPl = goldPositions.reduce((sum, p) => sum + (p.profit ?? 0), 0);
   const stockOpenPl = stockPositions.reduce((sum, p) => sum + (p.profit ?? 0), 0);
+  const forexOpenPl = forexPositions.reduce((sum, p) => sum + (p.profit ?? 0), 0);
 
   // Filter history (only entry OUT deals)
   const cryptoHistory = history.filter((h) => isCryptoSymbol(h.symbol) && h.entry === "OUT");
   const goldHistory = history.filter((h) => isMetalSymbol(h.symbol) && h.entry === "OUT");
   const stockHistory = history.filter((h) => isStockSymbol(h.symbol) && h.entry === "OUT");
+  const forexHistory = history.filter((h) => isForexSymbol(h.symbol) && h.entry === "OUT");
 
   // Compute realized P/L (7D) per group
   const calcRealizedPl = (deals: HistoryDeal[]) =>
@@ -304,11 +326,13 @@ export default function Dashboard() {
   const cryptoRealizedPl = calcRealizedPl(cryptoHistory);
   const goldRealizedPl = calcRealizedPl(goldHistory);
   const stockRealizedPl = calcRealizedPl(stockHistory);
+  const forexRealizedPl = calcRealizedPl(forexHistory);
 
   // Slot capacities
   const maxCryptoLimit = settingsForm.max_crypto_open_trades ?? settingsForm.max_open_trades ?? 5;
   const maxGoldLimit = settingsForm.max_gold_open_trades ?? 3;
   const maxStockLimit = settingsForm.max_stock_open_trades ?? 4;
+  const maxForexLimit = settingsForm.max_forex_open_trades ?? 5;
 
   const ccy = account?.currency ?? "";
   const pl = account?.profit ?? 0;
@@ -319,6 +343,7 @@ export default function Dashboard() {
       case 1: return cryptoPositions;
       case 2: return goldPositions;
       case 3: return stockPositions;
+      case 4: return forexPositions;
       default: return positions;
     }
   };
@@ -328,6 +353,7 @@ export default function Dashboard() {
       case 1: return cryptoOpenPl;
       case 2: return goldOpenPl;
       case 3: return stockOpenPl;
+      case 4: return forexOpenPl;
       default: return pl;
     }
   };
@@ -397,7 +423,7 @@ export default function Dashboard() {
       />
 
       {/* Main Content Area */}
-      <Box sx={{ flexGrow: 1, ml: `${SIDEBAR_W}px`, display: "flex", flexDirection: "column", minWidth: 0 }}>
+      <Box sx={{ flexGrow: 1, ml: { xs: 0, md: `${SIDEBAR_W}px` }, pb: { xs: "72px", md: 0 }, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <TopBar
           pageTitle="Trading Advisor Dashboard"
           pageIcon={<Activity size={15} />}
@@ -409,47 +435,59 @@ export default function Dashboard() {
           openPl={pl}
           botEnabled={settingsForm.bot_enabled ?? false}
           strategy={settingsForm.strategy ?? ""}
+          aiEnabled={settingsForm.use_ai}
         />
 
-        <Container maxWidth={false} sx={{ width: "100%", maxWidth: "none", px: { xs: 2, md: 3 }, py: 3, flexGrow: 1, overflowY: "auto" }}>
-          <Stack spacing={3.5}>
+        <Container maxWidth={false} sx={{ width: "100%", maxWidth: "none", px: { xs: 1.25, sm: 2, md: 3 }, py: { xs: 1.25, md: 3 }, flexGrow: 1, overflowY: "auto" }}>
+          <Stack spacing={{ xs: 1.25, sm: 2, md: 3.5 }}>
             
             {/* Circuit Breaker Alerts */}
             {isCircuitBreakerActive && (
-              <Alert 
-                severity="error" 
+              <Alert
+                severity="error"
                 variant="outlined"
                 action={
-                  <Button 
-                    color="error" 
+                  <Button
+                    color="error"
                     variant="outlined"
-                    size="small" 
+                    size="small"
                     onClick={handleDisableLossLimit}
-                    sx={{ 
-                      fontWeight: 800, 
+                    sx={{
+                      fontWeight: 800,
                       fontSize: "0.72rem",
-                      borderColor: "rgba(234, 57, 67, 0.5)", 
+                      borderColor: "rgba(234, 57, 67, 0.5)",
                       bgcolor: "rgba(234, 57, 67, 0.06)",
                       color: "#f87171",
                       px: 2,
                       borderRadius: 1,
-                      "&:hover": { 
-                        borderColor: "#ea3943", 
-                        bgcolor: "rgba(234, 57, 67, 0.15)" 
-                      } 
+                      whiteSpace: "nowrap",
+                      "&:hover": {
+                        borderColor: "#ea3943",
+                        bgcolor: "rgba(234, 57, 67, 0.15)"
+                      }
                     }}
                   >
                     Resume Trading (ปลดล็อกและเริ่มเทรดต่อ)
                   </Button>
                 }
-                sx={{ 
-                  borderRadius: 1.5, 
-                  bgcolor: "rgba(234, 57, 67, 0.03)", 
+                sx={{
+                  borderRadius: 1.5,
+                  bgcolor: "rgba(234, 57, 67, 0.03)",
                   borderColor: "rgba(234, 57, 67, 0.25)",
                   boxShadow: "0 4px 15px rgba(234, 57, 67, 0.08)",
-                  color: "#f87171", 
+                  color: "#f87171",
                   fontWeight: 700,
-                  "& .MuiAlert-icon": { color: "#ef4444" }
+                  flexWrap: "wrap",
+                  "& .MuiAlert-icon": { color: "#ef4444" },
+                  "& .MuiAlert-message": { flex: 1, minWidth: 0 },
+                  "& .MuiAlert-action": {
+                    width: { xs: "100%", sm: "auto" },
+                    mt: { xs: 1.5, sm: 0 },
+                    pl: { xs: 0, sm: 2 },
+                    ml: { xs: 0, sm: "auto" },
+                    mr: { xs: 0, sm: "-8px" },
+                    alignItems: "flex-start",
+                  }
                 }}
               >
                 ⛔ Circuit Breaker Active: ขาดทุนติดต่อกันครบ {maxConsecutive} ไม้ล่าสุด บอทสั่งหยุดเทรดอัตโนมัติชั่วคราว
@@ -457,40 +495,51 @@ export default function Dashboard() {
             )}
 
             {isDailyLossLimitActive && (
-              <Alert 
-                severity="error" 
+              <Alert
+                severity="error"
                 variant="outlined"
                 action={
-                  <Button 
-                    color="error" 
+                  <Button
+                    color="error"
                     variant="outlined"
-                    size="small" 
+                    size="small"
                     onClick={handleDisableDailyLossLimit}
-                    sx={{ 
-                      fontWeight: 800, 
+                    sx={{
+                      fontWeight: 800,
                       fontSize: "0.72rem",
-                      borderColor: "rgba(234, 57, 67, 0.5)", 
+                      borderColor: "rgba(234, 57, 67, 0.5)",
                       bgcolor: "rgba(234, 57, 67, 0.06)",
                       color: "#f87171",
                       px: 2,
                       borderRadius: 1,
-                      "&:hover": { 
-                        borderColor: "#ea3943", 
-                        bgcolor: "rgba(234, 57, 67, 0.15)" 
-                      } 
+                      whiteSpace: "nowrap",
+                      "&:hover": {
+                        borderColor: "#ea3943",
+                        bgcolor: "rgba(234, 57, 67, 0.15)"
+                      }
                     }}
                   >
                     Resume Trading (ปลดล็อกและเริ่มเทรดต่อ)
                   </Button>
                 }
-                sx={{ 
-                  borderRadius: 1.5, 
-                  bgcolor: "rgba(234, 57, 67, 0.03)", 
+                sx={{
+                  borderRadius: 1.5,
+                  bgcolor: "rgba(234, 57, 67, 0.03)",
                   borderColor: "rgba(234, 57, 67, 0.25)",
                   boxShadow: "0 4px 15px rgba(234, 57, 67, 0.08)",
-                  color: "#f87171", 
+                  color: "#f87171",
                   fontWeight: 700,
-                  "& .MuiAlert-icon": { color: "#ef4444" }
+                  flexWrap: "wrap",
+                  "& .MuiAlert-icon": { color: "#ef4444" },
+                  "& .MuiAlert-message": { flex: 1, minWidth: 0 },
+                  "& .MuiAlert-action": {
+                    width: { xs: "100%", sm: "auto" },
+                    mt: { xs: 1.5, sm: 0 },
+                    pl: { xs: 0, sm: 2 },
+                    ml: { xs: 0, sm: "auto" },
+                    mr: { xs: 0, sm: "-8px" },
+                    alignItems: "flex-start",
+                  }
                 }}
               >
                 ⛔ Circuit Breaker Active: วันนี้ขาดทุนถึงขีดจำกัดสูงสุด {maxDailyLoss * 100}% ของบาลานซ์แล้ว (P/L: {todayPnl.toFixed(2)} {ccy}) บอทหยุดเทรดถึงวันพรุ่งนี้
@@ -498,379 +547,760 @@ export default function Dashboard() {
             )}
 
             {/* Asset Bot Health & Performance Overview */}
-            <Box sx={{ display: "grid", gap: 3, gridTemplateColumns: { xs: "1fr", md: "repeat(3, minmax(0, 1fr))" } }}>
+            <Box sx={{ display: "grid", gap: { xs: 1, sm: 2, md: 3 }, gridTemplateColumns: { xs: "repeat(2, minmax(0, 1fr))", xl: "repeat(4, minmax(0, 1fr))" } }}>
               
               {/* Crypto Bot */}
               <Card sx={{ border: "1px solid rgba(255, 255, 255, 0.04)", bgcolor: "#0d1321" }}>
-                <CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}>
-                  <Stack direction="row" spacing={2} sx={{ alignItems: "center", mb: 2 }}>
-                    <PixelBotAvatar
-                      botEnabled={settingsForm.bot_enabled ?? false}
-                      assetType="crypto"
-                      recentLogs={botLogs}
-                    />
-                    <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                      <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
-                        <Typography variant="subtitle2" sx={{ fontWeight: 800, display: "flex", alignItems: "center", gap: 1 }}>
-                          <Coins size={16} color="#3b82f6" /> Crypto Advisor
-                        </Typography>
-                        <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
-                          <Chip
-                            size="small"
-                            label={settingsForm.bot_enabled ? "ACTIVE" : "INACTIVE"}
-                            color={settingsForm.bot_enabled ? "success" : "default"}
-                            sx={{ fontWeight: 800, fontSize: 9, height: 18 }}
-                          />
-                          <Chip
-                            size="small"
-                            icon={<Brain size={10} style={{ color: settingsForm.use_ai ? "#60a5fa" : "#64748b" }} />}
-                            label={settingsForm.use_ai ? "AI" : "NO AI"}
-                            variant="outlined"
-                            sx={{
-                              fontWeight: 800,
-                              fontSize: 9,
-                              height: 18,
-                              color: settingsForm.use_ai ? "#60a5fa" : "#64748b",
-                              borderColor: settingsForm.use_ai ? "rgba(59,130,246,0.3)" : "rgba(255,255,255,0.08)",
-                              bgcolor: settingsForm.use_ai ? "rgba(59,130,246,0.05)" : "transparent",
-                              "& .MuiChip-icon": { color: "inherit" }
-                            }}
-                          />
-                        </Stack>
-                      </Stack>
-                      <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontSize: 10, ...MONO, mb: 1 }}>
-                        Strategy: {settingsForm.strategy || "—"}
-                      </Typography>
-                    </Box>
-                  </Stack>
+                <CardContent sx={{ p: { xs: 1.25, md: 2.5 }, "&:last-child": { pb: { xs: 1.25, md: 2.5 } } }}>
 
-                  <Stack spacing={1.5} sx={{ mb: 2.5, bgcolor: "rgba(255, 255, 255, 0.015)", border: "1px solid rgba(255,255,255,0.03)", borderRadius: 1.5, p: 1.5 }}>
-                    <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }}>
-                      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                        Capacity Channels
-                      </Typography>
-                      <Typography variant="caption" sx={{ ...MONO, fontWeight: 800, color: "#60a5fa" }}>
-                        {cryptoPositions.length} / {maxCryptoLimit}
+                  {/* MOBILE compact — 2-col grid, ~80px per card */}
+                  <Box sx={{ display: { xs: "block", md: "none" } }}>
+                    {/* Row 1: Icon+Name | Status chip */}
+                    <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", mb: 0.75 }}>
+                      <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
+                        <Coins size={13} color="#3b82f6" />
+                        <Typography sx={{ fontWeight: 800, fontSize: "0.78rem", color: "#e2e8f0", lineHeight: 1 }}>
+                          Crypto
+                        </Typography>
+                        {settingsForm.use_ai && <Brain size={9} color="#60a5fa" />}
+                      </Stack>
+                      <Chip size="small"
+                        label={settingsForm.bot_enabled ? "ON" : "OFF"}
+                        color={settingsForm.bot_enabled ? "success" : "default"}
+                        sx={{ fontWeight: 800, fontSize: 8, height: 16, "& .MuiChip-label": { px: 0.75 } }}
+                      />
+                    </Stack>
+
+                    {/* Row 2: Slot bar + N/max */}
+                    <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", mb: 0.75 }}>
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <SlotCapacity
+                          used={cryptoPositions.length}
+                          max={maxCryptoLimit}
+                          on={settingsForm.bot_enabled ?? false}
+                          color="#3b82f6"
+                          glowColor="rgba(59,130,246,0.4)"
+                        />
+                      </Box>
+                      <Typography sx={{ fontFamily: "ui-monospace, monospace", fontSize: "0.65rem", fontWeight: 800, color: "#60a5fa", flexShrink: 0 }}>
+                        {cryptoPositions.length}/{maxCryptoLimit}
                       </Typography>
                     </Stack>
-                    <SlotCapacity
-                      used={cryptoPositions.length}
-                      max={maxCryptoLimit}
-                      on={settingsForm.bot_enabled ?? false}
-                      color="#3b82f6"
-                      glowColor="rgba(59, 130, 246, 0.4)"
-                    />
-                  </Stack>
 
-                  <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5, pt: 1.5, borderTop: "1px solid rgba(255, 255, 255, 0.05)" }}>
-                    <Box>
-                      <Typography variant="caption" color="text.secondary" sx={{ fontSize: 9, display: "block", textTransform: "uppercase", fontWeight: 700 }}>
-                        Open Profit
-                      </Typography>
-                      {renderPerformanceText(cryptoOpenPl)}
-                    </Box>
-                    <Box>
-                      <Typography variant="caption" color="text.secondary" sx={{ fontSize: 9, display: "block", textTransform: "uppercase", fontWeight: 700 }}>
-                        7D Realized P/L
-                      </Typography>
-                      {renderPerformanceText(cryptoRealizedPl)}
+                    {/* Row 3: Open P/L | 7D P/L */}
+                    <Stack direction="row" sx={{ justifyContent: "space-between" }}>
+                      <Box>
+                        <Typography sx={{ fontSize: "0.5rem", color: "#475569", fontWeight: 700, textTransform: "uppercase", lineHeight: 1, mb: 0.25 }}>Open</Typography>
+                        <Typography sx={{ fontFamily: "ui-monospace, monospace", fontSize: "0.72rem", fontWeight: 800, color: cryptoOpenPl >= 0 ? "#4ade80" : "#f87171", lineHeight: 1 }}>
+                          {cryptoOpenPl >= 0 ? "+" : ""}{fmt(cryptoOpenPl)}
+                        </Typography>
+                      </Box>
+                      <Box sx={{ textAlign: "right" }}>
+                        <Typography sx={{ fontSize: "0.5rem", color: "#475569", fontWeight: 700, textTransform: "uppercase", lineHeight: 1, mb: 0.25 }}>7D</Typography>
+                        <Typography sx={{ fontFamily: "ui-monospace, monospace", fontSize: "0.72rem", fontWeight: 800, color: cryptoRealizedPl >= 0 ? "#4ade80" : "#f87171", lineHeight: 1 }}>
+                          {cryptoRealizedPl >= 0 ? "+" : ""}{fmt(cryptoRealizedPl)}
+                        </Typography>
+                      </Box>
+                    </Stack>
+                  </Box>
+
+                  {/* DESKTOP full view */}
+                  <Box sx={{ display: { xs: "none", md: "block" } }}>
+                    <Stack direction="row" spacing={2} sx={{ alignItems: "center", mb: 2 }}>
+                      <PixelBotAvatar
+                        botEnabled={settingsForm.bot_enabled ?? false}
+                        assetType="crypto"
+                        recentLogs={botLogs}
+                      />
+                      <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                        <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
+                          <Typography variant="subtitle2" sx={{ fontWeight: 800, display: "flex", alignItems: "center", gap: 1 }}>
+                            <Coins size={16} color="#3b82f6" /> Crypto Advisor
+                          </Typography>
+                          <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
+                            <Chip
+                              size="small"
+                              label={settingsForm.bot_enabled ? "ACTIVE" : "INACTIVE"}
+                              color={settingsForm.bot_enabled ? "success" : "default"}
+                              sx={{ fontWeight: 800, fontSize: 9, height: 18 }}
+                            />
+                            <Chip
+                              size="small"
+                              icon={<Brain size={10} style={{ color: settingsForm.use_ai ? "#60a5fa" : "#64748b" }} />}
+                              label={settingsForm.use_ai ? "AI" : "NO AI"}
+                              variant="outlined"
+                              sx={{
+                                fontWeight: 800,
+                                fontSize: 9,
+                                height: 18,
+                                color: settingsForm.use_ai ? "#60a5fa" : "#64748b",
+                                borderColor: settingsForm.use_ai ? "rgba(59,130,246,0.3)" : "rgba(255,255,255,0.08)",
+                                bgcolor: settingsForm.use_ai ? "rgba(59,130,246,0.05)" : "transparent",
+                                "& .MuiChip-icon": { color: "inherit" }
+                              }}
+                            />
+                          </Stack>
+                        </Stack>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontSize: 10, ...MONO, mb: 1 }}>
+                          Strategy: {settingsForm.strategy || "—"}
+                        </Typography>
+                      </Box>
+                    </Stack>
+
+                    <Stack spacing={1.5} sx={{ mb: 2.5, bgcolor: "rgba(255, 255, 255, 0.015)", border: "1px solid rgba(255,255,255,0.03)", borderRadius: 1.5, p: 1.5 }}>
+                      <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }}>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                          Capacity Channels
+                        </Typography>
+                        <Typography variant="caption" sx={{ ...MONO, fontWeight: 800, color: "#60a5fa" }}>
+                          {cryptoPositions.length} / {maxCryptoLimit}
+                        </Typography>
+                      </Stack>
+                      <SlotCapacity
+                        used={cryptoPositions.length}
+                        max={maxCryptoLimit}
+                        on={settingsForm.bot_enabled ?? false}
+                        color="#3b82f6"
+                        glowColor="rgba(59, 130, 246, 0.4)"
+                      />
+                    </Stack>
+
+                    <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5, pt: 1.5, borderTop: "1px solid rgba(255, 255, 255, 0.05)" }}>
+                      <Box>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontSize: 9, display: "block", textTransform: "uppercase", fontWeight: 700 }}>
+                          Open Profit
+                        </Typography>
+                        {renderPerformanceText(cryptoOpenPl)}
+                      </Box>
+                      <Box>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontSize: 9, display: "block", textTransform: "uppercase", fontWeight: 700 }}>
+                          7D Realized P/L
+                        </Typography>
+                        {renderPerformanceText(cryptoRealizedPl)}
+                      </Box>
                     </Box>
                   </Box>
+
                 </CardContent>
               </Card>
 
               {/* Gold Bot */}
               <Card sx={{ border: "1px solid rgba(255, 255, 255, 0.04)", bgcolor: "#0d1321" }}>
-                <CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}>
-                  <Stack direction="row" spacing={2} sx={{ alignItems: "center", mb: 2 }}>
-                    <PixelBotAvatar
-                      botEnabled={settingsForm.gold_bot_enabled ?? false}
-                      assetType="gold"
-                      recentLogs={botLogs}
-                    />
-                    <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                      <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
-                        <Typography variant="subtitle2" sx={{ fontWeight: 800, display: "flex", alignItems: "center", gap: 1 }}>
-                          <Sparkles size={16} color="#f59e0b" /> Gold Advisor
-                        </Typography>
-                        <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
-                          <Chip
-                            size="small"
-                            label={settingsForm.gold_bot_enabled ? "ACTIVE" : "INACTIVE"}
-                            color={settingsForm.gold_bot_enabled ? "success" : "default"}
-                            sx={{ fontWeight: 800, fontSize: 9, height: 18 }}
-                          />
-                          <Chip
-                            size="small"
-                            icon={<Brain size={10} style={{ color: settingsForm.use_ai ? "#60a5fa" : "#64748b" }} />}
-                            label={settingsForm.use_ai ? "AI" : "NO AI"}
-                            variant="outlined"
-                            sx={{
-                              fontWeight: 800,
-                              fontSize: 9,
-                              height: 18,
-                              color: settingsForm.use_ai ? "#60a5fa" : "#64748b",
-                              borderColor: settingsForm.use_ai ? "rgba(59,130,246,0.3)" : "rgba(255,255,255,0.08)",
-                              bgcolor: settingsForm.use_ai ? "rgba(59,130,246,0.05)" : "transparent",
-                              "& .MuiChip-icon": { color: "inherit" }
-                            }}
-                          />
-                        </Stack>
-                      </Stack>
-                      <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontSize: 10, ...MONO, mb: 1 }}>
-                        Strategy: {settingsForm.gold_strategy || "—"}
-                      </Typography>
-                    </Box>
-                  </Stack>
+                <CardContent sx={{ p: { xs: 1.25, md: 2.5 }, "&:last-child": { pb: { xs: 1.25, md: 2.5 } } }}>
 
-                  <Stack spacing={1.5} sx={{ mb: 2.5, bgcolor: "rgba(255, 255, 255, 0.015)", border: "1px solid rgba(255,255,255,0.03)", borderRadius: 1.5, p: 1.5 }}>
-                    <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }}>
-                      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                        Capacity Channels
-                      </Typography>
-                      <Typography variant="caption" sx={{ ...MONO, fontWeight: 800, color: "#fbbf24" }}>
-                        {goldPositions.length} / {maxGoldLimit}
+                  {/* MOBILE compact — 2-col grid, ~80px per card */}
+                  <Box sx={{ display: { xs: "block", md: "none" } }}>
+                    {/* Row 1: Icon+Name | Status chip */}
+                    <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", mb: 0.75 }}>
+                      <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
+                        <Sparkles size={13} color="#f59e0b" />
+                        <Typography sx={{ fontWeight: 800, fontSize: "0.78rem", color: "#e2e8f0", lineHeight: 1 }}>
+                          Gold
+                        </Typography>
+                        {settingsForm.use_ai && <Brain size={9} color="#60a5fa" />}
+                      </Stack>
+                      <Chip size="small"
+                        label={settingsForm.gold_bot_enabled ? "ON" : "OFF"}
+                        color={settingsForm.gold_bot_enabled ? "success" : "default"}
+                        sx={{ fontWeight: 800, fontSize: 8, height: 16, "& .MuiChip-label": { px: 0.75 } }}
+                      />
+                    </Stack>
+
+                    {/* Row 2: Slot bar + N/max */}
+                    <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", mb: 0.75 }}>
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <SlotCapacity
+                          used={goldPositions.length}
+                          max={maxGoldLimit}
+                          on={settingsForm.gold_bot_enabled ?? false}
+                          color="#f59e0b"
+                          glowColor="rgba(245,158,11,0.4)"
+                        />
+                      </Box>
+                      <Typography sx={{ fontFamily: "ui-monospace, monospace", fontSize: "0.65rem", fontWeight: 800, color: "#fbbf24", flexShrink: 0 }}>
+                        {goldPositions.length}/{maxGoldLimit}
                       </Typography>
                     </Stack>
-                    <SlotCapacity
-                      used={goldPositions.length}
-                      max={maxGoldLimit}
-                      on={settingsForm.gold_bot_enabled ?? false}
-                      color="#f59e0b"
-                      glowColor="rgba(245, 158, 11, 0.4)"
-                    />
-                  </Stack>
 
-                  <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5, pt: 1.5, borderTop: "1px solid rgba(255, 255, 255, 0.05)" }}>
-                    <Box>
-                      <Typography variant="caption" color="text.secondary" sx={{ fontSize: 9, display: "block", textTransform: "uppercase", fontWeight: 700 }}>
-                        Open Profit
-                      </Typography>
-                      {renderPerformanceText(goldOpenPl)}
-                    </Box>
-                    <Box>
-                      <Typography variant="caption" color="text.secondary" sx={{ fontSize: 9, display: "block", textTransform: "uppercase", fontWeight: 700 }}>
-                        7D Realized P/L
-                      </Typography>
-                      {renderPerformanceText(goldRealizedPl)}
+                    {/* Row 3: Open P/L | 7D P/L */}
+                    <Stack direction="row" sx={{ justifyContent: "space-between" }}>
+                      <Box>
+                        <Typography sx={{ fontSize: "0.5rem", color: "#475569", fontWeight: 700, textTransform: "uppercase", lineHeight: 1, mb: 0.25 }}>Open</Typography>
+                        <Typography sx={{ fontFamily: "ui-monospace, monospace", fontSize: "0.72rem", fontWeight: 800, color: goldOpenPl >= 0 ? "#4ade80" : "#f87171", lineHeight: 1 }}>
+                          {goldOpenPl >= 0 ? "+" : ""}{fmt(goldOpenPl)}
+                        </Typography>
+                      </Box>
+                      <Box sx={{ textAlign: "right" }}>
+                        <Typography sx={{ fontSize: "0.5rem", color: "#475569", fontWeight: 700, textTransform: "uppercase", lineHeight: 1, mb: 0.25 }}>7D</Typography>
+                        <Typography sx={{ fontFamily: "ui-monospace, monospace", fontSize: "0.72rem", fontWeight: 800, color: goldRealizedPl >= 0 ? "#4ade80" : "#f87171", lineHeight: 1 }}>
+                          {goldRealizedPl >= 0 ? "+" : ""}{fmt(goldRealizedPl)}
+                        </Typography>
+                      </Box>
+                    </Stack>
+                  </Box>
+
+                  {/* DESKTOP full view */}
+                  <Box sx={{ display: { xs: "none", md: "block" } }}>
+                    <Stack direction="row" spacing={2} sx={{ alignItems: "center", mb: 2 }}>
+                      <PixelBotAvatar
+                        botEnabled={settingsForm.gold_bot_enabled ?? false}
+                        assetType="gold"
+                        recentLogs={botLogs}
+                      />
+                      <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                        <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
+                          <Typography variant="subtitle2" sx={{ fontWeight: 800, display: "flex", alignItems: "center", gap: 1 }}>
+                            <Sparkles size={16} color="#f59e0b" /> Gold Advisor
+                          </Typography>
+                          <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
+                            <Chip
+                              size="small"
+                              label={settingsForm.gold_bot_enabled ? "ACTIVE" : "INACTIVE"}
+                              color={settingsForm.gold_bot_enabled ? "success" : "default"}
+                              sx={{ fontWeight: 800, fontSize: 9, height: 18 }}
+                            />
+                            <Chip
+                              size="small"
+                              icon={<Brain size={10} style={{ color: settingsForm.use_ai ? "#60a5fa" : "#64748b" }} />}
+                              label={settingsForm.use_ai ? "AI" : "NO AI"}
+                              variant="outlined"
+                              sx={{
+                                fontWeight: 800,
+                                fontSize: 9,
+                                height: 18,
+                                color: settingsForm.use_ai ? "#60a5fa" : "#64748b",
+                                borderColor: settingsForm.use_ai ? "rgba(59,130,246,0.3)" : "rgba(255,255,255,0.08)",
+                                bgcolor: settingsForm.use_ai ? "rgba(59,130,246,0.05)" : "transparent",
+                                "& .MuiChip-icon": { color: "inherit" }
+                              }}
+                            />
+                          </Stack>
+                        </Stack>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontSize: 10, ...MONO, mb: 1 }}>
+                          Strategy: {settingsForm.gold_strategy || "—"}
+                        </Typography>
+                      </Box>
+                    </Stack>
+
+                    <Stack spacing={1.5} sx={{ mb: 2.5, bgcolor: "rgba(255, 255, 255, 0.015)", border: "1px solid rgba(255,255,255,0.03)", borderRadius: 1.5, p: 1.5 }}>
+                      <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }}>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                          Capacity Channels
+                        </Typography>
+                        <Typography variant="caption" sx={{ ...MONO, fontWeight: 800, color: "#fbbf24" }}>
+                          {goldPositions.length} / {maxGoldLimit}
+                        </Typography>
+                      </Stack>
+                      <SlotCapacity
+                        used={goldPositions.length}
+                        max={maxGoldLimit}
+                        on={settingsForm.gold_bot_enabled ?? false}
+                        color="#f59e0b"
+                        glowColor="rgba(245, 158, 11, 0.4)"
+                      />
+                    </Stack>
+
+                    <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5, pt: 1.5, borderTop: "1px solid rgba(255, 255, 255, 0.05)" }}>
+                      <Box>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontSize: 9, display: "block", textTransform: "uppercase", fontWeight: 700 }}>
+                          Open Profit
+                        </Typography>
+                        {renderPerformanceText(goldOpenPl)}
+                      </Box>
+                      <Box>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontSize: 9, display: "block", textTransform: "uppercase", fontWeight: 700 }}>
+                          7D Realized P/L
+                        </Typography>
+                        {renderPerformanceText(goldRealizedPl)}
+                      </Box>
                     </Box>
                   </Box>
+
                 </CardContent>
               </Card>
 
               {/* Stock Bot */}
               <Card sx={{ border: "1px solid rgba(255, 255, 255, 0.04)", bgcolor: "#0d1321" }}>
-                <CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}>
-                  <Stack direction="row" spacing={2} sx={{ alignItems: "center", mb: 2 }}>
-                    <PixelBotAvatar
-                      botEnabled={settingsForm.stock_bot_enabled ?? false}
-                      assetType="stock"
-                      recentLogs={botLogs}
-                    />
-                    <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                      <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
-                        <Typography variant="subtitle2" sx={{ fontWeight: 800, display: "flex", alignItems: "center", gap: 1 }}>
-                          <Activity size={16} color="#a855f7" /> US Stock Advisor
-                        </Typography>
-                        <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
-                          <Chip
-                            size="small"
-                            label={settingsForm.stock_bot_enabled ? "ACTIVE" : "INACTIVE"}
-                            color={settingsForm.stock_bot_enabled ? "success" : "default"}
-                            sx={{ fontWeight: 800, fontSize: 9, height: 18 }}
-                          />
-                          <Chip
-                            size="small"
-                            icon={<Brain size={10} style={{ color: settingsForm.stock_use_ai ? "#60a5fa" : "#64748b" }} />}
-                            label={settingsForm.stock_use_ai ? "AI" : "NO AI"}
-                            variant="outlined"
-                            sx={{
-                              fontWeight: 800,
-                              fontSize: 9,
-                              height: 18,
-                              color: settingsForm.stock_use_ai ? "#60a5fa" : "#64748b",
-                              borderColor: settingsForm.stock_use_ai ? "rgba(59,130,246,0.3)" : "rgba(255,255,255,0.08)",
-                              bgcolor: settingsForm.stock_use_ai ? "rgba(59,130,246,0.05)" : "transparent",
-                              "& .MuiChip-icon": { color: "inherit" }
-                            }}
-                          />
-                        </Stack>
-                      </Stack>
-                      <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontSize: 10, ...MONO, mb: 1 }}>
-                        Strategy: {settingsForm.stock_strategy || "—"}
-                      </Typography>
-                    </Box>
-                  </Stack>
+                <CardContent sx={{ p: { xs: 1.25, md: 2.5 }, "&:last-child": { pb: { xs: 1.25, md: 2.5 } } }}>
 
-                  <Stack spacing={1.5} sx={{ mb: 2.5, bgcolor: "rgba(255, 255, 255, 0.015)", border: "1px solid rgba(255,255,255,0.03)", borderRadius: 1.5, p: 1.5 }}>
-                    <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }}>
-                      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                        Capacity Channels
-                      </Typography>
-                      <Typography variant="caption" sx={{ ...MONO, fontWeight: 800, color: "#c084fc" }}>
-                        {stockPositions.length} / {maxStockLimit}
+                  {/* MOBILE compact — 2-col grid, ~80px per card */}
+                  <Box sx={{ display: { xs: "block", md: "none" } }}>
+                    {/* Row 1: Icon+Name | Status chip */}
+                    <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", mb: 0.75 }}>
+                      <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
+                        <Activity size={13} color="#a855f7" />
+                        <Typography sx={{ fontWeight: 800, fontSize: "0.78rem", color: "#e2e8f0", lineHeight: 1 }}>
+                          Stocks
+                        </Typography>
+                        {settingsForm.stock_use_ai && <Brain size={9} color="#60a5fa" />}
+                      </Stack>
+                      <Chip size="small"
+                        label={settingsForm.stock_bot_enabled ? "ON" : "OFF"}
+                        color={settingsForm.stock_bot_enabled ? "success" : "default"}
+                        sx={{ fontWeight: 800, fontSize: 8, height: 16, "& .MuiChip-label": { px: 0.75 } }}
+                      />
+                    </Stack>
+
+                    {/* Row 2: Slot bar + N/max */}
+                    <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", mb: 0.75 }}>
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <SlotCapacity
+                          used={stockPositions.length}
+                          max={maxStockLimit}
+                          on={settingsForm.stock_bot_enabled ?? false}
+                          color="#a855f7"
+                          glowColor="rgba(168,85,247,0.4)"
+                        />
+                      </Box>
+                      <Typography sx={{ fontFamily: "ui-monospace, monospace", fontSize: "0.65rem", fontWeight: 800, color: "#c084fc", flexShrink: 0 }}>
+                        {stockPositions.length}/{maxStockLimit}
                       </Typography>
                     </Stack>
-                    <SlotCapacity
-                      used={stockPositions.length}
-                      max={maxStockLimit}
-                      on={settingsForm.stock_bot_enabled ?? false}
-                      color="#a855f7"
-                      glowColor="rgba(168, 85, 247, 0.4)"
-                    />
-                  </Stack>
 
-                  <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5, pt: 1.5, borderTop: "1px solid rgba(255, 255, 255, 0.05)" }}>
-                    <Box>
-                      <Typography variant="caption" color="text.secondary" sx={{ fontSize: 9, display: "block", textTransform: "uppercase", fontWeight: 700 }}>
-                        Open Profit
-                      </Typography>
-                      {renderPerformanceText(stockOpenPl)}
-                    </Box>
-                    <Box>
-                      <Typography variant="caption" color="text.secondary" sx={{ fontSize: 9, display: "block", textTransform: "uppercase", fontWeight: 700 }}>
-                        7D Realized P/L
-                      </Typography>
-                      {renderPerformanceText(stockRealizedPl)}
+                    {/* Row 3: Open P/L | 7D P/L */}
+                    <Stack direction="row" sx={{ justifyContent: "space-between" }}>
+                      <Box>
+                        <Typography sx={{ fontSize: "0.5rem", color: "#475569", fontWeight: 700, textTransform: "uppercase", lineHeight: 1, mb: 0.25 }}>Open</Typography>
+                        <Typography sx={{ fontFamily: "ui-monospace, monospace", fontSize: "0.72rem", fontWeight: 800, color: stockOpenPl >= 0 ? "#4ade80" : "#f87171", lineHeight: 1 }}>
+                          {stockOpenPl >= 0 ? "+" : ""}{fmt(stockOpenPl)}
+                        </Typography>
+                      </Box>
+                      <Box sx={{ textAlign: "right" }}>
+                        <Typography sx={{ fontSize: "0.5rem", color: "#475569", fontWeight: 700, textTransform: "uppercase", lineHeight: 1, mb: 0.25 }}>7D</Typography>
+                        <Typography sx={{ fontFamily: "ui-monospace, monospace", fontSize: "0.72rem", fontWeight: 800, color: stockRealizedPl >= 0 ? "#4ade80" : "#f87171", lineHeight: 1 }}>
+                          {stockRealizedPl >= 0 ? "+" : ""}{fmt(stockRealizedPl)}
+                        </Typography>
+                      </Box>
+                    </Stack>
+                  </Box>
+
+                  {/* DESKTOP full view */}
+                  <Box sx={{ display: { xs: "none", md: "block" } }}>
+                    <Stack direction="row" spacing={2} sx={{ alignItems: "center", mb: 2 }}>
+                      <PixelBotAvatar
+                        botEnabled={settingsForm.stock_bot_enabled ?? false}
+                        assetType="stock"
+                        recentLogs={botLogs}
+                      />
+                      <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                        <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
+                          <Typography variant="subtitle2" sx={{ fontWeight: 800, display: "flex", alignItems: "center", gap: 1 }}>
+                            <Activity size={16} color="#a855f7" /> US Stock Advisor
+                          </Typography>
+                          <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
+                            <Chip
+                              size="small"
+                              label={settingsForm.stock_bot_enabled ? "ACTIVE" : "INACTIVE"}
+                              color={settingsForm.stock_bot_enabled ? "success" : "default"}
+                              sx={{ fontWeight: 800, fontSize: 9, height: 18 }}
+                            />
+                            <Chip
+                              size="small"
+                              icon={<Brain size={10} style={{ color: settingsForm.stock_use_ai ? "#60a5fa" : "#64748b" }} />}
+                              label={settingsForm.stock_use_ai ? "AI" : "NO AI"}
+                              variant="outlined"
+                              sx={{
+                                fontWeight: 800,
+                                fontSize: 9,
+                                height: 18,
+                                color: settingsForm.stock_use_ai ? "#60a5fa" : "#64748b",
+                                borderColor: settingsForm.stock_use_ai ? "rgba(59,130,246,0.3)" : "rgba(255,255,255,0.08)",
+                                bgcolor: settingsForm.stock_use_ai ? "rgba(59,130,246,0.05)" : "transparent",
+                                "& .MuiChip-icon": { color: "inherit" }
+                              }}
+                            />
+                          </Stack>
+                        </Stack>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontSize: 10, ...MONO, mb: 1 }}>
+                          Strategy: {settingsForm.stock_strategy || "—"}
+                        </Typography>
+                      </Box>
+                    </Stack>
+
+                    <Stack spacing={1.5} sx={{ mb: 2.5, bgcolor: "rgba(255, 255, 255, 0.015)", border: "1px solid rgba(255,255,255,0.03)", borderRadius: 1.5, p: 1.5 }}>
+                      <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }}>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                          Capacity Channels
+                        </Typography>
+                        <Typography variant="caption" sx={{ ...MONO, fontWeight: 800, color: "#c084fc" }}>
+                          {stockPositions.length} / {maxStockLimit}
+                        </Typography>
+                      </Stack>
+                      <SlotCapacity
+                        used={stockPositions.length}
+                        max={maxStockLimit}
+                        on={settingsForm.stock_bot_enabled ?? false}
+                        color="#a855f7"
+                        glowColor="rgba(168, 85, 247, 0.4)"
+                      />
+                    </Stack>
+
+                    <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5, pt: 1.5, borderTop: "1px solid rgba(255, 255, 255, 0.05)" }}>
+                      <Box>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontSize: 9, display: "block", textTransform: "uppercase", fontWeight: 700 }}>
+                          Open Profit
+                        </Typography>
+                        {renderPerformanceText(stockOpenPl)}
+                      </Box>
+                      <Box>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontSize: 9, display: "block", textTransform: "uppercase", fontWeight: 700 }}>
+                          7D Realized P/L
+                        </Typography>
+                        {renderPerformanceText(stockRealizedPl)}
+                      </Box>
                     </Box>
                   </Box>
+
+                </CardContent>
+              </Card>
+
+              {/* Forex Bot */}
+              <Card sx={{ border: "1px solid rgba(255, 255, 255, 0.04)", bgcolor: "#0d1321" }}>
+                <CardContent sx={{ p: { xs: 1.25, md: 2.5 }, "&:last-child": { pb: { xs: 1.25, md: 2.5 } } }}>
+
+                  {/* MOBILE compact — 2-col grid, ~80px per card */}
+                  <Box sx={{ display: { xs: "block", md: "none" } }}>
+                    {/* Row 1: Icon+Name | Status chip */}
+                    <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", mb: 0.75 }}>
+                      <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
+                        <BarChart2 size={13} color="#06b6d4" />
+                        <Typography sx={{ fontWeight: 800, fontSize: "0.78rem", color: "#e2e8f0", lineHeight: 1 }}>
+                          Forex
+                        </Typography>
+                        {settingsForm.forex_use_ai && <Brain size={9} color="#60a5fa" />}
+                      </Stack>
+                      <Chip size="small"
+                        label={settingsForm.forex_bot_enabled ? "ON" : "OFF"}
+                        color={settingsForm.forex_bot_enabled ? "success" : "default"}
+                        sx={{ fontWeight: 800, fontSize: 8, height: 16, "& .MuiChip-label": { px: 0.75 } }}
+                      />
+                    </Stack>
+
+                    {/* Row 2: Slot bar + N/max */}
+                    <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", mb: 0.75 }}>
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <SlotCapacity
+                          used={forexPositions.length}
+                          max={maxForexLimit}
+                          on={settingsForm.forex_bot_enabled ?? false}
+                          color="#06b6d4"
+                          glowColor="rgba(6,182,212,0.4)"
+                        />
+                      </Box>
+                      <Typography sx={{ fontFamily: "ui-monospace, monospace", fontSize: "0.65rem", fontWeight: 800, color: "#22d3ee", flexShrink: 0 }}>
+                        {forexPositions.length}/{maxForexLimit}
+                      </Typography>
+                    </Stack>
+
+                    {/* Row 3: Open P/L | 7D P/L */}
+                    <Stack direction="row" sx={{ justifyContent: "space-between" }}>
+                      <Box>
+                        <Typography sx={{ fontSize: "0.5rem", color: "#475569", fontWeight: 700, textTransform: "uppercase", lineHeight: 1, mb: 0.25 }}>Open</Typography>
+                        <Typography sx={{ fontFamily: "ui-monospace, monospace", fontSize: "0.72rem", fontWeight: 800, color: forexOpenPl >= 0 ? "#4ade80" : "#f87171", lineHeight: 1 }}>
+                          {forexOpenPl >= 0 ? "+" : ""}{fmt(forexOpenPl)}
+                        </Typography>
+                      </Box>
+                      <Box sx={{ textAlign: "right" }}>
+                        <Typography sx={{ fontSize: "0.5rem", color: "#475569", fontWeight: 700, textTransform: "uppercase", lineHeight: 1, mb: 0.25 }}>7D</Typography>
+                        <Typography sx={{ fontFamily: "ui-monospace, monospace", fontSize: "0.72rem", fontWeight: 800, color: forexRealizedPl >= 0 ? "#4ade80" : "#f87171", lineHeight: 1 }}>
+                          {forexRealizedPl >= 0 ? "+" : ""}{fmt(forexRealizedPl)}
+                        </Typography>
+                      </Box>
+                    </Stack>
+                  </Box>
+
+                  {/* DESKTOP full view */}
+                  <Box sx={{ display: { xs: "none", md: "block" } }}>
+                    <Stack direction="row" spacing={2} sx={{ alignItems: "center", mb: 2 }}>
+                      <PixelBotAvatar
+                        botEnabled={settingsForm.forex_bot_enabled ?? false}
+                        assetType="forex"
+                        recentLogs={botLogs}
+                      />
+                      <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                        <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
+                          <Typography variant="subtitle2" sx={{ fontWeight: 800, display: "flex", alignItems: "center", gap: 1 }}>
+                            <BarChart2 size={16} color="#06b6d4" /> Forex Advisor
+                          </Typography>
+                          <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
+                            <Chip
+                              size="small"
+                              label={settingsForm.forex_bot_enabled ? "ACTIVE" : "INACTIVE"}
+                              color={settingsForm.forex_bot_enabled ? "success" : "default"}
+                              sx={{ fontWeight: 800, fontSize: 9, height: 18 }}
+                            />
+                            <Chip
+                              size="small"
+                              icon={<Brain size={10} style={{ color: settingsForm.forex_use_ai ? "#60a5fa" : "#64748b" }} />}
+                              label={settingsForm.forex_use_ai ? "AI" : "NO AI"}
+                              variant="outlined"
+                              sx={{
+                                fontWeight: 800,
+                                fontSize: 9,
+                                height: 18,
+                                color: settingsForm.forex_use_ai ? "#60a5fa" : "#64748b",
+                                borderColor: settingsForm.forex_use_ai ? "rgba(59,130,246,0.3)" : "rgba(255,255,255,0.08)",
+                                bgcolor: settingsForm.forex_use_ai ? "rgba(59,130,246,0.05)" : "transparent",
+                                "& .MuiChip-icon": { color: "inherit" }
+                              }}
+                            />
+                          </Stack>
+                        </Stack>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontSize: 10, ...MONO, mb: 1 }}>
+                          Strategy: {settingsForm.forex_strategy || "—"}
+                        </Typography>
+                      </Box>
+                    </Stack>
+
+                    <Stack spacing={1.5} sx={{ mb: 2.5, bgcolor: "rgba(255, 255, 255, 0.015)", border: "1px solid rgba(255,255,255,0.03)", borderRadius: 1.5, p: 1.5 }}>
+                      <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }}>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                          Capacity Channels
+                        </Typography>
+                        <Typography variant="caption" sx={{ ...MONO, fontWeight: 800, color: "#22d3ee" }}>
+                          {forexPositions.length} / {maxForexLimit}
+                        </Typography>
+                      </Stack>
+                      <SlotCapacity
+                        used={forexPositions.length}
+                        max={maxForexLimit}
+                        on={settingsForm.forex_bot_enabled ?? false}
+                        color="#06b6d4"
+                        glowColor="rgba(6, 182, 212, 0.4)"
+                      />
+                    </Stack>
+
+                    <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5, pt: 1.5, borderTop: "1px solid rgba(255, 255, 255, 0.05)" }}>
+                      <Box>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontSize: 9, display: "block", textTransform: "uppercase", fontWeight: 700 }}>
+                          Open Profit
+                        </Typography>
+                        {renderPerformanceText(forexOpenPl)}
+                      </Box>
+                      <Box>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontSize: 9, display: "block", textTransform: "uppercase", fontWeight: 700 }}>
+                          7D Realized P/L
+                        </Typography>
+                        {renderPerformanceText(forexRealizedPl)}
+                      </Box>
+                    </Box>
+                  </Box>
+
                 </CardContent>
               </Card>
 
             </Box>
 
             {/* Trading Operations / Positions Console */}
-            <Card sx={{ border: "1px solid rgba(255, 255, 255, 0.04)" }}>
+            <Card sx={{ border: { xs: "none", md: "1px solid rgba(255,255,255,0.04)" }, borderRadius: { xs: 0, md: 1 }, mx: { xs: -1.25, sm: -2, md: 0 } }}>
               <CardContent sx={{ p: 0, "&:last-child": { pb: 0 } }}>
-                <Box sx={{ borderBottom: "1px solid rgba(255, 255, 255, 0.05)", px: 2.5, pt: 1, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 2 }}>
+                <Box sx={{ borderBottom: "1px solid rgba(255, 255, 255, 0.05)", px: { xs: 0, md: 2.5 }, pt: 0.5, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 0.5 }}>
                   <Tabs
                     value={activeTab}
                     onChange={(_, val) => setActiveTab(val)}
                     textColor="primary"
                     indicatorColor="primary"
+                    variant="scrollable"
+                    scrollButtons="auto"
+                    allowScrollButtonsMobile
                     sx={{
-                      "& .MuiTab-root": { color: "#64748b", fontWeight: 700, px: 2, py: 2, minWidth: "auto", fontSize: "0.85rem" },
+                      flex: 1,
+                      minWidth: 0,
+                      "& .MuiTab-root": { color: "#64748b", fontWeight: 700, px: { xs: 1, md: 2 }, py: { xs: 1.25, md: 2 }, minWidth: "auto", fontSize: { xs: "0.72rem", md: "0.85rem" } },
                       "& .Mui-selected": { color: "primary.main" },
                     }}
                   >
-                    <Tab label={`All Positions (${positions.length})`} />
+                    <Tab label={`All (${positions.length})`} />
                     <Tab label={`Crypto (${cryptoPositions.length})`} />
-                    <Tab label={`Gold / Metals (${goldPositions.length})`} />
-                    <Tab label={`US Stocks (${stockPositions.length})`} />
+                    <Tab label={`Gold (${goldPositions.length})`} />
+                    <Tab label={`Stocks (${stockPositions.length})`} />
+                    <Tab label={`Forex (${forexPositions.length})`} />
                   </Tabs>
 
                   {getFilteredPositions().length > 0 && (
                     <Chip
                       size="small"
-                      label={`Open P/L: ${getFilteredPl() >= 0 ? "+" : ""}${fmt(getFilteredPl())} ${ccy}`}
+                      label={`P/L: ${getFilteredPl() >= 0 ? "+" : ""}${fmt(getFilteredPl())} ${ccy}`}
                       color={getFilteredPl() >= 0 ? "success" : "error"}
-                      sx={{ fontWeight: 800, px: 1, my: 1.5 }}
+                      sx={{ fontWeight: 800, px: 1, my: 1.5, mr: { xs: 1.5, md: 0 }, flexShrink: 0 }}
                     />
                   )}
                 </Box>
 
                 <Box sx={{ overflowX: "auto" }}>
                   {getFilteredPositions().length === 0 ? (
-                    <Typography align="center" color="text.secondary" sx={{ py: 6, fontStyle: "italic" }}>
-                      No active positions matching this category.
+                    <Typography align="center" color="text.secondary" sx={{ py: { xs: 3, md: 6 }, fontStyle: "italic", fontSize: { xs: "0.82rem", md: "0.875rem" } }}>
+                      No active positions.
                     </Typography>
                   ) : (
-                    <Table size="small" sx={{ minWidth: 1040 }}>
-                      <TableHead sx={{ bgcolor: "rgba(255,255,255,0.018)" }}>
-                        <TableRow>
-                          <TableCell sx={{ py: 1.5, fontSize: 11, fontWeight: 800, color: "#64748b", borderColor: "rgba(255,255,255,0.05)", textTransform: "uppercase" }}>Position</TableCell>
-                          <TableCell sx={{ py: 1.5, fontSize: 11, fontWeight: 800, color: "#64748b", borderColor: "rgba(255,255,255,0.05)", textTransform: "uppercase" }}>Market</TableCell>
-                          <TableCell align="right" sx={{ py: 1.5, fontSize: 11, fontWeight: 800, color: "#64748b", borderColor: "rgba(255,255,255,0.05)", textTransform: "uppercase" }}>Volume</TableCell>
-                          <TableCell align="right" sx={{ py: 1.5, fontSize: 11, fontWeight: 800, color: "#64748b", borderColor: "rgba(255,255,255,0.05)", textTransform: "uppercase" }}>Entry</TableCell>
-                          <TableCell align="right" sx={{ py: 1.5, fontSize: 11, fontWeight: 800, color: "#64748b", borderColor: "rgba(255,255,255,0.05)", textTransform: "uppercase" }}>Current</TableCell>
-                          <TableCell align="right" sx={{ py: 1.5, fontSize: 11, fontWeight: 800, color: "#64748b", borderColor: "rgba(255,255,255,0.05)", textTransform: "uppercase" }}>P/L</TableCell>
-                          <TableCell align="right" sx={{ py: 1.5, fontSize: 11, fontWeight: 800, color: "#64748b", borderColor: "rgba(255,255,255,0.05)", textTransform: "uppercase" }}>Action</TableCell>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
+                    <>
+                      {/* DESKTOP TABLE VIEW - Renders on md and up */}
+                      <Box sx={{ display: { xs: "none", md: "block" } }}>
+                        <Table size="small" sx={{ minWidth: 1040 }}>
+                          <TableHead sx={{ bgcolor: "rgba(255,255,255,0.018)" }}>
+                            <TableRow>
+                              <TableCell sx={{ py: 1.5, fontSize: 11, fontWeight: 800, color: "#64748b", borderColor: "rgba(255,255,255,0.05)", textTransform: "uppercase" }}>Position</TableCell>
+                              <TableCell sx={{ py: 1.5, fontSize: 11, fontWeight: 800, color: "#64748b", borderColor: "rgba(255,255,255,0.05)", textTransform: "uppercase" }}>Market</TableCell>
+                              <TableCell align="right" sx={{ py: 1.5, fontSize: 11, fontWeight: 800, color: "#64748b", borderColor: "rgba(255,255,255,0.05)", textTransform: "uppercase" }}>Volume</TableCell>
+                              <TableCell align="right" sx={{ py: 1.5, fontSize: 11, fontWeight: 800, color: "#64748b", borderColor: "rgba(255,255,255,0.05)", textTransform: "uppercase" }}>Entry</TableCell>
+                              <TableCell align="right" sx={{ py: 1.5, fontSize: 11, fontWeight: 800, color: "#64748b", borderColor: "rgba(255,255,255,0.05)", textTransform: "uppercase" }}>Current</TableCell>
+                              <TableCell align="right" sx={{ py: 1.5, fontSize: 11, fontWeight: 800, color: "#64748b", borderColor: "rgba(255,255,255,0.05)", textTransform: "uppercase" }}>P/L</TableCell>
+                              <TableCell align="right" sx={{ py: 1.5, fontSize: 11, fontWeight: 800, color: "#64748b", borderColor: "rgba(255,255,255,0.05)", textTransform: "uppercase" }}>Action</TableCell>
+                            </TableRow>
+                          </TableHead>
+                          <TableBody>
+                            {getFilteredPositions().map((p) => {
+                              const pnlPct = positionPnlPct(p);
+                              const pnlPositive = pnlPct !== null ? pnlPct >= 0 : p.profit >= 0;
+                              const pnlColor = pnlPositive ? "#16c784" : "#ea3943";
+                              return (
+                                <TableRow
+                                  key={p.ticket}
+                                  hover
+                                  sx={{
+                                    borderBottom: "1px solid rgba(255,255,255,0.04)",
+                                    bgcolor: "rgba(255,255,255,0.004)",
+                                    "&:hover": { bgcolor: "rgba(255,255,255,0.025) !important" },
+                                  }}
+                                >
+                                  <TableCell sx={{ py: 1.5 }}>
+                                    <Stack spacing={0.5}>
+                                      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                                        <Typography sx={{ fontWeight: 850, color: "#f8fafc", lineHeight: 1 }}>
+                                          {p.symbol}
+                                        </Typography>
+                                        <Chip
+                                          size="small"
+                                          label={actionLabel(p.type)}
+                                          color={actionColor(p.type)}
+                                          variant="outlined"
+                                          sx={{ height: 20, fontSize: 10, fontWeight: 850 }}
+                                        />
+                                      </Stack>
+                                      <Typography variant="caption" sx={{ ...MONO, color: "#64748b" }}>
+                                        Ticket #{p.ticket}
+                                      </Typography>
+                                    </Stack>
+                                  </TableCell>
+                                  <TableCell sx={{ py: 1.5 }}>
+                                    {getAssetBadge(p.symbol)}
+                                  </TableCell>
+                                  <TableCell align="right" sx={{ ...MONO, color: "#e2e8f0", fontWeight: 750 }}>
+                                    {fmt(p.volume, 2)}
+                                  </TableCell>
+                                  <TableCell align="right" sx={{ py: 1.5 }}>
+                                    <Typography sx={{ ...MONO, fontWeight: 850, color: "#f8fafc", lineHeight: 1.15 }}>
+                                      {fmtPrice(p.price_open)}
+                                    </Typography>
+                                    <Typography variant="caption" sx={{ color: "#64748b" }}>
+                                      entry
+                                    </Typography>
+                                  </TableCell>
+                                  <TableCell align="right" sx={{ ...MONO, color: "#cbd5e1", fontWeight: 700 }}>
+                                    {fmtPrice(p.price_current)}
+                                  </TableCell>
+                                  <TableCell align="right" sx={{ py: 1.5 }}>
+                                    <Typography sx={{ ...MONO, color: pnlColor, fontWeight: 900, lineHeight: 1.15 }}>
+                                      {p.profit >= 0 ? "+" : ""}{fmt(p.profit)} {ccy}
+                                    </Typography>
+                                    <Typography variant="caption" sx={{ ...MONO, color: pnlColor, fontWeight: 800 }}>
+                                      {pnlPct === null ? "-" : `${pnlPct >= 0 ? "+" : ""}${fmt(pnlPct)}%`}
+                                    </Typography>
+                                  </TableCell>
+                                  <TableCell align="right">
+                                    <Button
+                                      size="small"
+                                      color="error"
+                                      variant="outlined"
+                                      disabled={closingTicket === p.ticket}
+                                      onClick={() => setCloseCandidate(p)}
+                                      sx={{
+                                        minWidth: 76,
+                                        borderRadius: 1,
+                                        py: 0.35,
+                                        fontSize: "0.72rem",
+                                        fontWeight: 850,
+                                        borderColor: "rgba(234,57,67,0.35)",
+                                        bgcolor: "rgba(234,57,67,0.04)",
+                                      }}
+                                    >
+                                      {closingTicket === p.ticket ? <CircularProgress size={14} color="inherit" /> : "Close"}
+                                    </Button>
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })}
+                          </TableBody>
+                        </Table>
+                      </Box>
+
+                      {/* MOBILE FLAT LIST - trading-app style */}
+                      <Box sx={{ display: { xs: "block", md: "none" } }}>
                         {getFilteredPositions().map((p) => {
                           const pnlPct = positionPnlPct(p);
                           const pnlPositive = pnlPct !== null ? pnlPct >= 0 : p.profit >= 0;
-                          const pnlColor = pnlPositive ? "#16c784" : "#ea3943";
+                          const sideColor = p.type === "BUY" ? "#10b981" : "#ef4444";
                           return (
-                            <TableRow
+                            <Box
                               key={p.ticket}
-                              hover
                               sx={{
+                                display: "block",
                                 borderBottom: "1px solid rgba(255,255,255,0.04)",
-                                bgcolor: "rgba(255,255,255,0.004)",
-                                "&:hover": { bgcolor: "rgba(255,255,255,0.025) !important" },
+                                borderLeft: `3px solid ${sideColor}`,
+                                pl: 1.25, pr: 1, py: 0.85,
+                                bgcolor: pnlPositive ? "rgba(16,185,129,0.015)" : "rgba(239,68,68,0.015)",
                               }}
                             >
-                              <TableCell sx={{ py: 1.5 }}>
-                                <Stack spacing={0.5}>
-                                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                                    <Typography sx={{ fontWeight: 850, color: "#f8fafc", lineHeight: 1 }}>
-                                      {p.symbol}
-                                    </Typography>
-                                    <Chip
-                                      size="small"
-                                      label={actionLabel(p.type)}
-                                      color={actionColor(p.type)}
-                                      variant="outlined"
-                                      sx={{ height: 20, fontSize: 10, fontWeight: 850 }}
-                                    />
-                                  </Stack>
-                                  <Typography variant="caption" sx={{ ...MONO, color: "#64748b" }}>
-                                    Ticket #{p.ticket}
+                              {/* Row 1: Symbol · L/S · Asset badge | P&L + % · × */}
+                              <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", gap: 1 }}>
+                                <Stack direction="row" spacing={0.6} sx={{ alignItems: "center", minWidth: 0, overflow: "hidden" }}>
+                                  <Typography noWrap sx={{ fontWeight: 800, fontSize: "0.88rem", color: "#f8fafc", lineHeight: 1.1, flexShrink: 0 }}>
+                                    {p.symbol}
                                   </Typography>
+                                  <Box sx={{ px: 0.55, py: 0.15, borderRadius: 0.5, bgcolor: p.type === "BUY" ? "rgba(16,185,129,0.18)" : "rgba(239,68,68,0.18)", border: `1px solid ${p.type === "BUY" ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)"}`, flexShrink: 0 }}>
+                                    <Typography sx={{ fontSize: "0.55rem", fontWeight: 900, color: sideColor, lineHeight: 1.3, letterSpacing: "0.06em" }}>
+                                      {p.type === "BUY" ? "LONG" : "SHORT"}
+                                    </Typography>
+                                  </Box>
                                 </Stack>
-                              </TableCell>
-                              <TableCell sx={{ py: 1.5 }}>
-                                {getAssetBadge(p.symbol)}
-                              </TableCell>
-                              <TableCell align="right" sx={{ ...MONO, color: "#e2e8f0", fontWeight: 750 }}>
-                                {fmt(p.volume, 2)}
-                              </TableCell>
-                              <TableCell align="right" sx={{ py: 1.5 }}>
-                                <Typography sx={{ ...MONO, fontWeight: 850, color: "#f8fafc", lineHeight: 1.15 }}>
-                                  {fmtPrice(p.price_open)}
+                                <Stack direction="row" spacing={0.6} sx={{ alignItems: "center", flexShrink: 0 }}>
+                                  <Stack sx={{ alignItems: "flex-end" }}>
+                                    <Typography sx={{ ...MONO, fontWeight: 800, fontSize: "0.88rem", color: pnlPositive ? "#4ade80" : "#fb7185", lineHeight: 1 }}>
+                                      {p.profit >= 0 ? "+" : ""}{fmt(p.profit)}
+                                    </Typography>
+                                    <Typography sx={{ ...MONO, fontSize: "0.62rem", fontWeight: 700, color: pnlPositive ? "#86efac" : "#fda4af", lineHeight: 1.2 }}>
+                                      {pnlPct === null ? "" : `${pnlPct >= 0 ? "+" : ""}${fmt(pnlPct)}%`}
+                                    </Typography>
+                                  </Stack>
+                                  <IconButton
+                                    size="small"
+                                    disabled={closingTicket === p.ticket}
+                                    onClick={() => setCloseCandidate(p)}
+                                    sx={{ width: 22, height: 22, p: 0, color: "#94a3b8", flexShrink: 0, "&:hover": { color: "#fb7185" } }}
+                                  >
+                                    {closingTicket === p.ticket ? <CircularProgress size={13} color="inherit" /> : <X size={15} />}
+                                  </IconButton>
+                                </Stack>
+                              </Stack>
+
+                              {/* Row 2: entry › current · lot · asset type */}
+                              <Stack direction="row" sx={{ mt: 0.5, alignItems: "center", justifyContent: "space-between", gap: 1 }}>
+                                <Typography sx={{ ...MONO, fontSize: "0.68rem", lineHeight: 1, flexShrink: 0 }}>
+                                  <Box component="span" sx={{ color: "#94a3b8" }}>{fmtP(p.price_open)}</Box>
+                                  <Box component="span" sx={{ color: "#64748b", mx: "4px" }}>›</Box>
+                                  <Box component="span" sx={{ color: "#e2e8f0", fontWeight: 700 }}>{fmtP(p.price_current)}</Box>
+                                  <Box component="span" sx={{ color: "#475569", mx: "4px" }}>·</Box>
+                                  <Box component="span" sx={{ color: "#94a3b8" }}>{fmt(p.volume, 2)}L</Box>
                                 </Typography>
-                                <Typography variant="caption" sx={{ color: "#64748b" }}>
-                                  entry
-                                </Typography>
-                              </TableCell>
-                              <TableCell align="right" sx={{ ...MONO, color: "#cbd5e1", fontWeight: 700 }}>
-                                {fmtPrice(p.price_current)}
-                              </TableCell>
-                              <TableCell align="right" sx={{ py: 1.5 }}>
-                                <Typography sx={{ ...MONO, color: pnlColor, fontWeight: 900, lineHeight: 1.15 }}>
-                                  {p.profit >= 0 ? "+" : ""}{fmt(p.profit)} {ccy}
-                                </Typography>
-                                <Typography variant="caption" sx={{ ...MONO, color: pnlColor, fontWeight: 800 }}>
-                                  {pnlPct === null ? "-" : `${pnlPct >= 0 ? "+" : ""}${fmt(pnlPct)}%`}
-                                </Typography>
-                              </TableCell>
-                              <TableCell align="right">
-                                <Button
-                                  size="small"
-                                  color="error"
-                                  variant="outlined"
-                                  disabled={closingTicket === p.ticket}
-                                  onClick={() => setCloseCandidate(p)}
-                                  sx={{
-                                    minWidth: 76,
-                                    borderRadius: 1,
-                                    py: 0.35,
-                                    fontSize: "0.72rem",
-                                    fontWeight: 850,
-                                    borderColor: "rgba(234,57,67,0.35)",
-                                    bgcolor: "rgba(234,57,67,0.04)",
-                                  }}
-                                >
-                                  {closingTicket === p.ticket ? <CircularProgress size={14} color="inherit" /> : "Close"}
-                                </Button>
-                              </TableCell>
-                            </TableRow>
+                                <Box sx={{ flexShrink: 0, transform: "scale(0.8)", transformOrigin: "right center" }}>
+                                  {getAssetBadge(p.symbol)}
+                                </Box>
+                              </Stack>
+                            </Box>
                           );
                         })}
-                      </TableBody>
-                    </Table>
+                      </Box>
+                    </>
                   )}
                 </Box>
               </CardContent>
@@ -886,13 +1316,14 @@ export default function Dashboard() {
         onClose={() => setLogOpen(false)}
         maxWidth="md"
         fullWidth
+        fullScreen={isMobile}
         slotProps={{
           paper: {
             sx: {
               bgcolor: "#0d1321",
-              border: "1px solid rgba(255,255,255,0.06)",
-              borderRadius: 1.5,
-              height: "80vh",
+              border: { xs: "none", md: "1px solid rgba(255,255,255,0.06)" },
+              borderRadius: { xs: 0, md: 1.5 },
+              height: { xs: "100dvh", md: "80vh" },
               backgroundImage: "none",
             },
           },
@@ -933,6 +1364,14 @@ export default function Dashboard() {
         }}
         maxWidth="xs"
         fullWidth
+        slotProps={{
+          paper: {
+            sx: {
+              m: { xs: 2, sm: "auto" },
+              width: { xs: "calc(100% - 32px)", sm: "auto" },
+            }
+          }
+        }}
       >
         <DialogTitle>Confirm Close Position</DialogTitle>
         <DialogContent dividers>

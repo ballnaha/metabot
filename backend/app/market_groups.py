@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 
 CRYPTO_BASES = {
     "1INCH", "AAVE", "ADA", "AGIX", "ALGO", "APE", "APT", "ARB", "ATOM", "AVAX", "AXS",
@@ -42,7 +43,8 @@ def is_stock_symbol(symbol: str) -> bool:
 
 
 def is_forex_symbol(symbol: str) -> bool:
-    s = re.sub(r"[^A-Z]", "", symbol.upper())
+    # Strip all non-alpha then take first 6 chars to handle broker suffixes (EURUSDm, EURUSD.r, etc.)
+    s = re.sub(r"[^A-Z]", "", symbol.upper())[:6]
     return len(s) == 6 and any(s.startswith(p) for p in FOREX_PREFIXES)
 
 
@@ -56,3 +58,74 @@ def market_group(symbol: str) -> str:
     if is_forex_symbol(symbol):
         return "forex"
     return "stock"
+
+
+def check_market_open(symbol: str) -> tuple[bool, str]:
+    """Check if the market for a given symbol is currently open.
+    Returns (is_open, error_message).
+    """
+    group = market_group(symbol)
+    if group == "crypto":
+        return True, ""
+
+    try:
+        from zoneinfo import ZoneInfo
+        ny_tz = ZoneInfo("America/New_York")
+        bk_tz = ZoneInfo("Asia/Bangkok")
+    except Exception:
+        # Fallback if America/New_York timezone is not available
+        return True, ""
+
+    now_ny = datetime.now(ny_tz)
+    weekday = now_ny.weekday()  # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
+    hour = now_ny.hour
+
+    if group == "stock":
+        if weekday >= 5:
+            return False, "ตลาดหุ้นปิดทำการในช่วงวันเสาร์-อาทิตย์"
+        market_start = now_ny.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_end = now_ny.replace(hour=16, minute=0, second=0, microsecond=0)
+        if not (market_start <= now_ny <= market_end):
+            bk_start = market_start.astimezone(bk_tz).strftime("%H:%M")
+            bk_end = market_end.astimezone(bk_tz).strftime("%H:%M")
+            return False, f"ตลาดหุ้นปิดทำการนอกเวลาซื้อขายหลัก ({bk_start} - {bk_end} น. เวลาไทย)"
+
+    elif group == "gold":
+        if weekday == 5:
+            return False, "ตลาดทองคำปิดทำการในช่วงวันเสาร์"
+        elif weekday == 4:
+            if hour >= 17:
+                bk_close = now_ny.replace(hour=17, minute=0, second=0, microsecond=0).astimezone(bk_tz)
+                day_name = "วันเสาร์" if bk_close.weekday() == 5 else "วันศุกร์"
+                bk_close_str = bk_close.strftime(f"{day_name} เวลา %H:%M น.")
+                return False, f"ตลาดทองคำปิดทำการแล้วในช่วงสุดสัปดาห์ (ปิด{bk_close_str} เวลาไทย)"
+        elif weekday == 6:
+            if hour < 18:
+                bk_open = now_ny.replace(hour=18, minute=0, second=0, microsecond=0).astimezone(bk_tz)
+                day_name = "วันจันทร์" if bk_open.weekday() == 0 else "วันอาทิตย์"
+                bk_open_str = bk_open.strftime(f"{day_name} เวลา %H:%M น.")
+                return False, f"ตลาดทองคำยังไม่เปิดทำการ (เปิด{bk_open_str} เวลาไทย)"
+        else:
+            if hour == 17:
+                bk_break_start = now_ny.replace(hour=17, minute=0, second=0, microsecond=0).astimezone(bk_tz).strftime("%H:%M")
+                bk_break_end = now_ny.replace(hour=18, minute=0, second=0, microsecond=0).astimezone(bk_tz).strftime("%H:%M")
+                return False, f"ตลาดทองคำปิดทำการชั่วคราวในช่วงพักการซื้อขายรายวัน ({bk_break_start} - {bk_break_end} น. เวลาไทย)"
+
+    elif group == "forex":
+        if weekday == 5:
+            return False, "ตลาด Forex ปิดทำการในช่วงวันเสาร์"
+        elif weekday == 4:
+            if hour >= 17:
+                bk_close = now_ny.replace(hour=17, minute=0, second=0, microsecond=0).astimezone(bk_tz)
+                day_name = "วันเสาร์" if bk_close.weekday() == 5 else "วันศุกร์"
+                bk_close_str = bk_close.strftime(f"{day_name} เวลา %H:%M น.")
+                return False, f"ตลาด Forex ปิดทำการแล้วในช่วงสุดสัปดาห์ (ปิด{bk_close_str} เวลาไทย)"
+        elif weekday == 6:
+            if hour < 17:
+                bk_open = now_ny.replace(hour=17, minute=0, second=0, microsecond=0).astimezone(bk_tz)
+                day_name = "วันจันทร์" if bk_open.weekday() == 0 else "วันอาทิตย์"
+                bk_open_str = bk_open.strftime(f"{day_name} เวลา %H:%M น.")
+                return False, f"ตลาด Forex ยังไม่เปิดทำการ (เปิด{bk_open_str} เวลาไทย)"
+
+    return True, ""
+

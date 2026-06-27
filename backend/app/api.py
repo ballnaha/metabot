@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from . import mt5_client, strategy, worker
 from .config import settings
-from .market_groups import is_crypto_symbol, market_group
+from .market_groups import is_crypto_symbol, market_group, check_market_open
 from .models import AnalyzeRequest
 from .trader import manager, magic_for_symbol
 
@@ -69,6 +69,18 @@ async def account():
     try:
         return mt5_client.account_info()
     except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.post("/api/reconnect", dependencies=[Depends(require_key)])
+async def reconnect():
+    try:
+        mt5_client.shutdown()
+        info = mt5_client.connect()
+        log.info("Reconnected to MT5 account %s on %s", info["login"], info["server"])
+        return {"status": "ok", "account": info}
+    except Exception as e:  # noqa: BLE001
+        log.warning("MT5 reconnect failed: %s", e)
         raise HTTPException(status_code=503, detail=str(e))
 
 
@@ -159,7 +171,21 @@ async def scan(req: ScanRequest):
 @app.post("/api/positions/{ticket}/close", dependencies=[Depends(require_key)])
 async def close(ticket: int):
     try:
-        return mt5_client.close_position(ticket)
+        # Check market open/closed status first
+        pos_list = mt5_client.positions()
+        target_pos = next((p for p in pos_list if p["ticket"] == ticket), None)
+        if target_pos:
+            symbol = target_pos["symbol"]
+            is_open, msg = check_market_open(symbol)
+            if not is_open:
+                raise HTTPException(status_code=400, detail=f"ตลาดปิด ขายไม่ได้: {msg}")
+
+        res = mt5_client.close_position(ticket)
+        if not res.get("ok"):
+            raise HTTPException(status_code=400, detail=res.get("comment", "Close failed"))
+        return res
+    except HTTPException:
+        raise
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=503, detail=str(e))
 
@@ -210,6 +236,17 @@ class SettingsUpdateRequest(BaseModel):
     stock_rr: float | None = None
     stock_use_ai: bool | None = None
     stock_auto_trade_interval: int | None = None
+    forex_bot_enabled: bool | None = None
+    forex_magic: int | None = None
+    max_forex_open_trades: int | None = None
+    forex_timeframe: str | None = None
+    forex_strategy: str | None = None
+    forex_risk_per_trade: float | None = None
+    forex_max_lot: float | None = None
+    forex_atr_sl_mult: float | None = None
+    forex_rr: float | None = None
+    forex_use_ai: bool | None = None
+    forex_auto_trade_interval: int | None = None
     max_spread_points: int | None = None
     max_daily_loss_pct: float | None = None
     max_consecutive_losses: int | None = None
@@ -265,6 +302,17 @@ async def get_settings_endpoint():
         "stock_rr": settings.stock_rr,
         "stock_use_ai": settings.stock_use_ai,
         "stock_auto_trade_interval": settings.stock_auto_trade_interval,
+        "forex_bot_enabled": settings.forex_bot_enabled,
+        "forex_magic": settings.forex_magic,
+        "max_forex_open_trades": settings.max_forex_open_trades,
+        "forex_timeframe": settings.forex_timeframe,
+        "forex_strategy": settings.forex_strategy,
+        "forex_risk_per_trade": settings.forex_risk_per_trade,
+        "forex_max_lot": settings.forex_max_lot,
+        "forex_atr_sl_mult": settings.forex_atr_sl_mult,
+        "forex_rr": settings.forex_rr,
+        "forex_use_ai": settings.forex_use_ai,
+        "forex_auto_trade_interval": settings.forex_auto_trade_interval,
         "max_spread_points": settings.max_spread_points,
         "max_daily_loss_pct": settings.max_daily_loss_pct,
         "max_consecutive_losses": settings.max_consecutive_losses,
@@ -421,6 +469,68 @@ async def detect_metal_symbols():
             key=lambda x: (0, popular.index(x.upper())) if x.upper() in popular else (1, x)
         )
         return {"symbols": sorted_detected}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.get("/api/symbols/detect-forex", dependencies=[Depends(require_key)])
+async def detect_forex_symbols(filter_type: str = "major"):
+    """Detect Forex symbols available in the connected MT5 broker.
+    filter_type: 'major' (7 majors), 'major_minor' (majors + minors), 'all' (all forex pairs)
+    Uses MT5 path metadata to identify forex pairs and handles broker suffixes (EURUSDm etc.).
+    """
+    import re as _re
+    MAJOR_PAIRS = {"EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD"}
+    MINOR_PAIRS = {
+        "EURGBP", "EURJPY", "EURCHF", "EURAUD", "EURCAD", "EURNZD",
+        "GBPJPY", "GBPCHF", "GBPAUD", "GBPCAD", "GBPNZD",
+        "AUDJPY", "AUDCHF", "AUDCAD", "AUDNZD",
+        "CADJPY", "CADCHF", "NZDJPY", "NZDCHF", "NZDCAD",
+        "CHFJPY",
+    }
+    FOREX_PFXS = ("EUR", "GBP", "AUD", "NZD", "CAD", "CHF", "HKD", "SGD",
+                  "ZAR", "MXN", "NOK", "SEK", "DKK", "TRY", "CNH", "RUB", "USD", "JPY")
+
+    def _clean(name: str) -> str:
+        return _re.sub(r"[^A-Z]", "", name.upper())[:6]
+
+    def _is_forex_name(name: str) -> bool:
+        s = _clean(name)
+        return len(s) == 6 and any(s.startswith(p) for p in FOREX_PFXS)
+
+    try:
+        import MetaTrader5 as mt5
+        mt5_client.connect()
+        raw_symbols = mt5.symbols_get()
+        if not raw_symbols:
+            return {"symbols": []}
+
+        detected: list[str] = []
+        for s in raw_symbols:
+            path_lower = getattr(s, "path", "").lower()
+            # Exclude clearly non-forex paths
+            if any(x in path_lower for x in ["crypto", "stock", "shares", "equity", "equities",
+                                              "index", "indices", "commodity", "energy", "metal"]):
+                continue
+            # Accept if path contains forex markers OR name matches forex pattern
+            is_forex_path = any(x in path_lower for x in ["forex", "fx", "currency", "currencies", "majors", "minors", "exotics"])
+            if not is_forex_path and not _is_forex_name(s.name):
+                continue
+            if not _is_forex_name(s.name):
+                continue
+            detected.append(s.name)
+
+        def _canonical(name: str) -> str:
+            return _re.sub(r"[^A-Z]", "", name.upper())[:6]
+
+        if filter_type == "major":
+            result = [n for n in detected if _canonical(n) in MAJOR_PAIRS]
+        elif filter_type == "major_minor":
+            result = [n for n in detected if _canonical(n) in (MAJOR_PAIRS | MINOR_PAIRS)]
+        else:
+            result = detected
+
+        return {"symbols": sorted(result)}
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
 
@@ -612,6 +722,12 @@ async def direct_trade(req: DirectTradeRequest):
         if action not in {"BUY", "SELL"}:
             raise HTTPException(status_code=400, detail="action must be BUY or SELL")
         symbol = req.symbol.upper()
+
+        # Check market open/closed status
+        is_open, msg = check_market_open(symbol)
+        if not is_open:
+            raise HTTPException(status_code=400, detail=f"ตลาดปิด ซื้อขายไม่ได้: {msg}")
+
         action_enum = Action.BUY if action == "BUY" else Action.SELL
         result = mt5_client.order_send(
             symbol=symbol,

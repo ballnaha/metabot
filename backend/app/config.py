@@ -77,6 +77,19 @@ class Settings(BaseSettings):
     stock_use_ai: bool = False
     stock_auto_trade_interval: int = 900   # 15 นาที — หุ้นไม่ต้องสแกนบ่อย
 
+    # Forex (currency pairs) — independent settings
+    forex_bot_enabled: bool = False        # ปิดไว้ก่อนจนกว่าจะตั้งค่าครบ
+    forex_magic: int = 0                   # auto-generated
+    max_forex_open_trades: int = 5         # คู่เงิน major เปิดได้หลายคู่
+    forex_timeframe: str = "H1"           # H1 เหมาะกับ Forex — ไม่เร็วเกินไป
+    forex_strategy: str = "ema_macd_rsi"  # EMA+MACD+RSI เหมาะกับ Forex มาก
+    forex_risk_per_trade: float = 0.01    # 1% standard สำหรับ Forex
+    forex_max_lot: float = 2.0             # Forex lot ปกติ
+    forex_atr_sl_mult: float = 1.5        # ATR × 1.5 เหมาะกับ Forex
+    forex_rr: float = 2.0                  # R:R 1:2 มาตรฐาน
+    forex_use_ai: bool = False
+    forex_auto_trade_interval: int = 300   # 5 นาที — Forex สแกนบ่อยกว่าหุ้น
+
     # API
     api_host: str = "127.0.0.1"
     api_port: int = 8383
@@ -178,6 +191,9 @@ def get_settings() -> Settings:
     if s.stock_magic == 0:
         s.stock_magic = random.randint(100000, 999999)
         s.update_settings({"stock_magic": s.stock_magic})
+    if s.forex_magic == 0:
+        s.forex_magic = random.randint(100000, 999999)
+        s.update_settings({"forex_magic": s.forex_magic})
     return s
 
 

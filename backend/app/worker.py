@@ -9,7 +9,7 @@ import traceback
 from datetime import datetime, timezone, timedelta
 
 from .config import settings
-from .market_groups import market_group
+from .market_groups import market_group, check_market_open
 from .trader import manager, get_group_slot_status, can_open_new_trade, _is_bot_position
 from .models import Action, Recommendation
 from . import log_store
@@ -54,6 +54,7 @@ def _symbol_bot_enabled(symbol: str) -> bool:
     group = market_group(symbol)
     if group == "gold":  return settings.gold_bot_enabled
     if group == "stock": return settings.stock_bot_enabled
+    if group == "forex": return settings.forex_bot_enabled
     return settings.bot_enabled
 
 
@@ -62,6 +63,7 @@ def _symbol_timeframe(symbol: str) -> str:
     if group == "stock":  return settings.stock_timeframe
     if group == "gold":   return settings.gold_timeframe
     if group == "crypto": return settings.crypto_timeframe
+    if group == "forex":  return settings.forex_timeframe or settings.default_timeframe
     return settings.default_timeframe
 
 
@@ -69,12 +71,14 @@ def _symbol_strategy(symbol: str) -> str:
     group = market_group(symbol)
     if group == "stock": return settings.stock_strategy
     if group == "gold":  return settings.gold_strategy
+    if group == "forex": return settings.forex_strategy or settings.strategy
     return settings.strategy
 
 
 def _symbol_use_ai(symbol: str) -> bool:
-    if market_group(symbol) == "stock":
-        return settings.stock_use_ai
+    group = market_group(symbol)
+    if group == "stock": return settings.stock_use_ai
+    if group == "forex": return settings.forex_use_ai
     return settings.use_ai
 
 
@@ -258,14 +262,17 @@ async def position_monitor_loop() -> None:
                     )
                     if triggered:
                         try:
-                            mt5_client.modify_position_sl(ticket, entry, tp or None)
-                            breakeven_set.add(ticket)
-                            msg = f"Breakeven SL → {pos['symbol']} {pos['type']} #{ticket} entry {entry:.5f}"
-                            log.info(msg)
-                            log_store.push("info", "breakeven", msg, {"symbol": pos["symbol"], "ticket": ticket, "entry": entry})
-                            send_telegram_notification(
-                                f"🔒 *Breakeven SL*\n`{pos['symbol']}` {pos['type']} #{ticket}\nSL → Entry `{entry:.5f}`"
-                            )
+                            res = mt5_client.modify_position_sl(ticket, entry, tp or None)
+                            if res.get("ok"):
+                                breakeven_set.add(ticket)
+                                msg = f"Breakeven SL → {pos['symbol']} {pos['type']} #{ticket} entry {entry:.5f}"
+                                log.info(msg)
+                                log_store.push("info", "breakeven", msg, {"symbol": pos["symbol"], "ticket": ticket, "entry": entry})
+                                send_telegram_notification(
+                                    f"🔒 *Breakeven SL*\n`{pos['symbol']}` {pos['type']} #{ticket}\nSL → Entry `{entry:.5f}`"
+                                )
+                            else:
+                                log.warning("Breakeven SL failed for %s #%d: %s", pos["symbol"], ticket, res.get("comment"))
                         except Exception as e:
                             log.error("Breakeven SL failed %s #%s: %s", pos["symbol"], ticket, e)
             # ---- End breakeven SL -----------------------------------------------
@@ -308,20 +315,26 @@ async def position_monitor_loop() -> None:
                                 continue  # not yet at trigger point
                             trail_sl = round(peak - sl_dist, 6)
                             if trail_sl > sl:
-                                mt5_client.modify_position_sl(ticket, trail_sl, tp or None)
-                                msg = f"Trail SL → {pos['symbol']} BUY #{ticket}  {sl:.5f} → {trail_sl:.5f}  (peak {peak:.5f})"
-                                log.info(msg)
-                                log_store.push("info", "trailing_sl", msg, {"symbol": pos["symbol"], "ticket": ticket, "trail_sl": trail_sl, "peak": peak})
+                                res = mt5_client.modify_position_sl(ticket, trail_sl, tp or None)
+                                if res.get("ok"):
+                                    msg = f"Trail SL → {pos['symbol']} BUY #{ticket}  {sl:.5f} → {trail_sl:.5f}  (peak {peak:.5f})"
+                                    log.info(msg)
+                                    log_store.push("info", "trailing_sl", msg, {"symbol": pos["symbol"], "ticket": ticket, "trail_sl": trail_sl, "peak": peak})
+                                else:
+                                    log.debug("Trail SL failed for %s #%d: %s", pos["symbol"], ticket, res.get("comment"))
                         elif pos["type"] == "SELL":
                             profit_dist = entry - peak
                             if profit_dist < settings.trailing_stop_r * sl_dist:
                                 continue
                             trail_sl = round(peak + sl_dist, 6)
                             if trail_sl < sl:
-                                mt5_client.modify_position_sl(ticket, trail_sl, tp or None)
-                                msg = f"Trail SL → {pos['symbol']} SELL #{ticket}  {sl:.5f} → {trail_sl:.5f}  (peak {peak:.5f})"
-                                log.info(msg)
-                                log_store.push("info", "trailing_sl", msg, {"symbol": pos["symbol"], "ticket": ticket, "trail_sl": trail_sl, "peak": peak})
+                                res = mt5_client.modify_position_sl(ticket, trail_sl, tp or None)
+                                if res.get("ok"):
+                                    msg = f"Trail SL → {pos['symbol']} SELL #{ticket}  {sl:.5f} → {trail_sl:.5f}  (peak {peak:.5f})"
+                                    log.info(msg)
+                                    log_store.push("info", "trailing_sl", msg, {"symbol": pos["symbol"], "ticket": ticket, "trail_sl": trail_sl, "peak": peak})
+                                else:
+                                    log.debug("Trail SL failed for %s #%d: %s", pos["symbol"], ticket, res.get("comment"))
                     except Exception as e:
                         log.error("Trailing SL failed %s #%s: %s", pos["symbol"], ticket, e)
             # ---- End trailing stop ----------------------------------------------
@@ -469,6 +482,11 @@ async def auto_trade_loop() -> None:
                     try:
                         timeframe = _symbol_timeframe(symbol)
                         cycle_scanned += 1
+
+                        # Skip scanning if market is closed
+                        is_open, _ = check_market_open(symbol)
+                        if not is_open:
+                            continue
 
                         # Double entry prevention
                         ok, reason = can_open_new_trade(symbol)

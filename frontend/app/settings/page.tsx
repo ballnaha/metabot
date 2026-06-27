@@ -26,7 +26,7 @@ import {
   DialogTitle,
   IconButton,
 } from "@mui/material";
-import { Bot, Key, Pencil, Plus, Save, Settings, Sliders, Trash2, ShieldAlert } from "lucide-react";
+import { Bot, Key, Pencil, Plus, RefreshCw, Save, Settings, Sliders, Trash2, ShieldAlert } from "lucide-react";
 
 type MT5Profile = { id: string; label: string; login: number; server: string };
 
@@ -255,6 +255,7 @@ export default function SettingsPage() {
   const [editForm, setEditForm] = useState<Omit<MT5Profile, "id">>({ label: "", login: 0, server: "" });
 
   const [saving, setSaving] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   const [warning, setWarning] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -346,6 +347,19 @@ export default function SettingsPage() {
     setEditDialog({ open: false, profile: null });
   }
 
+  async function handleReconnect() {
+    setReconnecting(true);
+    try {
+      const res = await api("reconnect", { method: "POST" });
+      toastr.success(`เชื่อมต่อ MT5 สำเร็จ — Account #${res.account?.login}`);
+      refresh();
+    } catch (e: any) {
+      toastr.error(`Reconnect ล้มเหลว: ${e.message}`);
+    } finally {
+      setReconnecting(false);
+    }
+  }
+
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
@@ -382,7 +396,7 @@ export default function SettingsPage() {
         onSync={refresh}
       />
 
-      <Box sx={{ ml: `${SIDEBAR_W}px`, flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+      <Box sx={{ ml: { xs: 0, md: `${SIDEBAR_W}px` }, pb: { xs: "72px", md: 0 }, flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <TopBar
           pageTitle="Global Settings"
           pageIcon={<Settings size={16} />}
@@ -394,6 +408,7 @@ export default function SettingsPage() {
           openPl={account?.profit ?? 0}
           botEnabled={form.bot_enabled ?? true}
           strategy={form.strategy ?? ""}
+          aiEnabled={form.use_ai}
         />
 
         <Container maxWidth="lg" sx={{ py: 3, flex: 1 }}>
@@ -507,6 +522,25 @@ export default function SettingsPage() {
                     placeholder="e.g. C:\Program Files\XM Global MT5\terminal64.exe"
                     fullWidth
                   />
+
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={handleReconnect}
+                    disabled={reconnecting}
+                    startIcon={reconnecting ? <CircularProgress size={14} color="inherit" /> : <RefreshCw size={14} />}
+                    sx={{
+                      alignSelf: "flex-start",
+                      color: connected ? "#34d399" : "#f87171",
+                      borderColor: connected ? "rgba(52,211,153,0.4)" : "rgba(248,113,113,0.4)",
+                      "&:hover": {
+                        borderColor: connected ? "rgba(52,211,153,0.7)" : "rgba(248,113,113,0.7)",
+                        bgcolor: connected ? "rgba(52,211,153,0.08)" : "rgba(248,113,113,0.08)",
+                      },
+                    }}
+                  >
+                    {reconnecting ? "กำลัง Reconnect…" : connected ? "Reconnect MT5" : "Reconnect MT5 (ขาดการเชื่อมต่อ)"}
+                  </Button>
                 </CardContent>
               </Card>
 

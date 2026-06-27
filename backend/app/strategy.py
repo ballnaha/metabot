@@ -380,3 +380,273 @@ class BreakoutStrategy(Strategy):
         sig = self._weighted_signal(bull_score, bear_score, max_score, bull, bear, threshold=0.35)
         sig.stop_loss, sig.take_profit = self.atr_levels(snap, sig.action)
         return sig
+
+
+@register
+class SuperTrendEmaStrategy(Strategy):
+    """SuperTrend + EMA 200 Trend Following Strategy."""
+
+    name = "supertrend_ema"
+    description = (
+        "กลยุทธ์ตามเทรนด์ระดับมืออาชีพ (SuperTrend + EMA 200) "
+        "คัดกรองเทรนด์ใหญ่ด้วย EMA 200 และหาจุดเข้าซื้อขายที่คมกริบด้วย SuperTrend "
+        "เหมาะสำหรับรันเทรนด์ในตลาด Crypto, ทองคำ และหุ้นเทรนด์แรง"
+    )
+
+    def compute_supertrend(self, df: pd.DataFrame, period: int = 10, multiplier: float = 3.0) -> tuple[pd.Series, pd.Series]:
+        high, low, close = df["high"], df["low"], df["close"]
+        prev_close = close.shift(1)
+        tr = pd.concat([
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs()
+        ], axis=1).max(axis=1)
+        atr = tr.ewm(alpha=1 / period, adjust=False).mean()
+        
+        hl2 = (high + low) / 2
+        basic_ub = hl2 + multiplier * atr
+        basic_lb = hl2 - multiplier * atr
+        
+        final_ub_list = basic_ub.tolist()
+        final_lb_list = basic_lb.tolist()
+        close_list = close.tolist()
+        basic_ub_list = basic_ub.tolist()
+        basic_lb_list = basic_lb.tolist()
+        
+        for i in range(1, len(df)):
+            if basic_ub_list[i] < final_ub_list[i-1] or close_list[i-1] > final_ub_list[i-1]:
+                final_ub_list[i] = basic_ub_list[i]
+            else:
+                final_ub_list[i] = final_ub_list[i-1]
+                
+            if basic_lb_list[i] > final_lb_list[i-1] or close_list[i-1] < final_lb_list[i-1]:
+                final_lb_list[i] = basic_lb_list[i]
+            else:
+                final_lb_list[i] = final_lb_list[i-1]
+                
+        trend = [1] * len(df)
+        for i in range(1, len(df)):
+            if close_list[i] > final_ub_list[i-1]:
+                trend[i] = 1
+            elif close_list[i] < final_lb_list[i-1]:
+                trend[i] = -1
+            else:
+                trend[i] = trend[i-1]
+                
+        supertrend = [0.0] * len(df)
+        for i in range(len(df)):
+            supertrend[i] = final_lb_list[i] if trend[i] == 1 else final_ub_list[i]
+            
+        return pd.Series(trend, index=df.index), pd.Series(supertrend, index=df.index)
+
+    def evaluate(self, df: pd.DataFrame, snap: IndicatorSnapshot) -> StrategySignal:
+        if len(df) < 200:
+            return StrategySignal(action=Action.HOLD, confidence=0.0)
+            
+        close = df["close"]
+        ema200 = close.ewm(span=200, adjust=False).mean()
+        trend, supertrend_val = self.compute_supertrend(df, period=10, multiplier=3.0)
+        
+        last_idx = -2
+        last_close = close.iloc[last_idx]
+        last_ema200 = ema200.iloc[last_idx]
+        last_trend = trend.iloc[last_idx]
+        prev_trend = trend.iloc[last_idx - 1]
+        
+        bull_reasons = []
+        bear_reasons = []
+        action = Action.HOLD
+        confidence = 0.0
+        
+        is_above_ema = last_close > last_ema200
+        is_below_ema = last_close < last_ema200
+        flipped_bull = (prev_trend == -1 and last_trend == 1)
+        flipped_bear = (prev_trend == 1 and last_trend == -1)
+        
+        if is_above_ema and flipped_bull:
+            action = Action.BUY
+            confidence = 0.85
+            bull_reasons.append("ราคาอยู่เหนือ EMA 200 (เทรนด์ใหญ่ขาขึ้น)")
+            bull_reasons.append("SuperTrend พลิกกลับตัวเป็นขาขึ้น (สีเขียว)")
+        elif is_below_ema and flipped_bear:
+            action = Action.SELL
+            confidence = 0.85
+            bear_reasons.append("ราคาอยู่ใต้ EMA 200 (เทรนด์ใหญ่ขาลง)")
+            bear_reasons.append("SuperTrend พลิกกลับตัวเป็นขาลง (สีแดง)")
+        else:
+            if last_trend == 1:
+                bull_reasons.append("SuperTrend เป็นขาขึ้น (สีเขียว)")
+            else:
+                bear_reasons.append("SuperTrend เป็นขาลง (สีแดง)")
+            if is_above_ema:
+                bull_reasons.append("ราคาอยู่เหนือ EMA 200")
+            else:
+                bear_reasons.append("ราคาอยู่ใต้ EMA 200")
+                
+        sig = StrategySignal(
+            action=action,
+            confidence=confidence if action != Action.HOLD else round(0.5, 2),
+            reasons=bull_reasons if action == Action.BUY else (bear_reasons if action == Action.SELL else (bull_reasons + bear_reasons))
+        )
+        sig.stop_loss, sig.take_profit = self.atr_levels(snap, sig.action)
+        return sig
+
+
+@register
+class StockPullbackStrategy(Strategy):
+    """Stock Pullback Buyer Strategy (5-star for Stocks)."""
+
+    name = "stock_pullback"
+    description = (
+        "กลยุทธ์ระดับ 5 ดาวสำหรับหุ้น (Stock Pullback) "
+        "เน้นช้อนซื้อหุ้นที่เป็นแนวโน้มขาขึ้นใหญ่ในจังหวะย่อตัวเข้าหาแนวรับเส้น EMA 50 "
+        "และมีระดับ RSI ต่ำลง แสดงถึงราคาลดราคาชั่วคราวเพื่อเข้าซื้อต้นน้ำที่ปลอดภัยและคุ้มค่าที่สุด"
+    )
+
+    def evaluate(self, df: pd.DataFrame, snap: IndicatorSnapshot) -> StrategySignal:
+        if len(df) < 200:
+            return StrategySignal(action=Action.HOLD, confidence=0.0)
+
+        close = df["close"]
+        low = df["low"]
+
+        # Calculate EMAs
+        ema200 = close.ewm(span=200, adjust=False).mean()
+        ema50 = close.ewm(span=50, adjust=False).mean()
+
+        last_idx = -2
+        last_close = close.iloc[last_idx]
+        last_low = low.iloc[last_idx]
+        last_ema200 = ema200.iloc[last_idx]
+        last_ema50 = ema50.iloc[last_idx]
+        last_rsi = snap.rsi
+
+        bull_reasons = []
+        bear_reasons = []
+        action = Action.HOLD
+        confidence = 0.0
+
+        # Condition 1: Long-term trend is bullish (Close is above EMA 200)
+        is_uptrend = last_close > last_ema200
+
+        # Condition 2: Pullback to EMA 50 (Low of candle tests support line, within 1.2% buffer)
+        is_pullback = last_low <= last_ema50 * 1.012
+
+        # Condition 3: RSI is neutral/oversold indicating a discounted entry point
+        is_discount = last_rsi is not None and last_rsi <= 45
+
+        # Condition 4: Bullish reversal confirmation (Green candle Close > Open)
+        is_bullish_confirm = last_close > df["open"].iloc[last_idx]
+
+        if is_uptrend and is_pullback and is_discount and is_bullish_confirm:
+            action = Action.BUY
+            confidence = 0.90
+            bull_reasons.append("ราคาเหนือ EMA 200 (แนวโน้มขาขึ้นใหญ่ระยะยาว)")
+            bull_reasons.append("ราคาปรับฐานย่อตัวลงมาทดสอบแนวรับเส้น EMA 50")
+            bull_reasons.append(f"RSI คลายความร้อนแรงอยู่ที่ {last_rsi:.0f} (โซนราคาลดราคา)")
+            bull_reasons.append("เกิดแท่งเทียนสีเขียวดีดกลับยืนเหนือราคาเปิด")
+        else:
+            if is_uptrend:
+                bull_reasons.append("ราคาอยู่เหนือ EMA 200 (ภาพใหญ่ขาขึ้น)")
+            else:
+                bear_reasons.append("ราคาอยู่ต่ำกว่า EMA 200 (ภาพใหญ่ขาลง)")
+            if last_rsi is not None:
+                if last_rsi > 70:
+                    bear_reasons.append(f"RSI Overbought ({last_rsi:.0f}) เสี่ยงดอย")
+                elif last_rsi < 30:
+                    bull_reasons.append(f"RSI Oversold ({last_rsi:.0f})")
+                else:
+                    bull_reasons.append(f"RSI Neutral ({last_rsi:.0f})")
+
+        sig = StrategySignal(
+            action=action,
+            confidence=confidence if action != Action.HOLD else round(0.5, 2),
+            reasons=bull_reasons if action == Action.BUY else (bear_reasons if action == Action.SELL else (bull_reasons + bear_reasons))
+        )
+        sig.stop_loss, sig.take_profit = self.atr_levels(snap, sig.action)
+        return sig
+
+
+@register
+class CryptoEarlyStageStrategy(Strategy):
+    """Crypto Early Stage (Pump Detector - 5-star for Crypto)."""
+
+    name = "crypto_early_stage"
+    description = (
+        "กลยุทธ์ล่าเหรียญต้นน้ำระดับ 5 ดาวสำหรับ Crypto (Crypto Pump Detector) "
+        "ตรวจจับการบีบอัดความผันผวน (Bollinger Band Squeeze) ควบคู่กับปริมาณการซื้อขายที่ทะลักเข้าผิดปกติ (Volume Spike) "
+        "ช่วยตรวจจับสัญญาณระเบิดราคาของเหรียญตั้งแต่ต้นแนวโน้มขาขึ้นรอบใหม่"
+    )
+
+    def evaluate(self, df: pd.DataFrame, snap: IndicatorSnapshot) -> StrategySignal:
+        if len(df) < 50:
+            return StrategySignal(action=Action.HOLD, confidence=0.0)
+
+        close = df["close"]
+        open_p = df["open"]
+
+        # 1. Bollinger Band Squeeze Calculation
+        ma = close.rolling(20).mean()
+        sd = close.rolling(20).std()
+        bb_up = ma + 2 * sd
+        bb_low = ma - 2 * sd
+        bandwidth = (bb_up - bb_low) / ma.replace(0, 1e-9)
+        avg_bandwidth = bandwidth.rolling(20).mean()
+
+        # 2. Volume Spike Calculation (using real_volume or fallback to tick_volume)
+        volume = df["real_volume"] if ("real_volume" in df and df["real_volume"].sum() > 0) else df["tick_volume"]
+        avg_volume = volume.rolling(20).mean()
+
+        last_idx = -2
+        last_close = close.iloc[last_idx]
+        last_open = open_p.iloc[last_idx]
+        last_bandwidth = bandwidth.iloc[last_idx]
+        last_avg_bandwidth = avg_bandwidth.iloc[last_idx]
+        last_volume = volume.iloc[last_idx]
+        last_avg_volume = avg_volume.iloc[last_idx]
+        last_rsi = snap.rsi
+
+        bull_reasons = []
+        bear_reasons = []
+        action = Action.HOLD
+        confidence = 0.0
+
+        # Condition 1: Volatility contraction (Squeeze)
+        is_squeezed = last_bandwidth <= last_avg_bandwidth * 1.05
+
+        # Condition 2: Volume spike (Volume is at least 1.5x of the 20-period average volume)
+        is_volume_spike = last_volume >= 1.5 * last_avg_volume
+
+        # Condition 3: Bullish breakout confirmation (Close is above SMA 20 and is a green candle)
+        is_above_sma = last_close > ma.iloc[last_idx]
+        is_green_candle = last_close > last_open
+
+        # Condition 4: RSI is in a sweet spot (gaining momentum but not yet overbought)
+        is_momentum_sweet = last_rsi is not None and 48 <= last_rsi <= 65
+
+        if is_squeezed and is_volume_spike and is_above_sma and is_green_candle and is_momentum_sweet:
+            action = Action.BUY
+            confidence = 0.90
+            bull_reasons.append("Bollinger Bands บีบตัวสะสมพลังงาน (Squeeze)")
+            bull_reasons.append(f"เกิดวอลลุ่มซื้อทะลักหนาแน่น {last_volume / last_avg_volume:.1f}x ของค่าเฉลี่ย (Volume Spike)")
+            bull_reasons.append("ราคายืนเหนือเส้นเฉลี่ยกลาง SMA 20 (เปลี่ยนเป็นขาขึ้น)")
+            bull_reasons.append(f"RSI แข็งแกร่งเข้าสู่โซนโมเมนตัม ({last_rsi:.0f}) แต่ยังไม่โอเวอร์บ็อท")
+        else:
+            if is_squeezed:
+                bull_reasons.append("ตลาดบีบตัวพักฐานแคบ (Bollinger Squeeze)")
+            if is_volume_spike:
+                bull_reasons.append("เริ่มมีวอลลุ่มหนาแน่นเข้ามาในตลาด")
+            if last_rsi is not None:
+                if last_rsi > 65:
+                    bear_reasons.append(f"RSI ค่อนข้างแพงแล้ว ({last_rsi:.0f})")
+                elif last_rsi < 45:
+                    bear_reasons.append(f"RSI ค่อนข้างอ่อนแอ ({last_rsi:.0f})")
+
+        sig = StrategySignal(
+            action=action,
+            confidence=confidence if action != Action.HOLD else round(0.5, 2),
+            reasons=bull_reasons if action == Action.BUY else (bear_reasons if action == Action.SELL else (bull_reasons + bear_reasons))
+        )
+        sig.stop_loss, sig.take_profit = self.atr_levels(snap, sig.action)
+        return sig
+

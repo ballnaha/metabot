@@ -42,7 +42,7 @@ type GridSet = { idle: string[]; signal: string[] };
 // Programmatic Custom Robot Matrices
 // X = Primary Body, Y = Secondary Accent, V = Visor Glass, L = Visor Pupil/Light
 // ──────────────────────────────────────────────
-const BOT_DESIGNS: Record<"crypto" | "gold" | "stock", GridSet> = {
+const BOT_DESIGNS: Record<"crypto" | "gold" | "stock" | "forex", GridSet> = {
   crypto: {
     idle: [
       "X......X", // Horns/Antenna
@@ -132,6 +132,36 @@ const BOT_DESIGNS: Record<"crypto" | "gold" | "stock", GridSet> = {
       "XX....XX",
       "XX....XX",
     ]
+  },
+  forex: {
+    idle: [
+      "..XXXX..", // Sleek narrow head
+      "YXXXXXXY", // Side fins / currency antennas
+      ".XXXXXX.",
+      "XV.LL.VX", // Dual separated eyes (currency pair)
+      ".XXXXXX.",
+      "YXXXXXXY", // Exchange flow fins
+      ".XXXXXX.",
+      "..XXXX..", // Slim neck
+      ".YXXXXY.", // Body accent trim
+      "XXXXXXXX",
+      "..XX..XX", // Slim legs
+      "..XX..XX",
+    ],
+    signal: [
+      "..XXXX..",
+      "YXXXXXXY",
+      ".XXXXXX.",
+      "XV.LL.VX",
+      ".XXXXXX.",
+      "YYYYYYYY", // Extended exchange fins — active signal
+      ".XXXXXX.",
+      "..XXXX..",
+      ".YXXXXY.",
+      "XX....XX", // Arms extended
+      "XX....XX",
+      "..XXXX..",
+    ]
   }
 };
 
@@ -152,7 +182,7 @@ export function PixelBotAvatar({
   recentLogs,
 }: {
   botEnabled: boolean;
-  assetType: "crypto" | "gold" | "stock";
+  assetType: "crypto" | "gold" | "stock" | "forex";
   recentLogs: LogEntry[];
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -172,8 +202,9 @@ export function PixelBotAvatar({
       const isCrypto = assetType === "crypto" && (msg.includes("BTC") || msg.includes("ETH") || msg.includes("SOL") || msg.includes("XRP") || msg.includes("CRYPTO"));
       const isGold = assetType === "gold" && (msg.includes("GOLD") || msg.includes("XAU") || msg.includes("SILVER") || msg.includes("METAL"));
       const isStock = assetType === "stock" && (msg.includes("STOCK") || msg.includes("US STOCK") || msg.includes("AAPL") || msg.includes("MSFT") || msg.includes("TSLA") || msg.includes("NVDA"));
-      
-      if (isCrypto || isGold || isStock) {
+      const isForex = assetType === "forex" && (msg.includes("FOREX") || msg.includes("EUR") || msg.includes("GBP") || msg.includes("USD") || msg.includes("JPY") || msg.includes("FX") || msg.includes("USDJPY") || msg.includes("EURUSD"));
+
+      if (isCrypto || isGold || isStock || isForex) {
         const isBuy = /buy/i.test(latest.message);
         setFlash(isBuy ? "buy" : "sell");
         const t = setTimeout(() => setFlash(null), 3000);
@@ -378,6 +409,10 @@ export function PixelBotAvatar({
           bodyColor = "#7c3aed";
           accentColor = "#a78bfa";
           visorColor = "#1a0f30";
+        } else if (assetType === "forex") {
+          bodyColor = "#0e7490";
+          accentColor = "#22d3ee";
+          visorColor = "#001a20";
         } else {
           // Gold
           bodyColor = "#d97706";
