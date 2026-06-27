@@ -49,9 +49,15 @@ class Strategy:
         """Default SL/TP from ATR, using asset-class-specific multipliers."""
         if action == Action.HOLD:
             return None, None
-        is_stock = market_group(snap.symbol) == "stock"
-        sl_mult = settings.stock_atr_sl_mult if is_stock else settings.atr_sl_mult
-        rr      = settings.stock_rr          if is_stock else settings.default_rr
+        group = market_group(snap.symbol)
+        if group == "stock":
+            sl_mult, rr = settings.stock_atr_sl_mult, settings.stock_rr
+        elif group == "crypto":
+            sl_mult, rr = settings.crypto_atr_sl_mult, settings.crypto_rr
+        elif group == "forex":
+            sl_mult, rr = settings.forex_atr_sl_mult, settings.forex_rr
+        else:
+            sl_mult, rr = settings.atr_sl_mult, settings.default_rr
         atr  = snap.atr or (snap.price * 0.005)
         dist = sl_mult * atr
         if action == Action.BUY:
@@ -347,7 +353,9 @@ class BreakoutStrategy(Strategy):
     def evaluate(self, df, snap):
         if len(df) < self.lookback + 1:
             return StrategySignal(action=Action.HOLD, confidence=0.0)
-        window = df.iloc[-(self.lookback + 1) : -1]
+        # The evaluated candle is -2; compare it only with candles before it.
+        # Including -2 makes close > max(high) practically impossible.
+        window = df.iloc[-(self.lookback + 2) : -2]
         hi = window["high"].max()
         lo = window["low"].min()
         atr = snap.atr or (snap.price * 0.005)
@@ -649,4 +657,185 @@ class CryptoEarlyStageStrategy(Strategy):
         )
         sig.stop_loss, sig.take_profit = self.atr_levels(snap, sig.action)
         return sig
+
+
+@register
+class CryptoRegimeStrategy(Strategy):
+    """Regime-aware crypto strategy for liquid H1/H4 markets.
+
+    It trades three explicit setups instead of voting on unrelated indicators:
+    trend pullbacks, confirmed breakouts, and rare range reversals.  Every
+    calculation uses the last closed candle (-2) and excludes it from breakout
+    lookbacks to avoid look-ahead bias.
+    """
+
+    name = "crypto_regime"
+    description = (
+        "กลยุทธ์ทดลอง Crypto แบบปรับตามสภาวะตลาด (ยังไม่ใช่ค่าเริ่มต้น): ตามเทรนด์เมื่อ ADX แข็งแรง, "
+        "เข้า breakout ที่มี volume ยืนยัน และเล่นกลับตัวเฉพาะกรอบที่ชัดเจน "
+        "พร้อม SL ตาม ATR/โครงสร้างราคา"
+    )
+
+    @staticmethod
+    def _adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+        high, low, close = df["high"], df["low"], df["close"]
+        up_move = high.diff()
+        down_move = -low.diff()
+        plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+        minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+        prev_close = close.shift(1)
+        tr = pd.concat(
+            [high - low, (high - prev_close).abs(), (low - prev_close).abs()],
+            axis=1,
+        ).max(axis=1)
+        atr = tr.ewm(alpha=1 / period, adjust=False).mean().replace(0, float("nan"))
+        plus_di = 100 * plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr
+        minus_di = 100 * minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr
+        dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, float("nan"))
+        return dx.ewm(alpha=1 / period, adjust=False).mean()
+
+    def evaluate(self, df: pd.DataFrame, snap: IndicatorSnapshot) -> StrategySignal:
+        if len(df) < 220:
+            return StrategySignal(action=Action.HOLD, confidence=0.0)
+
+        close, high, low, open_p = (
+            df["close"], df["high"], df["low"], df["open"]
+        )
+        ema20 = close.ewm(span=20, adjust=False).mean()
+        ema50 = close.ewm(span=50, adjust=False).mean()
+        ema200 = close.ewm(span=200, adjust=False).mean()
+        adx_s = self._adx(df)
+        ma20 = close.rolling(20).mean()
+        sd20 = close.rolling(20).std()
+        bb_up, bb_low = ma20 + 2 * sd20, ma20 - 2 * sd20
+
+        volume = (
+            df["real_volume"]
+            if "real_volume" in df and df["real_volume"].sum() > 0
+            else df["tick_volume"]
+        )
+        prior_volume = volume.shift(1).rolling(20).mean()
+
+        i, prev = -2, -3
+        price = float(close.iloc[i])
+        atr = float(snap.atr or price * 0.01)
+        adx = float(adx_s.iloc[i]) if not pd.isna(adx_s.iloc[i]) else 0.0
+        rsi = float(snap.rsi) if snap.rsi is not None else 50.0
+        avg_vol = float(prior_volume.iloc[i]) if not pd.isna(prior_volume.iloc[i]) else 0.0
+        vol_ratio = float(volume.iloc[i]) / avg_vol if avg_vol > 0 else 1.0
+        green = close.iloc[i] > open_p.iloc[i]
+        red = close.iloc[i] < open_p.iloc[i]
+
+        # Exclude both the forming candle (-1) and evaluated candle (-2).
+        prior_high = float(high.iloc[-22:-2].max())
+        prior_low = float(low.iloc[-22:-2].min())
+        ema50_slope = float(ema50.iloc[i] - ema50.iloc[-7])
+
+        bull_trend = (
+            price > ema200.iloc[i]
+            and ema50.iloc[i] > ema200.iloc[i]
+            and ema50_slope > 0
+            and adx >= 18
+        )
+        bear_trend = (
+            price < ema200.iloc[i]
+            and ema50.iloc[i] < ema200.iloc[i]
+            and ema50_slope < 0
+            and adx >= 18
+        )
+
+        # Crypto breakouts are especially vulnerable to spread and false
+        # breaks. Require a mature trend plus genuinely exceptional volume.
+        bull_breakout = (
+            settings.crypto_breakout_enabled
+            and bull_trend and adx >= 25 and price > prior_high and green and vol_ratio >= 1.30
+        )
+        bear_breakout = (
+            settings.crypto_breakout_enabled
+            and bear_trend and adx >= 25 and price < prior_low and red and vol_ratio >= 1.30
+        )
+
+        bull_pullback = (
+            bull_trend
+            and low.iloc[i] <= ema20.iloc[i] * 1.003
+            and price > ema20.iloc[i]
+            and close.iloc[prev] <= ema20.iloc[prev] * 1.006
+            and green
+            and 42 <= rsi <= 68
+        )
+        bear_pullback = (
+            bear_trend
+            and high.iloc[i] >= ema20.iloc[i] * 0.997
+            and price < ema20.iloc[i]
+            and close.iloc[prev] >= ema20.iloc[prev] * 0.994
+            and red
+            and 32 <= rsi <= 58
+        )
+
+        ranging = adx < 18 and abs(float(ema50.iloc[i] - ema200.iloc[i])) <= 1.5 * atr
+        bull_range = (
+            ranging
+            and close.iloc[prev] < bb_low.iloc[prev]
+            and price > bb_low.iloc[i]
+            and green
+            and rsi <= 42
+        )
+        bear_range = (
+            ranging
+            and close.iloc[prev] > bb_up.iloc[prev]
+            and price < bb_up.iloc[i]
+            and red
+            and rsi >= 58
+        )
+
+        action = Action.HOLD
+        setup = ""
+        if bull_breakout:
+            action, setup = Action.BUY, "breakout"
+        elif bear_breakout:
+            action, setup = Action.SELL, "breakout"
+        elif bull_pullback:
+            action, setup = Action.BUY, "trend pullback"
+        elif bear_pullback:
+            action, setup = Action.SELL, "trend pullback"
+        elif bull_range:
+            action, setup = Action.BUY, "range reversal"
+        elif bear_range:
+            action, setup = Action.SELL, "range reversal"
+
+        if action == Action.HOLD:
+            regime = "trend" if bull_trend or bear_trend else ("range" if ranging else "transition")
+            return StrategySignal(
+                action=Action.HOLD,
+                confidence=round(min(0.65, 0.25 + adx / 100), 2),
+                reasons=[f"regime={regime}", f"ADX {adx:.1f}", f"volume {vol_ratio:.2f}x"],
+            )
+
+        base_confidence = 0.72 if setup == "range reversal" else 0.76
+        confidence = self._clamp(base_confidence + min(adx, 40) / 250 + min(vol_ratio, 2) / 20, 0.0, 0.94)
+
+        # Structure-aware stop, bounded to avoid both noise-tight and runaway SL.
+        if setup == "range reversal":
+            sl_distance = 1.4 * atr
+        elif action == Action.BUY:
+            structure_distance = max(0.0, price - float(low.iloc[-7:-1].min()))
+            sl_distance = min(max(settings.crypto_atr_sl_mult * atr, structure_distance), 2.8 * atr)
+        else:
+            structure_distance = max(0.0, float(high.iloc[-7:-1].max()) - price)
+            sl_distance = min(max(settings.crypto_atr_sl_mult * atr, structure_distance), 2.8 * atr)
+
+        if action == Action.BUY:
+            stop_loss = price - sl_distance
+            take_profit = price + sl_distance * settings.crypto_rr
+        else:
+            stop_loss = price + sl_distance
+            take_profit = price - sl_distance * settings.crypto_rr
+
+        return StrategySignal(
+            action=action,
+            confidence=round(confidence, 2),
+            reasons=[setup, f"ADX {adx:.1f}", f"volume {vol_ratio:.2f}x", f"RSI {rsi:.0f}"],
+            stop_loss=round(stop_loss, 6),
+            take_profit=round(take_profit, 6),
+        )
 

@@ -28,6 +28,7 @@ def magic_for_symbol(symbol: str) -> int:
     group = market_group(symbol)
     if group == "gold":  return settings.gold_magic
     if group == "stock": return settings.stock_magic
+    if group == "forex": return settings.forex_magic
     return settings.magic
 
 
@@ -80,7 +81,7 @@ def _prune_slot_reservations(now: float | None = None) -> None:
 
 def _bot_magic_numbers() -> set[int]:
     """Return the set of magic numbers the bot currently uses."""
-    return {settings.magic, settings.gold_magic, settings.stock_magic}
+    return {settings.magic, settings.gold_magic, settings.stock_magic, settings.forex_magic}
 
 
 def _is_bot_position(pos: dict) -> bool:
@@ -296,22 +297,91 @@ class TradeManager:
             lot = min(lot, max_lot)
             return mt5_client.normalize_lot(symbol, lot)
 
+        # Risk sizing based on SL distance
+        risk_amount = acct["equity"] * risk_pct
+        if not rec.stop_loss:
+            return mt5_client.normalize_lot(symbol, info["volume_min"])
+
+        sl_dist    = abs(rec.price - rec.stop_loss)
+        tick_size  = info["trade_tick_size"] or info["point"]
+        tick_value = info["trade_tick_value"] or 1.0
+        if sl_dist <= 0 or tick_size <= 0 or tick_value <= 0:
+            return mt5_client.normalize_lot(symbol, info["volume_min"])
+
+        loss_per_lot = (sl_dist / tick_size) * tick_value
+        lot = risk_amount / loss_per_lot if loss_per_lot > 0 else info["volume_min"]
+        lot = min(lot, max_lot)
+        return mt5_client.normalize_lot(symbol, lot)
+
+    def _prepare_market_execution(self, rec: Recommendation) -> dict:
+        """Rebase strategy levels around the executable quote and reject bad fills.
+
+        Indicators are calculated from the last closed candle (normally bid
+        prices), while a BUY is filled at ask and a SELL at bid.  Sending the
+        candle-based SL/TP unchanged silently destroys the intended R:R when
+        spread is wide or price has moved since the candle closed.
+        """
+        if rec.action not in (Action.BUY, Action.SELL):
+            raise ValueError("Market execution requires BUY or SELL")
+        if not rec.stop_loss:
+            raise ValueError("Trade rejected: strategy did not provide a stop loss")
+
+        tick = mt5_client.get_tick(rec.symbol)
+        info = mt5_client.symbol_info(rec.symbol)
+        bid = float(tick.get("bid") or 0.0)
+        ask = float(tick.get("ask") or 0.0)
+        if bid <= 0 or ask <= 0 or ask < bid:
+            raise ValueError(f"Trade rejected: invalid quote bid={bid} ask={ask}")
+
+        signal_price = float(rec.price)
+        sl_distance = abs(signal_price - float(rec.stop_loss))
+        if sl_distance <= 0:
+            raise ValueError("Trade rejected: stop-loss distance is zero")
+
+        spread = ask - bid
+        spread_ratio = spread / sl_distance
+        max_spread_ratio = max(0.0, settings.max_spread_to_sl)
+        if max_spread_ratio and spread_ratio > max_spread_ratio:
+            raise ValueError(
+                f"Trade rejected: spread {spread:g} is {spread_ratio:.0%} of SL distance "
+                f"(limit {max_spread_ratio:.0%})"
+            )
+
+        # MT5 candles are bid-based. Compare bid with the closed-candle signal
+        # so BUY spread is not incorrectly counted as market drift.
+        drift = abs(bid - signal_price)
+        drift_ratio = drift / sl_distance
+        max_drift_ratio = max(0.0, settings.max_entry_drift_to_sl)
+        if max_drift_ratio and drift_ratio > max_drift_ratio:
+            raise ValueError(
+                f"Trade rejected: price moved {drift_ratio:.0%} of SL distance since signal "
+                f"(limit {max_drift_ratio:.0%})"
+            )
+
+        tp_distance = (
+            abs(float(rec.take_profit) - signal_price)
+            if rec.take_profit
+            else sl_distance * settings.default_rr
+        )
+        entry = ask if rec.action == Action.BUY else bid
+        if rec.action == Action.BUY:
+            stop_loss = entry - sl_distance
+            take_profit = entry + tp_distance
         else:
-            # Risk sizing based on SL distance
-            risk_amount = acct["equity"] * risk_pct
-            if not rec.stop_loss:
-                return mt5_client.normalize_lot(symbol, info["volume_min"])
+            stop_loss = entry + sl_distance
+            take_profit = entry - tp_distance
 
-            sl_dist    = abs(rec.price - rec.stop_loss)
-            tick_size  = info["trade_tick_size"] or info["point"]
-            tick_value = info["trade_tick_value"] or 1.0
-            if sl_dist <= 0 or tick_size <= 0 or tick_value <= 0:
-                return mt5_client.normalize_lot(symbol, info["volume_min"])
-
-            loss_per_lot = (sl_dist / tick_size) * tick_value
-            lot = risk_amount / loss_per_lot if loss_per_lot > 0 else info["volume_min"]
-            lot = min(lot, max_lot)
-            return mt5_client.normalize_lot(symbol, lot)
+        digits = int(info.get("digits", 6))
+        rec.price = round(entry, digits)
+        rec.stop_loss = round(stop_loss, digits)
+        rec.take_profit = round(take_profit, digits)
+        return {
+            "signal_price": signal_price,
+            "entry_price": rec.price,
+            "spread": spread,
+            "spread_to_sl": spread_ratio,
+            "drift_to_sl": drift_ratio,
+        }
 
     # ------------------------------------------------------------------ #
     # Pending trade lifecycle
@@ -351,15 +421,20 @@ class TradeManager:
                 return p
 
         try:
+            execution = self._prepare_market_execution(rec)
+            strategy_name = rec.indicators.strategy_name or "unknown"
+            order_comment = f"mb|{strategy_name}"[:31]
             result = mt5_client.order_send(
                 symbol=rec.symbol,
                 action=rec.action,
                 lot=use_lot,
                 sl=rec.stop_loss,
                 tp=rec.take_profit,
-                comment=f"metabot-{rec.action.value}",
+                comment=order_comment,
                 magic=magic_for_symbol(rec.symbol),
             )
+            result["execution"] = execution
+            result["strategy"] = strategy_name
             p.result = result
             p.status = "executed" if result.get("ok") else "failed"
             release_trade_slot(rec.symbol, keep_after_success=result.get("ok", False))

@@ -69,6 +69,7 @@ def _symbol_timeframe(symbol: str) -> str:
 
 def _symbol_strategy(symbol: str) -> str:
     group = market_group(symbol)
+    if group == "crypto": return settings.crypto_strategy or settings.strategy
     if group == "stock": return settings.stock_strategy
     if group == "gold":  return settings.gold_strategy
     if group == "forex": return settings.forex_strategy or settings.strategy
@@ -389,7 +390,12 @@ async def auto_trade_loop() -> None:
                 try:
                     _acct = mt5_client.account_info()
                     _deals = mt5_client.history_deals(days=1)
-                    _bot_magics = {settings.magic, settings.gold_magic, settings.stock_magic}
+                    _bot_magics = {
+                        settings.magic,
+                        settings.gold_magic,
+                        settings.stock_magic,
+                        settings.forex_magic,
+                    }
 
                     if not _skip_cycle and settings.max_daily_loss_pct > 0:
                         _today = datetime.now(TZ_TH).strftime("%Y-%m-%d")

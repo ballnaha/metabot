@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     symbols: str = "EURUSD,GOLD,BTCUSD"
     default_timeframe: str = "M15"
     crypto_timeframe: str = "H4"
+    crypto_strategy: str = "crypto_early_stage"
+    crypto_atr_sl_mult: float = 1.8
+    crypto_rr: float = 2.5
+    crypto_breakout_enabled: bool = False
     gold_timeframe: str = "H4"
     gold_strategy: str = "ema_macd_rsi"
     strategy: str = "ema_macd_rsi"
@@ -54,6 +58,8 @@ class Settings(BaseSettings):
     gold_bot_enabled: bool = True
     auto_trade_interval: int = 60
     max_spread_points: int = 0           # 0 = disabled; e.g. 30 = skip if spread > 30 pts
+    max_spread_to_sl: float = 0.25       # reject when spread consumes >25% of planned SL distance
+    max_entry_drift_to_sl: float = 0.50  # reject stale signals after price moves >0.5R from candle close
     max_daily_loss_pct: float = 0.0      # 0 = disabled; 0.05 = pause when daily loss ≥ 5%
     max_consecutive_losses: int = 0      # 0 = disabled; e.g. 3 = pause after 3 losses in a row
     breakeven_r: float = 1.0             # move SL to entry after 1×SL-dist profit; 0 = off

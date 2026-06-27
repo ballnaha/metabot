@@ -207,6 +207,10 @@ class SettingsUpdateRequest(BaseModel):
     symbols: str | None = None
     default_timeframe: str | None = None
     crypto_timeframe: str | None = None
+    crypto_strategy: str | None = None
+    crypto_atr_sl_mult: float | None = None
+    crypto_rr: float | None = None
+    crypto_breakout_enabled: bool | None = None
     gold_timeframe: str | None = None
     gold_strategy: str | None = None
     strategy: str | None = None
@@ -248,6 +252,8 @@ class SettingsUpdateRequest(BaseModel):
     forex_use_ai: bool | None = None
     forex_auto_trade_interval: int | None = None
     max_spread_points: int | None = None
+    max_spread_to_sl: float | None = None
+    max_entry_drift_to_sl: float | None = None
     max_daily_loss_pct: float | None = None
     max_consecutive_losses: int | None = None
     breakeven_r: float | None = None
@@ -273,6 +279,10 @@ async def get_settings_endpoint():
         "symbols": settings.symbols,
         "default_timeframe": settings.default_timeframe,
         "crypto_timeframe": settings.crypto_timeframe,
+        "crypto_strategy": settings.crypto_strategy,
+        "crypto_atr_sl_mult": settings.crypto_atr_sl_mult,
+        "crypto_rr": settings.crypto_rr,
+        "crypto_breakout_enabled": settings.crypto_breakout_enabled,
         "gold_timeframe": settings.gold_timeframe,
         "gold_strategy": settings.gold_strategy,
         "strategy": settings.strategy,
@@ -314,6 +324,8 @@ async def get_settings_endpoint():
         "forex_use_ai": settings.forex_use_ai,
         "forex_auto_trade_interval": settings.forex_auto_trade_interval,
         "max_spread_points": settings.max_spread_points,
+        "max_spread_to_sl": settings.max_spread_to_sl,
+        "max_entry_drift_to_sl": settings.max_entry_drift_to_sl,
         "max_daily_loss_pct": settings.max_daily_loss_pct,
         "max_consecutive_losses": settings.max_consecutive_losses,
         "breakeven_r": settings.breakeven_r,

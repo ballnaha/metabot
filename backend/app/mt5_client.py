@@ -243,6 +243,7 @@ def positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
                 "price_current": p.price_current,
                 "profit": p.profit,
                 "magic": p.magic,
+                "comment": p.comment,
                 "contract_size": contract_size,
                 "time": _mt5_server_time_to_bangkok(p.time),
             }
@@ -267,6 +268,7 @@ def history_deals(days: int = 30) -> List[Dict[str, Any]]:
             {
                 "ticket": d.ticket,
                 "order": d.order,
+                "position_id": d.position_id,
                 "time": _mt5_server_time_to_bangkok(d.time),
                 "symbol": d.symbol,
                 "type": "BUY" if d.type == mt5.DEAL_TYPE_BUY else "SELL",
