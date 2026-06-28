@@ -191,6 +191,27 @@ class TradeManager:
             release_trade_slot(symbol)
             return rec, None
 
+        # risk_lot returns 0.0 when the broker's min lot would over-expose the
+        # account beyond the configured limit — skip rather than over-trade.
+        if not rec.suggested_lot:
+            release_trade_slot(symbol)
+            rec.action = Action.HOLD
+            rec.summary = (
+                rec.summary or ""
+            ) + " | ข้าม: lot ขั้นต่ำทำให้มูลค่าเกินงบที่ตั้งไว้"
+            return rec, None
+
+        # Capture the live mid-price now — this is the moment the signal becomes
+        # actionable. Drift is then measured against this, not the (much older)
+        # closed-candle price, so it reflects real decision->fill slippage.
+        try:
+            tick = mt5_client.get_tick(symbol)
+            bid, ask = float(tick.get("bid") or 0.0), float(tick.get("ask") or 0.0)
+            if bid > 0 and ask > 0:
+                rec.signal_ref_price = (bid + ask) / 2
+        except Exception as e:
+            log.debug("Live ref price capture failed for %s: %s", symbol, e)
+
         # 3. Stage and confirm
         pending = self.stage(rec)
         self.confirm(pending.id, slot_reserved=True)
@@ -221,6 +242,16 @@ class TradeManager:
         )
         rec = advisor.decide(snap, opinions, use_ai)
         rec.suggested_lot = self.risk_lot(symbol, rec)
+
+        # risk_lot returns 0.0 when the broker's min lot would over-expose the
+        # account beyond MIN_LOT_STAKE_MULTIPLE. Surface that as a non-actionable
+        # signal so manual preview/staging paths don't offer an empty trade.
+        if rec.action != Action.HOLD and not rec.suggested_lot:
+            rec.action = Action.HOLD
+            rec.summary = (
+                (rec.summary or "")
+                + " | ข้าม: lot ขั้นต่ำทำให้มูลค่าเกินงบที่ตั้งไว้"
+            )
         return rec
 
     async def analyze_and_stage(
@@ -267,6 +298,77 @@ class TradeManager:
     # ------------------------------------------------------------------ #
     # Risk sizing
     # ------------------------------------------------------------------ #
+    def _guard_min_lot_exposure(
+        self,
+        symbol: str,
+        info: dict,
+        lot: float,
+        entry_price: float,
+        target_budget: float,
+        budget_label: str,
+    ) -> float:
+        """Flag (and optionally veto) a position the broker's min lot inflated.
+
+        ``lot`` is the final, normalized lot. When the broker's minimum lot
+        forces a position worth more than ``target_budget`` (the stake, or the
+        notional implied by the risk budget), the trade is larger than intended.
+        We always log it; if it exceeds ``min_lot_stake_multiple`` we return 0.0
+        so the caller skips the trade rather than silently over-exposing.
+        """
+        contract_size = info.get("trade_contract_size", 1.0) or 1.0
+        notional = lot * entry_price * contract_size
+        if target_budget <= 0 or notional <= 0:
+            return lot
+
+        ratio = notional / target_budget
+        if ratio <= 1.0:
+            return lot
+
+        limit = settings.min_lot_stake_multiple
+        if limit and ratio > limit:
+            log.warning(
+                "Skip %s: min lot %.2f → notional %.2f is %.1f× the %s %.2f "
+                "(limit %.1f×). Stake too small for this symbol.",
+                symbol, lot, notional, ratio, budget_label, target_budget, limit,
+            )
+            return 0.0
+
+        log.warning(
+            "%s min lot %.2f → notional %.2f is %.1f× the %s %.2f — "
+            "position larger than intended.",
+            symbol, lot, notional, ratio, budget_label, target_budget,
+        )
+        return lot
+
+    def _cap_notional_to_equity(
+        self, symbol: str, info: dict, lot: float, entry_price: float, equity: float
+    ) -> float:
+        """Cap a lot so its notional stays within max_notional_to_equity × equity.
+
+        A tight stop can make risk-based sizing pick a large lot whose notional
+        dwarfs the account (small $ risk but big gap/slippage exposure). This is
+        the second risk layer: bound the position's gross size regardless of SL.
+        Returns the (possibly reduced) lot; never raises it.
+        """
+        cap_mult = settings.max_notional_to_equity
+        contract_size = info.get("trade_contract_size", 1.0) or 1.0
+        denom = entry_price * contract_size
+        if not cap_mult or cap_mult <= 0 or equity <= 0 or denom <= 0:
+            return lot
+
+        max_notional = equity * cap_mult
+        max_lot_by_notional = max_notional / denom
+        if lot <= max_lot_by_notional:
+            return lot
+
+        capped = mt5_client.normalize_lot(symbol, max_lot_by_notional)
+        log.warning(
+            "%s lot %.2f (notional %.2f) exceeds %.1f× equity cap (%.2f) — "
+            "reduced to %.2f.",
+            symbol, lot, lot * denom, cap_mult, max_notional, capped,
+        )
+        return capped
+
     def risk_lot(self, symbol: str, rec: Recommendation) -> float:
         try:
             acct = mt5_client.account_info()
@@ -274,6 +376,9 @@ class TradeManager:
         except Exception as e:  # noqa: BLE001
             log.warning("risk_lot fallback (%s): %s", symbol, e)
             return 0.01
+
+        # Expose contract size so clients can show the position's notional value.
+        rec.contract_size = info.get("trade_contract_size", 1.0) or 1.0
 
         is_stock  = market_group(symbol) == "stock"
         max_lot   = settings.stock_max_lot      if is_stock else settings.max_lot
@@ -295,7 +400,11 @@ class TradeManager:
 
             lot = stake_amount / (entry_price * contract_size)
             lot = min(lot, max_lot)
-            return mt5_client.normalize_lot(symbol, lot)
+            lot = self._cap_notional_to_equity(symbol, info, lot, entry_price, acct["equity"])
+            lot = mt5_client.normalize_lot(symbol, lot)
+            return self._guard_min_lot_exposure(
+                symbol, info, lot, entry_price, stake_amount, "stake"
+            )
 
         # Risk sizing based on SL distance
         risk_amount = acct["equity"] * risk_pct
@@ -311,7 +420,16 @@ class TradeManager:
         loss_per_lot = (sl_dist / tick_size) * tick_value
         lot = risk_amount / loss_per_lot if loss_per_lot > 0 else info["volume_min"]
         lot = min(lot, max_lot)
-        return mt5_client.normalize_lot(symbol, lot)
+        lot = self._cap_notional_to_equity(symbol, info, lot, rec.price, acct["equity"])
+        lot = mt5_client.normalize_lot(symbol, lot)
+        # Budget here is the notional the risk amount was meant to control: a min
+        # lot that risks far more than risk_amount also over-exposes notionally.
+        target_notional = (risk_amount / loss_per_lot) * rec.price * (
+            info.get("trade_contract_size", 1.0) or 1.0
+        ) if loss_per_lot > 0 else 0.0
+        return self._guard_min_lot_exposure(
+            symbol, info, lot, rec.price, target_notional, "risk-implied notional"
+        )
 
     def _prepare_market_execution(self, rec: Recommendation) -> dict:
         """Rebase strategy levels around the executable quote and reject bad fills.
@@ -340,16 +458,25 @@ class TradeManager:
 
         spread = ask - bid
         spread_ratio = spread / sl_distance
-        max_spread_ratio = max(0.0, settings.max_spread_to_sl)
+        spread_limit = (
+            settings.crypto_max_spread_to_sl
+            if market_group(rec.symbol) == "crypto"
+            else settings.max_spread_to_sl
+        )
+        max_spread_ratio = max(0.0, spread_limit)
         if max_spread_ratio and spread_ratio > max_spread_ratio:
             raise ValueError(
                 f"Trade rejected: spread {spread:g} is {spread_ratio:.0%} of SL distance "
                 f"(limit {max_spread_ratio:.0%})"
             )
 
-        # MT5 candles are bid-based. Compare bid with the closed-candle signal
-        # so BUY spread is not incorrectly counted as market drift.
-        drift = abs(bid - signal_price)
+        # Measure drift against the live price captured when the signal was
+        # decided, falling back to the closed-candle price only if it is missing.
+        # On higher timeframes the closed candle can be hours old, so comparing
+        # against it conflates normal intra-candle movement with real slippage
+        # and inflates drift toward 100%. The decision-time mid avoids that.
+        drift_ref = rec.signal_ref_price if rec.signal_ref_price else signal_price
+        drift = abs(bid - drift_ref)
         drift_ratio = drift / sl_distance
         max_drift_ratio = max(0.0, settings.max_entry_drift_to_sl)
         if max_drift_ratio and drift_ratio > max_drift_ratio:

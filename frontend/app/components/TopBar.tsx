@@ -25,6 +25,7 @@ const MONO = { fontFamily: "ui-monospace, monospace", fontVariantNumeric: "tabul
 
 const strategyShort: Record<string, string> = {
   crypto_early_stage: "CryptoEarly",
+  crypto_regime: "CryptoRegime",
   stock_pullback: "StockPullback",
   supertrend_ema: "SuperTrend+EMA",
   ema_macd_rsi: "EMA+MACD",
@@ -34,6 +35,7 @@ const strategyShort: Record<string, string> = {
 };
 
 const STRATEGIES: { name: string; label: string; desc: string }[] = [
+  { name: "crypto_regime",      label: "Crypto Regime",      desc: "กรองสภาวะตลาด + Trend Pullback + Range Reversal" },
   { name: "crypto_early_stage", label: "Crypto Early Stage", desc: "หาเหรียญต้นน้ำ — BB Squeeze + Volume Spike" },
   { name: "stock_pullback",     label: "Stock Pullback",     desc: "ซื้อย่อตัวหุ้นขาขึ้น — EMA200 + RSI Pullback" },
   { name: "supertrend_ema",     label: "SuperTrend + EMA",   desc: "เทรนด์หลัก EMA200 + SuperTrend กลับตัว" },
@@ -45,10 +47,24 @@ const STRATEGIES: { name: string; label: string; desc: string }[] = [
 
 // 5-star strategies per asset type (from the strategy suitability guide)
 const FIVE_STAR: Record<string, string[]> = {
-  crypto: ["crypto_early_stage", "supertrend_ema", "breakout"],
+  crypto: ["crypto_regime", "crypto_early_stage", "supertrend_ema", "breakout"],
   gold:   ["mean_reversion"],
   stock:  ["stock_pullback"],
   forex:  ["ema_macd_rsi"],
+};
+
+// Which strategies each asset type may use — mirrors the `groups` declared on
+// each Strategy in backend/app/strategy.py. Strategies absent from a list are
+// hidden for that asset type (e.g. crypto-only strategies on the forex page).
+const STRATEGY_GROUPS: Record<string, string[]> = {
+  crypto_regime:      ["crypto"],
+  crypto_early_stage: ["crypto"],
+  stock_pullback:     ["stock"],
+  supertrend_ema:     ["crypto", "gold", "stock"],
+  ema_macd_rsi:       ["crypto", "gold", "stock", "forex"],
+  trend:              ["crypto", "gold", "stock", "forex"],
+  mean_reversion:     ["crypto", "gold", "stock", "forex"],
+  breakout:           ["crypto", "gold", "stock", "forex"],
 };
 
 export default function TopBar({
@@ -709,7 +725,9 @@ export default function TopBar({
               เลือกกลยุทธ์การเทรด
             </Typography>
           </Box>
-          {STRATEGIES.map((s) => {
+          {STRATEGIES.filter(
+            (s) => !assetType || (STRATEGY_GROUPS[s.name] ?? ["crypto", "gold", "stock", "forex"]).includes(assetType),
+          ).map((s) => {
             const isActive = strategy === s.name;
             const isFiveStar = assetType ? (FIVE_STAR[assetType] ?? []).includes(s.name) : false;
             return (

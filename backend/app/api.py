@@ -15,10 +15,30 @@ from pydantic import BaseModel
 from . import mt5_client, strategy, worker
 from .config import settings
 from .market_groups import is_crypto_symbol, market_group, check_market_open
-from .models import AnalyzeRequest
+from .models import AnalyzeRequest, IndicatorSnapshot, Recommendation
 from .trader import manager, magic_for_symbol
 
-logging.basicConfig(level=logging.INFO)
+def _configure_logging() -> None:
+    """Force UTF-8 on the console handler.
+
+    On Windows the default stream uses the locale codec (e.g. cp874), which
+    cannot encode the Thai-localized error strings returned by MetaTrader5.
+    That raised a *second* error inside the log handler and masked the real
+    scan failure. Reconfiguring stdout to UTF-8 (Python 3.7+) avoids it.
+    """
+    import sys
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="backslashreplace")
+            except Exception:
+                pass
+    logging.basicConfig(level=logging.INFO)
+
+
+_configure_logging()
 log = logging.getLogger("metabot.api")
 
 TICK_CACHE_TTL_SECONDS = 8.0
@@ -210,6 +230,7 @@ class SettingsUpdateRequest(BaseModel):
     crypto_strategy: str | None = None
     crypto_atr_sl_mult: float | None = None
     crypto_rr: float | None = None
+    crypto_min_sl_pct: float | None = None
     crypto_breakout_enabled: bool | None = None
     gold_timeframe: str | None = None
     gold_strategy: str | None = None
@@ -253,6 +274,7 @@ class SettingsUpdateRequest(BaseModel):
     forex_auto_trade_interval: int | None = None
     max_spread_points: int | None = None
     max_spread_to_sl: float | None = None
+    crypto_max_spread_to_sl: float | None = None
     max_entry_drift_to_sl: float | None = None
     max_daily_loss_pct: float | None = None
     max_consecutive_losses: int | None = None
@@ -282,6 +304,7 @@ async def get_settings_endpoint():
         "crypto_strategy": settings.crypto_strategy,
         "crypto_atr_sl_mult": settings.crypto_atr_sl_mult,
         "crypto_rr": settings.crypto_rr,
+        "crypto_min_sl_pct": settings.crypto_min_sl_pct,
         "crypto_breakout_enabled": settings.crypto_breakout_enabled,
         "gold_timeframe": settings.gold_timeframe,
         "gold_strategy": settings.gold_strategy,
@@ -325,6 +348,7 @@ async def get_settings_endpoint():
         "forex_auto_trade_interval": settings.forex_auto_trade_interval,
         "max_spread_points": settings.max_spread_points,
         "max_spread_to_sl": settings.max_spread_to_sl,
+        "crypto_max_spread_to_sl": settings.crypto_max_spread_to_sl,
         "max_entry_drift_to_sl": settings.max_entry_drift_to_sl,
         "max_daily_loss_pct": settings.max_daily_loss_pct,
         "max_consecutive_losses": settings.max_consecutive_losses,
@@ -373,6 +397,9 @@ class DirectTradeRequest(BaseModel):
     lot: float
     sl: float | None = None
     tp: float | None = None
+    signal_price: float | None = None
+    timeframe: str | None = None
+    strategy: str | None = None
 
 
 @app.get("/api/symbols/{symbol}/tick", dependencies=[Depends(require_key)])
@@ -710,20 +737,46 @@ async def search_symbols(q: str = ""):
 
 class ValidateSymbolsRequest(BaseModel):
     symbols: list[str]
+    # When set (e.g. 0.02 = 2%), also drop symbols whose live spread exceeds
+    # this fraction of price. A wide spread means the symbol is too illiquid to
+    # trade profitably. None skips the spread check (existence-only validation).
+    max_spread_pct: float | None = None
 
 
 @app.post("/api/symbols/validate", dependencies=[Depends(require_key)])
 async def validate_symbols(req: ValidateSymbolsRequest):
     """Check which symbols exist on MT5, returning the broker's actual name
-    (resolution handles casing and ticker suffixes, e.g. APPLE -> Apple)."""
-    valid, invalid = [], []
+    (resolution handles casing and ticker suffixes, e.g. APPLE -> Apple).
+
+    When ``max_spread_pct`` is provided, symbols that resolve but quote a
+    spread wider than that fraction of price are reported separately in
+    ``wide_spread`` (with their measured spread) so the caller can drop them.
+    """
+    valid, invalid, wide_spread = [], [], []
+    limit = req.max_spread_pct
     for sym in req.symbols:
         try:
             resolved = mt5_client._ensure_symbol(sym)
-            valid.append(resolved)
         except Exception:
             invalid.append(sym)
-    return {"valid": valid, "invalid": invalid}
+            continue
+
+        if limit and limit > 0:
+            try:
+                tick = mt5_client.get_tick(resolved)
+                bid, ask = float(tick.get("bid") or 0.0), float(tick.get("ask") or 0.0)
+                if bid > 0 and ask >= bid:
+                    spread_pct = (ask - bid) / bid
+                    if spread_pct > limit:
+                        wide_spread.append({"symbol": resolved, "spread_pct": round(spread_pct, 5)})
+                        continue
+            except Exception as e:
+                # If we can't price it, treat existence as enough — don't drop it
+                # just because a one-off tick fetch failed.
+                log.debug("Spread check skipped for %s: %s", resolved, e)
+
+        valid.append(resolved)
+    return {"valid": valid, "invalid": invalid, "wide_spread": wide_spread}
 
 
 @app.post("/api/trade", dependencies=[Depends(require_key)])
@@ -738,18 +791,42 @@ async def direct_trade(req: DirectTradeRequest):
         # Check market open/closed status
         is_open, msg = check_market_open(symbol)
         if not is_open:
+            log.warning("Trade rejected — %s %s: market closed (%s)", action, symbol, msg)
             raise HTTPException(status_code=400, detail=f"ตลาดปิด ซื้อขายไม่ได้: {msg}")
 
         action_enum = Action.BUY if action == "BUY" else Action.SELL
+        sl, tp = req.sl, req.tp
+        execution = None
+        if req.signal_price is not None and req.sl is not None:
+            rec = Recommendation(
+                symbol=symbol,
+                timeframe=req.timeframe or "",
+                price=req.signal_price,
+                action=action_enum,
+                confidence=1.0,
+                stop_loss=req.sl,
+                take_profit=req.tp,
+                indicators=IndicatorSnapshot(
+                    symbol=symbol,
+                    timeframe=req.timeframe or "",
+                    price=req.signal_price,
+                    strategy_name=req.strategy or "manual-preview",
+                ),
+            )
+            execution = manager._prepare_market_execution(rec)
+            sl, tp = rec.stop_loss, rec.take_profit
+
         result = mt5_client.order_send(
             symbol=symbol,
             action=action_enum,
             lot=req.lot,
-            sl=req.sl,
-            tp=req.tp,
+            sl=sl,
+            tp=tp,
             comment="metabot-direct",
             magic=magic_for_symbol(symbol),
         )
+        if execution is not None:
+            result["execution"] = execution
         if not result.get("ok"):
             mt5_msg = result.get("comment", "Order failed")
             log.warning("MT5 order rejected — %s %s lot=%.2f: %s", action, symbol, req.lot, mt5_msg)
@@ -757,7 +834,11 @@ async def direct_trade(req: DirectTradeRequest):
         return result
     except HTTPException:
         raise
+    except ValueError as e:
+        log.warning("Trade rejected — %s %s lot=%.2f: %s", action, symbol, req.lot, e)
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        log.error("Trade error — %s %s: %s", action, symbol, e)
         raise HTTPException(status_code=503, detail=str(e))
 
 

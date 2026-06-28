@@ -111,6 +111,20 @@ const STRATEGY_CONDITIONS: Record<string, {
     ],
     note: "threshold สูงที่สุด 35% — ต้องทะลุชัดเจน ระวัง false breakout",
   },
+  crypto_regime: {
+    label: "Crypto Regime",
+    buy: [
+      "Trend pullback: EMA50 > EMA200, ADX >= 20, price reclaims EMA20",
+      "Range reversal: price returns inside the lower Bollinger Band with RSI <= 42",
+      "Breakout requires ADX >= 25 and volume >= 1.3x when enabled",
+    ],
+    sell: [
+      "Trend pullback: EMA50 < EMA200, ADX >= 20, price rejects EMA20",
+      "Range reversal: price returns inside the upper Bollinger Band with RSI >= 58",
+      "Breakdown requires ADX >= 25 and volume >= 1.3x when enabled",
+    ],
+    note: "Uses closed H4 candles, structure-aware ATR stops, and both BUY/SELL setups.",
+  },
 };
 
 type Account = {
@@ -156,7 +170,14 @@ type HistoryDeal = {
 type StrategyInfo = {
   name: string;
   description: string;
+  groups?: string[];
 };
+
+// Keep strategies whose `groups` include this page's asset group. Missing
+// `groups` (older backend) means "all groups", so don't filter it out.
+function strategiesForGroup(list: StrategyInfo[], group: string): StrategyInfo[] {
+  return list.filter((s) => !s.groups || s.groups.includes(group));
+}
 
 type ScanResult = {
   symbol: string;
@@ -175,6 +196,7 @@ type Recommendation = {
   stop_loss?: number | null;
   take_profit?: number | null;
   suggested_lot?: number | null;
+  contract_size?: number | null;
   summary?: string;
 };
 
@@ -272,6 +294,8 @@ const entryLabel = (entry?: string) =>
 
 const strategyLabel = (name: string) =>
   ({
+    crypto_regime: "Crypto Regime",
+    crypto_early_stage: "Crypto Early Stage",
     ema_macd_rsi: "พื้นฐาน: แนวโน้ม + แรงส่ง + RSI",
     trend: "ตามเทรนด์",
     mean_reversion: "รอเด้งกลับ",
@@ -352,18 +376,20 @@ export default function CryptoPage() {
   const [tradeStagingSymbol, setTradeStagingSymbol] = useState<string | null>(null);
   const [tradeConfirm, setTradeConfirm] = useState<Recommendation | null>(null);
   const [tradeExecuting, setTradeExecuting] = useState(false);
+  const tradeExecutingRef = useRef(false);
 
   const [settingsForm, setSettingsForm] = useState<any>({
     position_sizing_mode: "risk_pct",
     max_open_trades: 5,
     max_crypto_open_trades: 5,
     stake_amount: 0.0,
-    atr_sl_mult: 1.5,
-    default_rr: 2.0,
+    crypto_atr_sl_mult: 1.8,
+    crypto_rr: 2.5,
+    crypto_min_sl_pct: 0.0,
     bot_enabled: true,
     use_ai: false,
     auto_trade_interval: 60,
-    strategy: "",
+    crypto_strategy: "crypto_regime",
     crypto_timeframe: "H4",
     magic: 556677,
     telegram_enabled: true,
@@ -449,12 +475,13 @@ export default function CryptoPage() {
           max_open_trades: data.max_open_trades ?? 5,
           max_crypto_open_trades: data.max_crypto_open_trades ?? data.max_open_trades ?? 5,
           stake_amount: data.stake_amount ?? 0.0,
-          atr_sl_mult: data.atr_sl_mult ?? 1.5,
-          default_rr: data.default_rr ?? 2.0,
+          crypto_atr_sl_mult: data.crypto_atr_sl_mult ?? 1.8,
+          crypto_rr: data.crypto_rr ?? 2.5,
+          crypto_min_sl_pct: data.crypto_min_sl_pct ?? 0.0,
           bot_enabled: data.bot_enabled ?? true,
           use_ai: data.use_ai ?? false,
           auto_trade_interval: data.auto_trade_interval ?? 60,
-          strategy: data.strategy || "ema_macd_rsi",
+          crypto_strategy: data.crypto_strategy || "crypto_regime",
           crypto_timeframe: data.crypto_timeframe || "H4",
           magic: data.magic ?? 556677,
           telegram_enabled: data.telegram_enabled ?? true,
@@ -468,9 +495,9 @@ export default function CryptoPage() {
         setStrategies(nextStrategies);
         setSettingsForm((prev: any) => ({
           ...prev,
-          strategy: nextStrategies.some((s: StrategyInfo) => s.name === prev.strategy)
-            ? prev.strategy
-            : data.default || prev.strategy || "ema_macd_rsi",
+          crypto_strategy: nextStrategies.some((s: StrategyInfo) => s.name === prev.crypto_strategy)
+            ? prev.crypto_strategy
+            : "crypto_regime",
           use_ai: prev.use_ai ?? data.use_ai_default ?? false,
         }));
       })
@@ -655,7 +682,7 @@ export default function CryptoPage() {
       const data = await api("scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbols: cryptoSymbols, strategy: settingsForm.strategy, timeframe: settingsForm.crypto_timeframe }),
+        body: JSON.stringify({ symbols: cryptoSymbols, strategy: settingsForm.crypto_strategy, timeframe: settingsForm.crypto_timeframe }),
       });
       setScanResults(data.results ?? []);
     } catch (e: any) {
@@ -681,7 +708,7 @@ export default function CryptoPage() {
     refreshScores();
     const intervalId = setInterval(refreshScores, scanMs);
     return () => { active = false; clearInterval(intervalId); };
-  }, [cryptoSymbols.join(","), settingsForm.strategy, settingsForm.crypto_timeframe, cryptoScanMins]);
+  }, [cryptoSymbols.join(","), settingsForm.crypto_strategy, settingsForm.crypto_timeframe, cryptoScanMins]);
 
   // Analyze a symbol, then ask for confirmation before placing the order.
   async function stageTrade(symbol: string) {
@@ -693,7 +720,7 @@ export default function CryptoPage() {
         body: JSON.stringify({
           symbol,
           timeframe: settingsForm.crypto_timeframe,
-          strategy: settingsForm.strategy,
+          strategy: settingsForm.crypto_strategy,
           use_ai: settingsForm.use_ai,
           preview: true,
         }),
@@ -712,7 +739,7 @@ export default function CryptoPage() {
   }
 
   async function confirmTrade() {
-    if (!tradeConfirm) return;
+    if (!tradeConfirm || tradeExecutingRef.current) return;
     const rec = tradeConfirm;
     const maxCryptoSlots = settingsForm.max_crypto_open_trades ?? settingsForm.max_open_trades ?? 1;
     if (cryptoPositions.some((p) => p.symbol.toUpperCase() === rec.symbol.toUpperCase())) {
@@ -725,6 +752,7 @@ export default function CryptoPage() {
       setTradeConfirm(null);
       return;
     }
+    tradeExecutingRef.current = true;
     setTradeExecuting(true);
     try {
       const lot = rec.suggested_lot ?? 0.01;
@@ -737,6 +765,9 @@ export default function CryptoPage() {
           lot,
           sl: rec.stop_loss ?? null,
           tp: rec.take_profit ?? null,
+          signal_price: rec.price,
+          timeframe: rec.timeframe,
+          strategy: settingsForm.crypto_strategy,
         }),
       });
       toastr.success(`Opened ${rec.symbol} ${actionLabel(rec.action)} trade`);
@@ -746,6 +777,7 @@ export default function CryptoPage() {
     } catch (e: any) {
       toastr.error(`Trade failed: ${e.message}`);
     } finally {
+      tradeExecutingRef.current = false;
       setTradeExecuting(false);
     }
   }
@@ -807,23 +839,37 @@ export default function CryptoPage() {
         return;
       }
 
+      const MAX_SPREAD_PCT = 0.02; // drop crypto whose spread exceeds 2% of price
       const data = await api("symbols/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbols: allSyms }),
+        body: JSON.stringify({ symbols: allSyms, max_spread_pct: MAX_SPREAD_PCT }),
       });
 
+      // Keep only symbols MT5 priced with an acceptable spread. `valid` already
+      // excludes both missing symbols (`invalid`) and wide-spread ones.
       const validSet = new Set<string>(data.valid ?? []);
-      const removed: string[] = data.invalid ?? [];
+      const missing: string[] = data.invalid ?? [];
+      const wide: { symbol: string; spread_pct: number }[] = data.wide_spread ?? [];
 
       setCryptoInput(
         cryptoInput.split(",").map((s) => s.trim().toUpperCase()).filter((s) => s && validSet.has(s)).join(", ")
       );
 
-      if (removed.length > 0) {
-        toastr.success(`นำออก ${removed.length} รายการที่ไม่มีใน MT5: ${removed.join(", ")}`);
+      const parts: string[] = [`เหลือ ${validSet.size} เหรียญที่เทรดได้`];
+      if (missing.length > 0) {
+        parts.push(`ไม่มีใน MT5 ${missing.length} ตัว: ${missing.join(", ")}`);
+      }
+      if (wide.length > 0) {
+        const detail = wide
+          .map((w) => `${w.symbol} (${(w.spread_pct * 100).toFixed(1)}%)`)
+          .join(", ");
+        parts.push(`spread กว้างเกิน ${(MAX_SPREAD_PCT * 100).toFixed(0)}% ${wide.length} ตัว: ${detail}`);
+      }
+      if (missing.length === 0 && wide.length === 0) {
+        toastr.success(`ทุก symbol (${validSet.size} รายการ) เทรดได้ — spread ผ่านเกณฑ์`);
       } else {
-        toastr.success(`ทุก symbol (${validSet.size} รายการ) ใช้งานได้ใน MT5`);
+        toastr.success(parts.join(" | "));
       }
     } catch (e: any) {
       toastr.error(`ตรวจสอบ symbol ไม่สำเร็จ: ${e.message}`);
@@ -884,11 +930,11 @@ export default function CryptoPage() {
   };
 
   const handleDirectChangeStrategy = async (newStrat: string) => {
-    setSettingsForm((prev: any) => ({ ...prev, strategy: newStrat }));
+    setSettingsForm((prev: any) => ({ ...prev, crypto_strategy: newStrat }));
     try {
       const updatedForm = {
         ...settingsForm,
-        strategy: newStrat
+        crypto_strategy: newStrat
       };
       await api("settings", {
         method: "POST",
@@ -901,9 +947,9 @@ export default function CryptoPage() {
     }
   };
 
-  const activeStrategy = strategies.find((s) => s.name === settingsForm.strategy);
+  const activeStrategy = strategies.find((s) => s.name === settingsForm.crypto_strategy);
   const strategyDescription = activeStrategy?.description ?? "";
-  const selectedStrategyValue = activeStrategy ? settingsForm.strategy : "";
+  const selectedStrategyValue = activeStrategy ? settingsForm.crypto_strategy : "";
   const getDecimals = (sym: string) => {
     const s = sym.toUpperCase();
     if (s.includes("BTC") || s.includes("ETH")) return 2;
@@ -984,7 +1030,7 @@ export default function CryptoPage() {
           currency={ccy}
           openPl={openPl}
           botEnabled={settingsForm.bot_enabled ?? false}
-          strategy={settingsForm.strategy ?? ""}
+          strategy={settingsForm.crypto_strategy ?? ""}
           aiEnabled={settingsForm.use_ai}
           assetType="crypto"
           onChangeStrategy={handleDirectChangeStrategy}
@@ -1074,7 +1120,7 @@ export default function CryptoPage() {
             const TF_MINS: Record<string, number> = { M15: 15, M30: 30, H1: 60, H4: 240, D1: 1440 };
             const tf = settingsForm.crypto_timeframe || "H4";
             const tradeMins = TF_MINS[tf] ?? 240;
-            const strat = settingsForm.strategy || "ema_macd_rsi";
+            const strat = settingsForm.crypto_strategy || "crypto_regime";
             const cond = STRATEGY_CONDITIONS[strat];
             return (
               <Box sx={{ display: "flex", alignItems: "center", gap: { xs: 0.75, md: 2 }, mb: { xs: 1, md: 2 }, px: 0.5, flexWrap: "wrap" }}>
@@ -1112,7 +1158,7 @@ export default function CryptoPage() {
 
           {/* Conditions Modal */}
           {(() => {
-            const strat = settingsForm.strategy || "ema_macd_rsi";
+            const strat = settingsForm.crypto_strategy || "crypto_regime";
             const cond = STRATEGY_CONDITIONS[strat];
             if (!cond) return null;
             return (
@@ -1127,7 +1173,7 @@ export default function CryptoPage() {
                         เงื่อนไขการเข้าเทรด — {cond.label}
                       </Typography>
                       <Typography variant="caption" sx={{ color: "#475569" }}>
-                        {settingsForm.crypto_timeframe} · ATR SL ×{settingsForm.atr_sl_mult} · R:R {settingsForm.default_rr}{settingsForm.use_ai ? " · AI ON" : ""}
+                        {settingsForm.crypto_timeframe} · ATR SL ×{settingsForm.crypto_atr_sl_mult} · R:R {settingsForm.crypto_rr}{settingsForm.use_ai ? " · AI ON" : ""}
                       </Typography>
                     </Box>
                   </Stack>
@@ -1962,7 +2008,7 @@ export default function CryptoPage() {
         onClose={() => setSettingsOpen(false)}
         settingsForm={settingsForm}
         setSettingsForm={setSettingsForm}
-        strategies={strategies}
+        strategies={strategiesForGroup(strategies, "crypto")}
         selectedStrategyValue={selectedStrategyValue}
         activeStrategy={activeStrategy}
         strategyDescription={strategyDescription}
@@ -2029,6 +2075,15 @@ export default function CryptoPage() {
                 <Typography variant="caption" sx={MONO}>{fmt(tradeConfirm.price, 2)}</Typography>
                 <Typography variant="caption" color="text.secondary">Lot</Typography>
                 <Typography variant="caption" sx={MONO}>{fmt(tradeConfirm.suggested_lot, 2)}</Typography>
+                <Typography variant="caption" color="text.secondary">เงินทุน (มูลค่าสัญญา)</Typography>
+                <Typography variant="caption" sx={MONO}>
+                  {fmt(
+                    (tradeConfirm.suggested_lot ?? 0) *
+                      (tradeConfirm.price ?? 0) *
+                      (tradeConfirm.contract_size ?? 1),
+                    2,
+                  )}
+                </Typography>
                 <Typography variant="caption" color="text.secondary">Stop Loss</Typography>
                 <Typography variant="caption" sx={MONO}>{fmt(tradeConfirm.stop_loss, 2)}</Typography>
                 <Typography variant="caption" color="text.secondary">Take Profit</Typography>

@@ -119,7 +119,14 @@ type HistoryDeal = {
 type StrategyInfo = {
   name: string;
   description: string;
+  groups?: string[];
 };
+
+// Keep strategies whose `groups` include this page's asset group. Missing
+// `groups` (older backend) means "all groups", so don't filter it out.
+function strategiesForGroup(list: StrategyInfo[], group: string): StrategyInfo[] {
+  return list.filter((s) => !s.groups || s.groups.includes(group));
+}
 
 type Tick = {
   bid: number;
@@ -1566,7 +1573,7 @@ export default function ForexPage() {
         onClose={() => setSettingsOpen(false)}
         settings={settings}
         patchSettings={patchSettings}
-        strategies={strategies}
+        strategies={strategiesForGroup(strategies, "forex")}
         strategyLabel={strategyLabel}
         savingSettings={saving}
         onSave={saveForexSettings}

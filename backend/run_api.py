@@ -5,6 +5,17 @@
 import socket
 import sys
 
+# Force UTF-8 on the console before anything logs. MetaTrader5 returns
+# Thai-localized error strings; the default Windows locale codec (cp874)
+# can't encode them, which crashes the log handler and masks real errors.
+for _stream in (sys.stdout, sys.stderr):
+    _reconfigure = getattr(_stream, "reconfigure", None)
+    if _reconfigure is not None:
+        try:
+            _reconfigure(encoding="utf-8", errors="backslashreplace")
+        except Exception:
+            pass
+
 import uvicorn
 
 from app.config import settings

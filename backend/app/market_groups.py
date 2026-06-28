@@ -97,13 +97,13 @@ def check_market_open(symbol: str) -> tuple[bool, str]:
             if hour >= 17:
                 bk_close = now_ny.replace(hour=17, minute=0, second=0, microsecond=0).astimezone(bk_tz)
                 day_name = "วันเสาร์" if bk_close.weekday() == 5 else "วันศุกร์"
-                bk_close_str = bk_close.strftime(f"{day_name} เวลา %H:%M น.")
+                bk_close_str = f"{day_name} เวลา {bk_close.strftime('%H:%M')} น."
                 return False, f"ตลาดทองคำปิดทำการแล้วในช่วงสุดสัปดาห์ (ปิด{bk_close_str} เวลาไทย)"
         elif weekday == 6:
             if hour < 18:
                 bk_open = now_ny.replace(hour=18, minute=0, second=0, microsecond=0).astimezone(bk_tz)
                 day_name = "วันจันทร์" if bk_open.weekday() == 0 else "วันอาทิตย์"
-                bk_open_str = bk_open.strftime(f"{day_name} เวลา %H:%M น.")
+                bk_open_str = f"{day_name} เวลา {bk_open.strftime('%H:%M')} น."
                 return False, f"ตลาดทองคำยังไม่เปิดทำการ (เปิด{bk_open_str} เวลาไทย)"
         else:
             if hour == 17:
@@ -118,13 +118,13 @@ def check_market_open(symbol: str) -> tuple[bool, str]:
             if hour >= 17:
                 bk_close = now_ny.replace(hour=17, minute=0, second=0, microsecond=0).astimezone(bk_tz)
                 day_name = "วันเสาร์" if bk_close.weekday() == 5 else "วันศุกร์"
-                bk_close_str = bk_close.strftime(f"{day_name} เวลา %H:%M น.")
+                bk_close_str = f"{day_name} เวลา {bk_close.strftime('%H:%M')} น."
                 return False, f"ตลาด Forex ปิดทำการแล้วในช่วงสุดสัปดาห์ (ปิด{bk_close_str} เวลาไทย)"
         elif weekday == 6:
             if hour < 17:
                 bk_open = now_ny.replace(hour=17, minute=0, second=0, microsecond=0).astimezone(bk_tz)
                 day_name = "วันจันทร์" if bk_open.weekday() == 0 else "วันอาทิตย์"
-                bk_open_str = bk_open.strftime(f"{day_name} เวลา %H:%M น.")
+                bk_open_str = f"{day_name} เวลา {bk_open.strftime('%H:%M')} น."
                 return False, f"ตลาด Forex ยังไม่เปิดทำการ (เปิด{bk_open_str} เวลาไทย)"
 
     return True, ""

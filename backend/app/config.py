@@ -39,14 +39,23 @@ class Settings(BaseSettings):
 
     # Trading
     symbols: str = "EURUSD,GOLD,BTCUSD"
-    default_timeframe: str = "M15"
+    # Fallback timeframe for symbols with no group-specific override. H1 keeps
+    # the swing-trading default consistent across the bot (not a fast intraday TF).
+    default_timeframe: str = "H1"
+    # Crypto swings hard 24/7; H4 filters the noise and rides trends cleanly.
     crypto_timeframe: str = "H4"
-    crypto_strategy: str = "crypto_early_stage"
+    crypto_strategy: str = "crypto_regime"
     crypto_atr_sl_mult: float = 1.8
     crypto_rr: float = 2.5
+    # Minimum SL distance as a fraction of price. ATR-based stops collapse when
+    # the market consolidates (ATR shrinks), leaving an SL so tight that spread
+    # dominates and trades get rejected. This floors it. 0 = disabled.
+    crypto_min_sl_pct: float = 0.0
     crypto_breakout_enabled: bool = False
+    # Gold reacts to news intraday; H4 cuts that chop while keeping the trend.
     gold_timeframe: str = "H4"
     gold_strategy: str = "ema_macd_rsi"
+    gold_min_sl_pct: float = 0.0          # floor on SL as fraction of price; 0 = off
     strategy: str = "ema_macd_rsi"
     risk_per_trade: float = 0.01
     max_lot: float = 1.0
@@ -58,8 +67,9 @@ class Settings(BaseSettings):
     gold_bot_enabled: bool = True
     auto_trade_interval: int = 60
     max_spread_points: int = 0           # 0 = disabled; e.g. 30 = skip if spread > 30 pts
-    max_spread_to_sl: float = 0.25       # reject when spread consumes >25% of planned SL distance
-    max_entry_drift_to_sl: float = 0.50  # reject stale signals after price moves >0.5R from candle close
+    max_spread_to_sl: float = 0.25       # non-crypto spread cap
+    crypto_max_spread_to_sl: float = 0.50  # crypto CFDs need a wider cap; still reject toxic quotes
+    max_entry_drift_to_sl: float = 0.75  # reject stale signals after price moves >0.75R from candle close
     max_daily_loss_pct: float = 0.0      # 0 = disabled; 0.05 = pause when daily loss ≥ 5%
     max_consecutive_losses: int = 0      # 0 = disabled; e.g. 3 = pause after 3 losses in a row
     breakeven_r: float = 1.0             # move SL to entry after 1×SL-dist profit; 0 = off
@@ -69,6 +79,16 @@ class Settings(BaseSettings):
     max_crypto_open_trades: int = 5
     max_gold_open_trades: int = 3
     stake_amount: float = 0.0
+    # The broker's minimum lot can force a position whose value far exceeds the
+    # intended stake/risk (e.g. BTC min 0.01 lot ≈ $600 vs a $100 stake). When
+    # the forced notional exceeds this multiple of the target, skip the trade
+    # instead of silently over-exposing. 0 = disabled (always trade min lot).
+    min_lot_stake_multiple: float = 0.0
+    # Hard cap on a single position's notional value as a multiple of account
+    # equity, applied AFTER risk sizing. A tight SL can make risk_pct size a huge
+    # lot (small $ risk, but huge notional → gap/slippage risk); this bounds it.
+    # The final lot is min(risk_lot, notional_cap_lot). 0 = disabled.
+    max_notional_to_equity: float = 0.0
 
     # Stocks (US equities) — independent settings
     stock_bot_enabled: bool = False        # ปิดไว้ก่อนจนกว่าจะตั้งค่าครบ
@@ -79,6 +99,7 @@ class Settings(BaseSettings):
     stock_risk_per_trade: float = 0.005    # 0.5% conservative สำหรับ CFD
     stock_max_lot: float = 5.0             # หุ้น CFD lot ใหญ่กว่า crypto
     stock_atr_sl_mult: float = 2.0         # wide stop — หุ้นมี overnight gap
+    stock_min_sl_pct: float = 0.0          # floor on SL as fraction of price; 0 = off
     stock_rr: float = 3.0                  # หุ้น trend ได้ไกล R:R ควรสูง
     stock_use_ai: bool = False
     stock_auto_trade_interval: int = 900   # 15 นาที — หุ้นไม่ต้องสแกนบ่อย
@@ -92,6 +113,7 @@ class Settings(BaseSettings):
     forex_risk_per_trade: float = 0.01    # 1% standard สำหรับ Forex
     forex_max_lot: float = 2.0             # Forex lot ปกติ
     forex_atr_sl_mult: float = 1.5        # ATR × 1.5 เหมาะกับ Forex
+    forex_min_sl_pct: float = 0.0         # floor on SL as fraction of price; 0 = off
     forex_rr: float = 2.0                  # R:R 1:2 มาตรฐาน
     forex_use_ai: bool = False
     forex_auto_trade_interval: int = 300   # 5 นาที — Forex สแกนบ่อยกว่าหุ้น

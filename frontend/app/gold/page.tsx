@@ -125,7 +125,14 @@ type HistoryDeal = {
 type StrategyInfo = {
   name: string;
   description: string;
+  groups?: string[];
 };
+
+// Keep strategies whose `groups` include this page's asset group. Missing
+// `groups` (older backend) means "all groups", so don't filter it out.
+function strategiesForGroup(list: StrategyInfo[], group: string): StrategyInfo[] {
+  return list.filter((s) => !s.groups || s.groups.includes(group));
+}
 
 type Tick = {
   bid: number;
@@ -1925,11 +1932,14 @@ export default function GoldPage() {
                       "& .MuiSelect-select": { color: "#fff" }
                     }}
                   >
-                    {(strategies.length ? strategies : [{ name: "ema_macd_rsi", description: "" }]).map((s) => (
-                      <MenuItem key={s.name} value={s.name}>
-                        {strategyLabel(s.name)}
-                      </MenuItem>
-                    ))}
+                    {(() => {
+                      const goldStrats = strategiesForGroup(strategies, "gold");
+                      return (goldStrats.length ? goldStrats : [{ name: "ema_macd_rsi", description: "" }]).map((s) => (
+                        <MenuItem key={s.name} value={s.name}>
+                          {strategyLabel(s.name)}
+                        </MenuItem>
+                      ));
+                    })()}
                   </Select>
                 </Box>
                 <QuickNumberInput

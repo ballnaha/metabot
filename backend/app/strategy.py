@@ -33,11 +33,41 @@ from .market_groups import market_group
 from .models import Action, IndicatorSnapshot, StrategySignal
 
 
+ALL_GROUPS = ("crypto", "gold", "stock", "forex")
+
+# Per-group setting name holding the minimum SL distance as a fraction of price.
+_MIN_SL_PCT_SETTING = {
+    "crypto": "crypto_min_sl_pct",
+    "forex": "forex_min_sl_pct",
+    "gold": "gold_min_sl_pct",
+    "stock": "stock_min_sl_pct",
+}
+
+
+def floor_sl_distance(symbol: str, price: float, dist: float) -> float:
+    """Raise an SL distance to the per-group floor (% of price), if configured.
+
+    ATR-based stops collapse when a market consolidates (ATR shrinks), leaving
+    an SL so tight that spread dominates it and trades get rejected. Each asset
+    class has its own floor because their SL/spread scales differ by ~10× (forex
+    SL ≈ 0.1–0.2% of price vs crypto ≈ 5–7%). Flooring the distance keeps R:R
+    intact because TP scales with it. 0 disables the floor for that group.
+    """
+    setting = _MIN_SL_PCT_SETTING.get(market_group(symbol))
+    min_pct = getattr(settings, setting, 0.0) if setting else 0.0
+    if min_pct and min_pct > 0 and price > 0:
+        return max(dist, price * min_pct)
+    return dist
+
+
 class Strategy:
     """Base class. Subclass and implement evaluate()."""
 
     name: str = "base"
     description: str = ""
+    # Asset groups this strategy is suited for. Defaults to all of them;
+    # override in subclasses that rely on group-specific data (e.g. volume).
+    groups: tuple[str, ...] = ALL_GROUPS
 
     def evaluate(self, df: pd.DataFrame, snap: IndicatorSnapshot) -> StrategySignal:
         raise NotImplementedError
@@ -59,7 +89,7 @@ class Strategy:
         else:
             sl_mult, rr = settings.atr_sl_mult, settings.default_rr
         atr  = snap.atr or (snap.price * 0.005)
-        dist = sl_mult * atr
+        dist = floor_sl_distance(snap.symbol, snap.price, sl_mult * atr)
         if action == Action.BUY:
             return round(snap.price - dist, 6), round(snap.price + dist * rr, 6)
         return round(snap.price + dist, 6), round(snap.price - dist * rr, 6)
@@ -147,7 +177,8 @@ def get_strategy(name: Optional[str] = None) -> Strategy:
 
 def list_strategies() -> List[dict]:
     return [
-        {"name": s.name, "description": s.description} for s in _REGISTRY.values()
+        {"name": s.name, "description": s.description, "groups": list(s.groups)}
+        for s in _REGISTRY.values()
     ]
 
 
@@ -238,13 +269,16 @@ class TrendFollowStrategy(Strategy):
     def evaluate(self, df, snap):
         close = df["close"]
         ema50 = close.ewm(span=50, adjust=False).mean()
-        slope = ema50.iloc[-1] - ema50.iloc[-5] if len(ema50) >= 5 else 0.0
+        # Evaluate on the last CLOSED candle (-2), consistent with snap.* and the
+        # other strategies. Using -1 (the still-forming candle) leaks look-ahead
+        # data and makes the EMA reference disagree with snap.price.
+        slope = ema50.iloc[-2] - ema50.iloc[-6] if len(ema50) >= 6 else 0.0
         atr = snap.atr or (snap.price * 0.005)
         bull_score = bear_score = max_score = 0.0
         bull: List[str] = []
         bear: List[str] = []
 
-        price_gap = snap.price - ema50.iloc[-1]
+        price_gap = snap.price - ema50.iloc[-2]
         weight = 0.45
         strength = self._strength(price_gap, atr * 1.5)
         max_score += weight
@@ -328,6 +362,7 @@ class MeanReversionStrategy(Strategy):
             atr = snap.atr or (snap.price * 0.005)
             is_stock = market_group(snap.symbol) == "stock"
             dist = (settings.stock_atr_sl_mult if is_stock else settings.atr_sl_mult) * atr
+            dist = floor_sl_distance(snap.symbol, snap.price, dist)
             mid = (snap.bb_upper + snap.bb_lower) / 2 if snap.bb_upper else snap.price
             if sig.action == Action.BUY:
                 sig.stop_loss = round(snap.price - dist, 6)
@@ -395,6 +430,7 @@ class SuperTrendEmaStrategy(Strategy):
     """SuperTrend + EMA 200 Trend Following Strategy."""
 
     name = "supertrend_ema"
+    groups = ("crypto", "gold", "stock")
     description = (
         "กลยุทธ์ตามเทรนด์ระดับมืออาชีพ (SuperTrend + EMA 200) "
         "คัดกรองเทรนด์ใหญ่ด้วย EMA 200 และหาจุดเข้าซื้อขายที่คมกริบด้วย SuperTrend "
@@ -505,6 +541,7 @@ class StockPullbackStrategy(Strategy):
     """Stock Pullback Buyer Strategy (5-star for Stocks)."""
 
     name = "stock_pullback"
+    groups = ("stock",)
     description = (
         "กลยุทธ์ระดับ 5 ดาวสำหรับหุ้น (Stock Pullback) "
         "เน้นช้อนซื้อหุ้นที่เป็นแนวโน้มขาขึ้นใหญ่ในจังหวะย่อตัวเข้าหาแนวรับเส้น EMA 50 "
@@ -580,6 +617,7 @@ class CryptoEarlyStageStrategy(Strategy):
     """Crypto Early Stage (Pump Detector - 5-star for Crypto)."""
 
     name = "crypto_early_stage"
+    groups = ("crypto",)
     description = (
         "กลยุทธ์ล่าเหรียญต้นน้ำระดับ 5 ดาวสำหรับ Crypto (Crypto Pump Detector) "
         "ตรวจจับการบีบอัดความผันผวน (Bollinger Band Squeeze) ควบคู่กับปริมาณการซื้อขายที่ทะลักเข้าผิดปกติ (Volume Spike) "
@@ -599,11 +637,14 @@ class CryptoEarlyStageStrategy(Strategy):
         bb_up = ma + 2 * sd
         bb_low = ma - 2 * sd
         bandwidth = (bb_up - bb_low) / ma.replace(0, 1e-9)
-        avg_bandwidth = bandwidth.rolling(20).mean()
+        # Shift the reference averages by 1 so the evaluated candle is compared
+        # against the PRIOR 20 bars, not a window that includes itself (which
+        # dampens its own spike/squeeze signal).
+        avg_bandwidth = bandwidth.shift(1).rolling(20).mean()
 
         # 2. Volume Spike Calculation (using real_volume or fallback to tick_volume)
         volume = df["real_volume"] if ("real_volume" in df and df["real_volume"].sum() > 0) else df["tick_volume"]
-        avg_volume = volume.rolling(20).mean()
+        avg_volume = volume.shift(1).rolling(20).mean()
 
         last_idx = -2
         last_close = close.iloc[last_idx]
@@ -670,6 +711,7 @@ class CryptoRegimeStrategy(Strategy):
     """
 
     name = "crypto_regime"
+    groups = ("crypto",)
     description = (
         "กลยุทธ์ทดลอง Crypto แบบปรับตามสภาวะตลาด (ยังไม่ใช่ค่าเริ่มต้น): ตามเทรนด์เมื่อ ADX แข็งแรง, "
         "เข้า breakout ที่มี volume ยืนยัน และเล่นกลับตัวเฉพาะกรอบที่ชัดเจน "
@@ -695,7 +737,7 @@ class CryptoRegimeStrategy(Strategy):
         return dx.ewm(alpha=1 / period, adjust=False).mean()
 
     def evaluate(self, df: pd.DataFrame, snap: IndicatorSnapshot) -> StrategySignal:
-        if len(df) < 220:
+        if len(df) < 200:
             return StrategySignal(action=Action.HOLD, confidence=0.0)
 
         close, high, low, open_p = (
@@ -735,13 +777,13 @@ class CryptoRegimeStrategy(Strategy):
             price > ema200.iloc[i]
             and ema50.iloc[i] > ema200.iloc[i]
             and ema50_slope > 0
-            and adx >= 18
+            and adx >= 20
         )
         bear_trend = (
             price < ema200.iloc[i]
             and ema50.iloc[i] < ema200.iloc[i]
             and ema50_slope < 0
-            and adx >= 18
+            and adx >= 20
         )
 
         # Crypto breakouts are especially vulnerable to spread and false
@@ -761,6 +803,7 @@ class CryptoRegimeStrategy(Strategy):
             and price > ema20.iloc[i]
             and close.iloc[prev] <= ema20.iloc[prev] * 1.006
             and green
+            and vol_ratio >= 0.30
             and 42 <= rsi <= 68
         )
         bear_pullback = (
@@ -769,6 +812,7 @@ class CryptoRegimeStrategy(Strategy):
             and price < ema20.iloc[i]
             and close.iloc[prev] >= ema20.iloc[prev] * 0.994
             and red
+            and vol_ratio >= 0.30
             and 32 <= rsi <= 58
         )
 
@@ -823,6 +867,9 @@ class CryptoRegimeStrategy(Strategy):
         else:
             structure_distance = max(0.0, float(high.iloc[-7:-1].max()) - price)
             sl_distance = min(max(settings.crypto_atr_sl_mult * atr, structure_distance), 2.8 * atr)
+
+        # Floor the SL so a shrunk ATR can't leave a stop too tight for spread.
+        sl_distance = floor_sl_distance(snap.symbol, price, sl_distance)
 
         if action == Action.BUY:
             stop_loss = price - sl_distance

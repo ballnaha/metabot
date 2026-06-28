@@ -76,7 +76,13 @@ class Recommendation(BaseModel):
     confidence: float
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
+    # Live mid-price captured when the signal was decided. Used to measure true
+    # decision->fill drift, instead of the much older closed-candle price.
+    signal_ref_price: Optional[float] = None
     suggested_lot: Optional[float] = None
+    # Broker contract size for the symbol, so clients can show the position's
+    # notional value (lot × price × contract_size) before confirming.
+    contract_size: Optional[float] = None
     summary: str = ""
     indicators: IndicatorSnapshot
     opinions: List[AIOpinion] = Field(default_factory=list)

@@ -41,9 +41,10 @@ type BotSettingsForm = {
   max_open_trades: number;
   max_crypto_open_trades?: number;
   magic: number;
-  atr_sl_mult: number;
-  default_rr: number;
-  strategy: string;
+  crypto_atr_sl_mult: number;
+  crypto_rr: number;
+  crypto_min_sl_pct?: number;
+  crypto_strategy: string;
   crypto_timeframe: string;
   auto_trade_interval: number;
   scanMins: number;
@@ -503,15 +504,19 @@ export default function CryptoBotSettings({
               </Select>
             </FormControl>
 
-            <QuickNumberInput
-              label="วงเงินต่อไม้"
-              value={settingsForm.stake_amount}
-              onChange={(val) => patchSettings({ stake_amount: val })}
-              step={50}
-              min={0}
-              precision={2}
-              helperText="ใส่ 0 เพื่อให้ระบบแบ่งทุนอัตโนมัติจาก Equity / จำนวนช่อง"
-            />
+            {/* วงเงินต่อไม้ใช้เฉพาะโหมดแบ่งทุนเท่ากัน — โหมดคิดจากจุดตัดขาดทุน
+                คำนวณ lot จาก Equity × ความเสี่ยง ÷ ระยะ SL จึงไม่ใช้ค่านี้ */}
+            {settingsForm.position_sizing_mode === "equal_slots" && (
+              <QuickNumberInput
+                label="วงเงินต่อไม้"
+                value={settingsForm.stake_amount}
+                onChange={(val) => patchSettings({ stake_amount: val })}
+                step={50}
+                min={0}
+                precision={2}
+                helperText="ใส่ 0 เพื่อให้ระบบแบ่งทุนอัตโนมัติจาก Equity / จำนวนช่อง"
+              />
+            )}
 
             <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
               <QuickNumberInput
@@ -569,19 +574,28 @@ export default function CryptoBotSettings({
             <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
               <QuickNumberInput
                 label="ระยะตัดขาดทุน (ATR)"
-                value={settingsForm.atr_sl_mult}
-                onChange={(val) => patchSettings({ atr_sl_mult: val })}
+                value={settingsForm.crypto_atr_sl_mult}
+                onChange={(val) => patchSettings({ crypto_atr_sl_mult: val })}
                 step={0.1}
                 min={0.1}
                 precision={1}
               />
               <QuickNumberInput
                 label="เป้ากำไร (R:R)"
-                value={settingsForm.default_rr}
-                onChange={(val) => patchSettings({ default_rr: val })}
+                value={settingsForm.crypto_rr}
+                onChange={(val) => patchSettings({ crypto_rr: val })}
                 step={0.1}
                 min={0.1}
                 precision={1}
+              />
+              <QuickNumberInput
+                label="SL ขั้นต่ำ (% ของราคา)"
+                value={Number(((settingsForm.crypto_min_sl_pct ?? 0) * 100).toFixed(2))}
+                onChange={(val) => patchSettings({ crypto_min_sl_pct: val / 100 })}
+                step={0.1}
+                min={0}
+                precision={2}
+                helperText="กัน SL แคบเกินจน spread กิน (เช่น 1.8%) — ใส่ 0 เพื่อปิด"
               />
             </Box>
 
@@ -633,7 +647,7 @@ export default function CryptoBotSettings({
                   size="small"
                   fullWidth
                   value={selectedStrategyValue}
-                  onChange={(e) => patchSettings({ strategy: e.target.value })}
+                  onChange={(e) => patchSettings({ crypto_strategy: e.target.value })}
                   sx={{
                     height: 40,
                     borderRadius: 2,
