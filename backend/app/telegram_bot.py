@@ -15,6 +15,7 @@ Only the chat id in TELEGRAM_CHAT_ID may use the bot.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import urllib.request
 import urllib.error
@@ -33,7 +34,7 @@ from .models import Action, Recommendation, PendingTrade
 log = logging.getLogger("metabot.telegram")
 
 
-def _api_request(method: str, path: str, json_data: dict = None) -> dict:
+def _api_request_blocking(method: str, path: str, json_data: dict = None) -> dict:
     url = f"http://127.0.0.1:{settings.api_port}/api/{path}"
     headers = {
         "X-API-Key": settings.api_key or "change-me-please",
@@ -53,6 +54,12 @@ def _api_request(method: str, path: str, json_data: dict = None) -> dict:
         raise ValueError(err_msg)
     except Exception as e:
         raise ValueError(f"API Connection error: {e}")
+
+
+async def _api_request(method: str, path: str, json_data: dict = None) -> dict:
+    """Async wrapper: urllib is blocking and would freeze the bot's event loop
+    (every command waits up to a 10s timeout). Run it in a thread instead."""
+    return await asyncio.to_thread(_api_request_blocking, method, path, json_data)
 
 
 def _authorized(update: Update) -> bool:
@@ -137,7 +144,7 @@ async def cmd_account(update: Update, _ctx: ContextTypes.DEFAULT_TYPE):
     if not await _guard(update):
         return
     try:
-        a = _api_request("GET", "account")
+        a = await _api_request("GET", "account")
         await update.message.reply_text(
             f"💼 *{a['login']}* @ {a['server']}\n"
             f"Balance: `{_fmt(a['balance'])} {a['currency']}`\n"
@@ -153,7 +160,7 @@ async def cmd_positions(update: Update, _ctx: ContextTypes.DEFAULT_TYPE):
     if not await _guard(update):
         return
     try:
-        res = _api_request("GET", "positions")
+        res = await _api_request("GET", "positions")
         pos = res.get("positions", [])
     except Exception as e:
         await update.message.reply_text(f"⚠️ {e}")
@@ -187,7 +194,7 @@ async def cmd_close(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Ticket ต้องเป็นตัวเลข")
         return
     try:
-        result = _api_request("POST", f"positions/{ticket}/close")
+        result = await _api_request("POST", f"positions/{ticket}/close")
         if result.get("ok"):
             await update.message.reply_text(
                 f"✅ ปิด position `{ticket}` สำเร็จ", parse_mode="Markdown"
@@ -210,7 +217,7 @@ async def cmd_history(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             pass
     try:
-        res = _api_request("GET", f"history?days={days}")
+        res = await _api_request("GET", f"history?days={days}")
         deals = res.get("history", [])
     except Exception as e:
         await update.message.reply_text(f"⚠️ {e}")
@@ -246,9 +253,9 @@ async def cmd_status(update: Update, _ctx: ContextTypes.DEFAULT_TYPE):
     if not await _guard(update):
         return
     try:
-        acct = _api_request("GET", "account")
-        pos_res = _api_request("GET", "positions")
-        cfg = _api_request("GET", "settings")
+        acct = await _api_request("GET", "account")
+        pos_res = await _api_request("GET", "positions")
+        cfg = await _api_request("GET", "settings")
     except Exception as e:
         await update.message.reply_text(f"⚠️ {e}")
         return
@@ -276,9 +283,9 @@ async def cmd_toggle(update: Update, _ctx: ContextTypes.DEFAULT_TYPE):
     if not await _guard(update):
         return
     try:
-        cfg = _api_request("GET", "settings")
+        cfg = await _api_request("GET", "settings")
         new_state = not cfg.get("bot_enabled", False)
-        _api_request("POST", "settings", {"bot_enabled": new_state})
+        await _api_request("POST", "settings", {"bot_enabled": new_state})
         icon = "🟢" if new_state else "🔴"
         label = "เปิดแล้ว (กำลังทำงาน)" if new_state else "ปิดแล้ว (หยุดทำงาน)"
         await update.message.reply_text(f"{icon} Bot *{label}*", parse_mode="Markdown")
@@ -312,7 +319,7 @@ async def cmd_analyze(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(f"🔎 Analysing {symbol} {timeframe}…")
     try:
         payload = {"symbol": symbol, "timeframe": timeframe, "strategy": strat, "use_ai": use_ai}
-        res = _api_request("POST", "analyze", payload)
+        res = await _api_request("POST", "analyze", payload)
         rec = Recommendation.model_validate(res["recommendation"])
         pending = PendingTrade.model_validate(res["pending"]) if res.get("pending") else None
     except Exception as e:
@@ -332,7 +339,7 @@ async def cmd_strategies(update: Update, _ctx: ContextTypes.DEFAULT_TYPE):
     if not await _guard(update):
         return
     try:
-        res = _api_request("GET", "strategies")
+        res = await _api_request("GET", "strategies")
         strategies_list = res.get("strategies", [])
         default_strat = res.get("default", "")
     except Exception as e:
