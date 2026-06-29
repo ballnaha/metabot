@@ -804,6 +804,11 @@ def validate_symbols(req: ValidateSymbolsRequest):
     spread wider than that fraction of price are reported separately in
     ``wide_spread`` (with their measured spread) so the caller can drop them.
     """
+    # Attach to the terminal first — without this, _ensure_symbol() fails for
+    # every symbol (reporting them all "invalid"), which is what made
+    # "กรองเหรียญ" wipe the whole list.
+    mt5_client.connect()
+
     valid, invalid, wide_spread = [], [], []
     limit = req.max_spread_pct
     for sym in req.symbols:
