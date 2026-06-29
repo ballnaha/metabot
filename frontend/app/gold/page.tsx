@@ -35,7 +35,6 @@ import {
   TableBody,
   TableCell,
   TableHead,
-  TablePagination,
   TableRow,
   TextField,
   Typography,
@@ -185,15 +184,6 @@ const fmtP = (n: number | null | undefined): string => {
   if (v >= 1)     return v.toFixed(3);
   if (v >= 0.01)  return v.toFixed(5);
   return v.toFixed(7);
-};
-const formatBangkokTime = (value: string) => {
-  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(value);
-  const date = new Date(hasTimezone ? value : `${value}+07:00`);
-  return date.toLocaleString("th-TH", {
-    dateStyle: "short",
-    timeStyle: "short",
-    timeZone: "Asia/Bangkok",
-  });
 };
 
 const actionColor = (action?: string): "success" | "error" | "default" =>
