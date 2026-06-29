@@ -803,17 +803,17 @@ export default function CryptoPage() {
         body: JSON.stringify({ symbols: allSyms, max_spread_pct: MAX_SPREAD_PCT }),
       });
 
-      // Keep only symbols MT5 priced with an acceptable spread. `valid` already
-      // excludes both missing symbols (`invalid`) and wide-spread ones.
-      const validSet = new Set<string>(data.valid ?? []);
+      // `valid` is the broker's resolved names (e.g. SOLUSD -> SOLUSDm) and
+      // already excludes missing (`invalid`) and wide-spread symbols. Replace
+      // the list with those resolved names directly — matching the old input
+      // names against resolved ones would drop everything (SOLUSD != SOLUSDm).
+      const valid: string[] = data.valid ?? [];
       const missing: string[] = data.invalid ?? [];
       const wide: { symbol: string; spread_pct: number }[] = data.wide_spread ?? [];
 
-      setCryptoInput(
-        cryptoInput.split(",").map((s) => s.trim().toUpperCase()).filter((s) => s && validSet.has(s)).join(", ")
-      );
+      setCryptoInput(valid.join(", "));
 
-      const parts: string[] = [`เหลือ ${validSet.size} เหรียญที่เทรดได้`];
+      const parts: string[] = [`เหลือ ${valid.length} เหรียญที่เทรดได้`];
       if (missing.length > 0) {
         parts.push(`ไม่มีใน MT5 ${missing.length} ตัว: ${missing.join(", ")}`);
       }
@@ -824,7 +824,7 @@ export default function CryptoPage() {
         parts.push(`spread กว้างเกิน ${(MAX_SPREAD_PCT * 100).toFixed(0)}% ${wide.length} ตัว: ${detail}`);
       }
       if (missing.length === 0 && wide.length === 0) {
-        toastr.success(`ทุก symbol (${validSet.size} รายการ) เทรดได้ — spread ผ่านเกณฑ์`);
+        toastr.success(`ทุก symbol (${valid.length} รายการ) เทรดได้ — spread ผ่านเกณฑ์`);
       } else {
         toastr.success(parts.join(" | "));
       }
