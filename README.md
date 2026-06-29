@@ -101,6 +101,13 @@ python run_api.py
 python run_telegram.py
 ```
 
+### Run the tests
+
+```bash
+pip install -r requirements-dev.txt   # one-time: installs pytest
+pytest                                # runs the suite in backend/tests/
+```
+
 Telegram commands:
 
 | Command | What it does |
