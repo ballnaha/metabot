@@ -222,6 +222,9 @@ python run_backtest.py EURUSD --timeframe H1 --strategy trend --bars 2000
 # Set commission ($/lot round-turn) — e.g. a raw-spread account
 python run_backtest.py BTCUSD --commission 7
 
+# Stress-test against a fixed/wider spread (spread-based accounts, e.g. XM Standard)
+python run_backtest.py EURUSD --spread-points 25
+
 # Compare every configured symbol (SYMBOLS in .env)
 python run_backtest.py --all
 
@@ -229,12 +232,18 @@ python run_backtest.py --all
 python run_backtest.py GOLD --compare-strategies
 ```
 
+**Spread-based accounts (e.g. XM Standard).** Such accounts charge $0
+commission but a wider spread — so the spread *is* the cost, and the default
+(a single live snapshot) may not be representative. Leave
+`BACKTEST_COMMISSION_PER_LOT=0` and use `--spread-points` to model a realistic
+or worst-case spread instead of the snapshot.
+
 Set a default commission with `BACKTEST_COMMISSION_PER_LOT` in `.env` (check
 your account's contract specs). Via the API: `POST /api/backtest` with
 `{"symbol": "BTCUSD"}` (optional `timeframe`, `strategy`, `bars`,
-`commission_per_lot`, `include_details`). Key metrics: `net_r` (after costs),
-`gross_net_r` (before), `total_cost_r`, `win_rate`, `profit_factor`,
-`max_drawdown_r`.
+`commission_per_lot`, `spread_points`, `include_details`). Key metrics:
+`net_r` (after costs), `gross_net_r` (before), `total_cost_r`, `spread_points`,
+`win_rate`, `profit_factor`, `max_drawdown_r`.
 
 > ⚠️ The backtest excludes AI filtering and assumes fills at the modelled
 > price (no slippage on gaps) — treat results as a **relative** comparison

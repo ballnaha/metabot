@@ -41,6 +41,7 @@ def _print_row(r: dict) -> None:
         f" net={r['net_r']:+8.2f}R  PF={r['profit_factor']:5.2f}"
         f" maxDD={r['max_drawdown_r']:6.2f}R"
         f" cost={r.get('total_cost_r', 0.0):6.2f}R"
+        f" spread={r.get('spread_points', 0.0):5.1f}pt"
     )
 
 
@@ -53,6 +54,11 @@ def main() -> None:
     parser.add_argument(
         "--commission", "-c", type=float, default=None,
         help="Round-turn commission $/lot (overrides BACKTEST_COMMISSION_PER_LOT).",
+    )
+    parser.add_argument(
+        "--spread-points", type=float, default=None,
+        help="Model a fixed spread in points instead of the live snapshot "
+             "(useful for spread-based accounts like XM Standard).",
     )
     parser.add_argument("--all", action="store_true", help="Backtest every symbol in SYMBOLS.")
     parser.add_argument(
@@ -79,6 +85,7 @@ def main() -> None:
                         backtest.run_symbol_backtest(
                             args.symbol.upper(), args.timeframe, name, args.bars,
                             commission_per_lot=args.commission,
+                            spread_points=args.spread_points,
                         )
                     )
                 except Exception as e:  # noqa: BLE001
@@ -91,6 +98,7 @@ def main() -> None:
                         backtest.run_symbol_backtest(
                             sym, args.timeframe, args.strategy, args.bars,
                             commission_per_lot=args.commission,
+                            spread_points=args.spread_points,
                         )
                     )
                 except Exception as e:  # noqa: BLE001

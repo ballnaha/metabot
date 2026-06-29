@@ -195,6 +195,7 @@ class BacktestRequest(BaseModel):
     strategy: str | None = None
     bars: int = 1000
     commission_per_lot: float | None = None  # round-turn $/lot; None = use setting
+    spread_points: float | None = None       # override spread (points); None = snapshot
     include_details: bool = False
 
 
@@ -211,6 +212,7 @@ def run_backtest(req: BacktestRequest):
             req.strategy,
             req.bars,
             commission_per_lot=req.commission_per_lot,
+            spread_points=req.spread_points,
             include_details=req.include_details,
         )
     except KeyError as e:  # unknown strategy name

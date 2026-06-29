@@ -155,6 +155,25 @@ class RunSymbolBacktestTests(unittest.TestCase):
         self.assertEqual(result["timeframe"], "H4")
         self.assertEqual(result["bars"], 60)
 
+    @patch("app.backtest.mt5_client.symbol_info")
+    @patch("app.backtest.mt5_client.get_rates")
+    @patch("app.backtest.settings")
+    def test_spread_points_override_replaces_snapshot(self, settings_mock, get_rates, sym_info):
+        settings_mock.forex_timeframe = "H1"
+        settings_mock.forex_strategy = "trend"
+        settings_mock.max_spread_to_sl = 0.25
+        settings_mock.max_entry_drift_to_sl = 0.75
+        get_rates.return_value = _flat_df()
+        sym_info.return_value = {"spread": 20, "point": 0.01}  # snapshot would be 0.2
+
+        with patch("app.backtest.market_group", return_value="forex"), \
+             patch("app.backtest.backtest_strategy", return_value={}) as bt:
+            result = run_symbol_backtest("EURUSD", spread_points=50)  # override
+
+        # 50 points * 0.01 = 0.5 price, not the 0.2 snapshot.
+        self.assertAlmostEqual(bt.call_args.kwargs["spread_price"], 0.5)
+        self.assertEqual(result["spread_points"], 50.0)
+
     @patch("app.backtest.mt5_client.symbol_info", return_value={"spread": 0, "point": 0.0})
     @patch("app.backtest.mt5_client.get_rates")
     @patch("app.backtest.settings")

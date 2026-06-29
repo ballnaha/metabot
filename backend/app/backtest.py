@@ -192,6 +192,7 @@ def run_symbol_backtest(
     bars: int = 1000,
     *,
     commission_per_lot: float | None = None,
+    spread_points: float | None = None,
     include_details: bool = False,
 ) -> dict[str, Any]:
     """Fetch live OHLC history from MT5 and backtest one strategy on it.
@@ -201,6 +202,11 @@ def run_symbol_backtest(
     that symbol's market group, so a backtest reflects how the bot would behave.
     Commission (round-turn $/lot) defaults to BACKTEST_COMMISSION_PER_LOT; swap
     rates come from the symbol itself.
+
+    By default the spread is a snapshot of the symbol's current spread. On
+    spread-based accounts (e.g. XM Standard) that snapshot may not represent
+    typical conditions, so pass ``spread_points`` to model a fixed spread (in
+    points) and stress-test the strategy against wider spreads.
     """
     group = market_group(symbol)
     timeframe = timeframe or {
@@ -226,7 +232,11 @@ def run_symbol_backtest(
         info = mt5_client.symbol_info(symbol)
     except Exception:
         info = {}
-    spread_price = float(info.get("spread", 0) or 0) * float(info.get("point", 0) or 0)
+    point = float(info.get("point", 0) or 0)
+    # spread_points override lets you model a fixed/worse spread; otherwise use
+    # the symbol's current spread snapshot.
+    spread_pts = spread_points if spread_points is not None else float(info.get("spread", 0) or 0)
+    spread_price = spread_pts * point
 
     max_spread = (
         settings.crypto_max_spread_to_sl if group == "crypto" else settings.max_spread_to_sl
@@ -248,6 +258,7 @@ def run_symbol_backtest(
     )
     result["timeframe"] = timeframe
     result["bars"] = int(len(df))
+    result["spread_points"] = round(spread_pts, 2)
     result["spread_price"] = round(spread_price, 8)
     result["commission_per_lot"] = float(commission_per_lot or 0)
     if not include_details:
