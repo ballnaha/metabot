@@ -259,6 +259,8 @@ def positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
                 "comment": p.comment,
                 "contract_size": contract_size,
                 "time": _mt5_server_time_to_bangkok(p.time),
+                # Real UTC epoch of the open, for computing how long it's held.
+                "time_utc": _mt5_server_timestamp_to_utc(p.time),
             }
         )
     return out

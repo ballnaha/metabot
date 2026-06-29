@@ -7,6 +7,7 @@ from app.models import Action, IndicatorSnapshot
 from app.strategy import (
     BreakoutStrategy,
     CryptoRegimeStrategy,
+    CryptoScalpStrategy,
     EmaMacdRsiStrategy,
     TrendFollowStrategy,
 )
@@ -150,6 +151,60 @@ class CryptoSlFloorTests(unittest.TestCase):
         sl, _tp = EmaMacdRsiStrategy().atr_levels(snap, Action.BUY)
         # Raw = 1.5×0.0001 = 0.00015; floor = 1.0×0.0015 = 0.0015 → SL 0.9985.
         self.assertAlmostEqual(sl, 0.9985)
+
+
+class CryptoScalpTests(unittest.TestCase):
+    """The short-hold crypto scalp: tight levels that bypass the SL floor."""
+
+    def _df(self, rows=60):
+        return pd.DataFrame({
+            "open": [100.0] * rows, "high": [101.0] * rows,
+            "low": [99.0] * rows, "close": [100.0] * rows,
+            "tick_volume": [100] * rows,
+        })
+
+    def test_buys_oversold_at_lower_band_with_tight_levels(self):
+        # RSI 25 (<=28) and price at/under lower band → BUY.
+        snap = IndicatorSnapshot(
+            symbol="BTCUSD", timeframe="M15", price=100.0,
+            atr=2.0, rsi=25.0, bb_lower=100.0, bb_upper=110.0,
+        )
+        sig = CryptoScalpStrategy().evaluate(self._df(), snap)
+
+        self.assertEqual(sig.action, Action.BUY)
+        # SL distance = 0.9 * ATR 2.0 = 1.8 → SL 98.2, TP = +1.8*1.1 = 102.0(ish).
+        self.assertAlmostEqual(sig.stop_loss, 98.2)
+        self.assertAlmostEqual(sig.take_profit, 100.0 + 1.8 * 1.1)
+
+    def test_sells_overbought_at_upper_band(self):
+        snap = IndicatorSnapshot(
+            symbol="ETHUSD", timeframe="M15", price=110.0,
+            atr=2.0, rsi=75.0, bb_lower=100.0, bb_upper=110.0,
+        )
+        sig = CryptoScalpStrategy().evaluate(self._df(), snap)
+        self.assertEqual(sig.action, Action.SELL)
+        self.assertAlmostEqual(sig.stop_loss, 111.8)  # 110 + 0.9*2.0
+
+    def test_holds_when_not_stretched(self):
+        # Mid RSI, price mid-band → no scalp.
+        snap = IndicatorSnapshot(
+            symbol="BTCUSD", timeframe="M15", price=105.0,
+            atr=2.0, rsi=50.0, bb_lower=100.0, bb_upper=110.0,
+        )
+        self.assertEqual(CryptoScalpStrategy().evaluate(self._df(), snap).action, Action.HOLD)
+
+    @patch("app.strategy.settings")
+    def test_bypasses_the_crypto_sl_floor(self, settings_mock):
+        # Even with a large crypto_min_sl_pct floor configured, the scalp keeps
+        # its tight ATR stop (it never calls floor_sl_distance).
+        settings_mock.crypto_min_sl_pct = 0.05  # 5% floor would force SL to 95.0
+        snap = IndicatorSnapshot(
+            symbol="BTCUSD", timeframe="M15", price=100.0,
+            atr=2.0, rsi=20.0, bb_lower=100.0, bb_upper=110.0,
+        )
+        sig = CryptoScalpStrategy().evaluate(self._df(), snap)
+        # Tight 1.8 stop, NOT the 5.0 the floor would impose.
+        self.assertAlmostEqual(sig.stop_loss, 98.2)
 
 
 if __name__ == "__main__":

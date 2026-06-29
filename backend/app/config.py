@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     # dominates and trades get rejected. This floors it. 0 = disabled.
     crypto_min_sl_pct: float = 0.0
     crypto_breakout_enabled: bool = False
+    # Force-close a crypto position after this many hours, before its overnight
+    # swap (~4%/night on XM) eats the trade. 0 = disabled. Pairs with the
+    # crypto_scalp strategy to keep holds intraday.
+    crypto_max_hold_hours: float = 0.0
     # Gold reacts to news intraday; H4 cuts that chop while keeping the trend.
     gold_timeframe: str = "H4"
     gold_strategy: str = "ema_macd_rsi"

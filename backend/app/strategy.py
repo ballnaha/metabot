@@ -886,3 +886,72 @@ class CryptoRegimeStrategy(Strategy):
             take_profit=round(take_profit, 6),
         )
 
+
+@register
+class CryptoScalpStrategy(Strategy):
+    """Short-hold mean-reversion scalp for crypto on XM.
+
+    Crypto CFDs on XM carry a punishing overnight swap (~4%/night), so any
+    strategy that holds for days loses to swap no matter how good the entry.
+    This one is built to get IN and OUT fast: fade a stretched move (RSI extreme
+    at the outer Bollinger band) with a tight ATR-based stop and a ~1:1 target,
+    so trades resolve in a handful of bars and rarely cross a night.
+
+    Deliberately bypasses the crypto SL floor (CRYPTO_MIN_SL_PCT) — that floor
+    exists to keep swing stops above spread, but it would force a wide stop here
+    and defeat the whole point. Use it on a low timeframe (M5/M15) and pair it
+    with a time-stop in the worker to guarantee no overnight hold.
+    """
+
+    name = "crypto_scalp"
+    description = (
+        "สแกลป์ crypto ถือสั้น: รอราคายืดสุดโต่ง (RSI + Bollinger) แล้วเข้าสวนด้วย "
+        "SL/TP แคบ ปิดไว เลี่ยง swap ข้ามคืน เหมาะกับ TF ต่ำ (M5/M15)"
+    )
+    groups = ("crypto",)
+
+    # Tight, swap-aware levels (not user ATR mults, which are tuned for swing).
+    SL_ATR_MULT = 0.9
+    RR = 1.1
+    RSI_LOW = 28.0
+    RSI_HIGH = 72.0
+
+    def evaluate(self, df, snap) -> StrategySignal:
+        price = snap.price
+        atr = snap.atr or (price * 0.005)
+        rsi = snap.rsi
+        if rsi is None or snap.bb_lower is None or snap.bb_upper is None or atr <= 0:
+            return StrategySignal(action=Action.HOLD, confidence=0.0)
+
+        action = Action.HOLD
+        reasons: List[str] = []
+        # Buy a washed-out dip: oversold RSI at/under the lower band.
+        if rsi <= self.RSI_LOW and price <= snap.bb_lower:
+            action = Action.BUY
+            strength = self._clamp((self.RSI_LOW - rsi) / 18)
+            reasons = [f"RSI {rsi:.0f} oversold", "at lower band"]
+        # Sell a blow-off: overbought RSI at/over the upper band.
+        elif rsi >= self.RSI_HIGH and price >= snap.bb_upper:
+            action = Action.SELL
+            strength = self._clamp((rsi - self.RSI_HIGH) / 18)
+            reasons = ["RSI overbought", "at upper band"]
+        else:
+            return StrategySignal(action=Action.HOLD, confidence=round(self._clamp(0.0), 2))
+
+        # Tight levels, computed directly (NOT through floor_sl_distance).
+        sl_distance = self.SL_ATR_MULT * atr
+        if action == Action.BUY:
+            stop_loss = price - sl_distance
+            take_profit = price + sl_distance * self.RR
+        else:
+            stop_loss = price + sl_distance
+            take_profit = price - sl_distance * self.RR
+
+        return StrategySignal(
+            action=action,
+            confidence=round(self._clamp(0.4 + 0.5 * strength), 2),
+            reasons=reasons + [f"scalp SL {self.SL_ATR_MULT}xATR RR {self.RR}"],
+            stop_loss=round(stop_loss, 6),
+            take_profit=round(take_profit, 6),
+        )
+

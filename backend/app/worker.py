@@ -256,6 +256,33 @@ async def position_monitor_loop() -> None:
 
             known_positions = current
 
+            # ---- Crypto time-stop -----------------------------------------------
+            # Crypto swap on XM is ~4%/night, so force-close bot crypto positions
+            # that have been open longer than crypto_max_hold_hours before the
+            # swap eats the trade. Pairs with the crypto_scalp strategy.
+            if settings.crypto_max_hold_hours > 0 and current:
+                import time as _time
+                now_utc = _time.time()
+                max_secs = settings.crypto_max_hold_hours * 3600.0
+                for ticket, pos in list(current.items()):
+                    if not _is_bot_position(pos) or market_group(pos["symbol"]) != "crypto":
+                        continue
+                    opened = pos.get("time_utc") or 0
+                    if opened and (now_utc - opened) >= max_secs:
+                        try:
+                            res = await _to_thread(mt5_client.close_position, ticket)
+                            if res.get("ok"):
+                                held_hr = (now_utc - opened) / 3600.0
+                                msg = f"Time-stop: closed {pos['symbol']} #{ticket} after {held_hr:.1f}h"
+                                log.info(msg)
+                                log_store.push("info", "time_stop", msg, {"symbol": pos["symbol"], "ticket": ticket, "held_hours": round(held_hr, 1)})
+                                await _to_thread(
+                                    send_telegram_notification,
+                                    f"⏱️ *Time-stop*\n`{pos['symbol']}` #{ticket} closed after {held_hr:.1f}h",
+                                )
+                        except Exception as e:  # noqa: BLE001
+                            log.error("Time-stop failed %s #%s: %s", pos["symbol"], ticket, e)
+
             # ---- Breakeven SL management ----------------------------------------
             if settings.breakeven_r > 0 and current:
                 for ticket, pos in current.items():
