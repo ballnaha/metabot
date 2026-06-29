@@ -58,7 +58,7 @@ app.add_middleware(
 )
 
 
-async def require_key(x_api_key: str | None = Header(default=None)) -> None:
+def require_key(x_api_key: str | None = Header(default=None)) -> None:
     if x_api_key != settings.api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
@@ -80,7 +80,7 @@ def _shutdown() -> None:
 
 
 @app.get("/api/health")
-async def health():
+def health():
     try:
         acct = mt5_client.account_info()
         return {"status": "ok", "mt5": "connected", "account": acct["login"]}
@@ -89,7 +89,7 @@ async def health():
 
 
 @app.get("/api/account", dependencies=[Depends(require_key)])
-async def account():
+def account():
     try:
         return mt5_client.account_info()
     except Exception as e:  # noqa: BLE001
@@ -97,7 +97,7 @@ async def account():
 
 
 @app.post("/api/reconnect", dependencies=[Depends(require_key)])
-async def reconnect():
+def reconnect():
     try:
         mt5_client.shutdown()
         info = mt5_client.connect()
@@ -109,12 +109,12 @@ async def reconnect():
 
 
 @app.get("/api/symbols", dependencies=[Depends(require_key)])
-async def symbols():
+def symbols():
     return {"symbols": settings.symbol_list, "default_timeframe": settings.default_timeframe}
 
 
 @app.get("/api/strategies", dependencies=[Depends(require_key)])
-async def strategies():
+def strategies():
     return {
         "strategies": strategy.list_strategies(),
         "default": settings.strategy,
@@ -123,7 +123,7 @@ async def strategies():
 
 
 @app.get("/api/positions", dependencies=[Depends(require_key)])
-async def positions():
+def positions():
     try:
         return {"positions": mt5_client.positions()}
     except Exception as e:  # noqa: BLE001
@@ -193,7 +193,7 @@ async def scan(req: ScanRequest):
 
 
 @app.post("/api/positions/{ticket}/close", dependencies=[Depends(require_key)])
-async def close(ticket: int):
+def close(ticket: int):
     try:
         # Check market open/closed status first
         pos_list = mt5_client.positions()
@@ -287,7 +287,7 @@ class SettingsUpdateRequest(BaseModel):
 
 
 @app.get("/api/settings", dependencies=[Depends(require_key)])
-async def get_settings_endpoint():
+def get_settings_endpoint():
     return {
         "mt5_login": settings.mt5_login,
         "mt5_password": settings.mt5_password,
@@ -362,7 +362,7 @@ async def get_settings_endpoint():
 
 
 @app.post("/api/settings", dependencies=[Depends(require_key)])
-async def update_settings_endpoint(req: SettingsUpdateRequest):
+def update_settings_endpoint(req: SettingsUpdateRequest):
     # Exclude None; also exclude empty-string passwords so switching profiles
     # without entering a password doesn't overwrite the stored credential.
     password_fields = {"mt5_password", "deepseek_api_key", "gemini_api_key",
@@ -407,7 +407,7 @@ class DirectTradeRequest(BaseModel):
 
 
 @app.get("/api/symbols/{symbol}/tick", dependencies=[Depends(require_key)])
-async def get_symbol_tick(symbol: str):
+def get_symbol_tick(symbol: str):
     try:
         return mt5_client.get_tick(symbol.upper())
     except Exception as e:
@@ -415,7 +415,7 @@ async def get_symbol_tick(symbol: str):
 
 
 @app.get("/api/ticks", dependencies=[Depends(require_key)])
-async def get_bulk_ticks(symbols: str):
+def get_bulk_ticks(symbols: str):
     try:
         sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
         cache_key = ",".join(sym_list)
@@ -438,7 +438,7 @@ async def get_bulk_ticks(symbols: str):
 
 
 @app.get("/api/symbols/detect-crypto", dependencies=[Depends(require_key)])
-async def detect_crypto_symbols():
+def detect_crypto_symbols():
     try:
         import re
         import MetaTrader5 as mt5
@@ -480,7 +480,7 @@ async def detect_crypto_symbols():
 
 
 @app.get("/api/symbols/detect-metals", dependencies=[Depends(require_key)])
-async def detect_metal_symbols():
+def detect_metal_symbols():
     try:
         import MetaTrader5 as mt5
         
@@ -517,7 +517,7 @@ async def detect_metal_symbols():
 
 
 @app.get("/api/symbols/detect-forex", dependencies=[Depends(require_key)])
-async def detect_forex_symbols(filter_type: str = "major"):
+def detect_forex_symbols(filter_type: str = "major"):
     """Detect Forex symbols available in the connected MT5 broker.
     filter_type: 'major' (7 majors), 'major_minor' (majors + minors), 'all' (all forex pairs)
     Uses MT5 path metadata to identify forex pairs and handles broker suffixes (EURUSDm etc.).
@@ -579,7 +579,7 @@ async def detect_forex_symbols(filter_type: str = "major"):
 
 
 @app.get("/api/symbols/detect-stocks", dependencies=[Depends(require_key)])
-async def detect_stock_symbols(filter_type: str = "liquid_100"):
+def detect_stock_symbols(filter_type: str = "liquid_100"):
     try:
         import re
         import MetaTrader5 as mt5
@@ -720,7 +720,7 @@ async def detect_stock_symbols(filter_type: str = "liquid_100"):
 
 
 @app.get("/api/symbols/search", dependencies=[Depends(require_key)])
-async def search_symbols(q: str = ""):
+def search_symbols(q: str = ""):
     """Debug: search all MT5 symbols by name substring. Shows name + path."""
     try:
         import MetaTrader5 as mt5
@@ -748,7 +748,7 @@ class ValidateSymbolsRequest(BaseModel):
 
 
 @app.post("/api/symbols/validate", dependencies=[Depends(require_key)])
-async def validate_symbols(req: ValidateSymbolsRequest):
+def validate_symbols(req: ValidateSymbolsRequest):
     """Check which symbols exist on MT5, returning the broker's actual name
     (resolution handles casing and ticker suffixes, e.g. APPLE -> Apple).
 
@@ -784,7 +784,7 @@ async def validate_symbols(req: ValidateSymbolsRequest):
 
 
 @app.post("/api/trade", dependencies=[Depends(require_key)])
-async def direct_trade(req: DirectTradeRequest):
+def direct_trade(req: DirectTradeRequest):
     try:
         from .models import Action
         action = req.action.upper()
@@ -847,13 +847,13 @@ async def direct_trade(req: DirectTradeRequest):
 
 
 @app.get("/api/logs", dependencies=[Depends(require_key)])
-async def get_logs(limit: int = 100, level: str | None = None):
+def get_logs(limit: int = 100, level: str | None = None):
     from . import log_store
     return {"logs": log_store.get(limit=limit, level=level or None)}
 
 
 @app.get("/api/history", dependencies=[Depends(require_key)])
-async def get_history(days: int = 30):
+def get_history(days: int = 30):
     try:
         mt5_client.connect()
         return {"history": mt5_client.history_deals(days)}

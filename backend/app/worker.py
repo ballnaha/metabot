@@ -18,6 +18,14 @@ log = logging.getLogger("metabot.worker")
 
 TZ_TH = timezone(timedelta(hours=7))
 
+
+async def _to_thread(fn, *args, **kwargs):
+    """Run a blocking call (MT5 access, blocking notifications) off the event
+    loop. The MetaTrader5 library is synchronous and can block for seconds on
+    order/quote calls; running it inline in these async loops would freeze the
+    whole event loop (and every API request served by it)."""
+    return await asyncio.to_thread(fn, *args, **kwargs)
+
 _worker_task = None
 _monitor_task = None
 
@@ -221,11 +229,11 @@ async def position_monitor_loop() -> None:
 
             now_th = datetime.now(TZ_TH)
             if now_th.hour == 8 and last_summary_date != now_th.date():
-                _send_daily_summary()
+                await _to_thread(_send_daily_summary)
                 last_summary_date = now_th.date()
 
             try:
-                current_list = mt5_client.positions()
+                current_list = await _to_thread(mt5_client.positions)
                 current = {p["ticket"]: p for p in current_list}
             except Exception as e:
                 log.debug("Monitor: can't fetch positions: %s", e)
@@ -238,7 +246,7 @@ async def position_monitor_loop() -> None:
                     peak_prices.pop(ticket, None)
                     original_sl_map.pop(ticket, None)
                     try:
-                        _notify_position_closed(old)
+                        await _to_thread(_notify_position_closed, old)
                     except Exception as e:
                         log.error("Close notify error ticket %s: %s", ticket, e)
 
@@ -263,14 +271,15 @@ async def position_monitor_loop() -> None:
                     )
                     if triggered:
                         try:
-                            res = mt5_client.modify_position_sl(ticket, entry, tp or None)
+                            res = await _to_thread(mt5_client.modify_position_sl, ticket, entry, tp or None)
                             if res.get("ok"):
                                 breakeven_set.add(ticket)
                                 msg = f"Breakeven SL → {pos['symbol']} {pos['type']} #{ticket} entry {entry:.5f}"
                                 log.info(msg)
                                 log_store.push("info", "breakeven", msg, {"symbol": pos["symbol"], "ticket": ticket, "entry": entry})
-                                send_telegram_notification(
-                                    f"🔒 *Breakeven SL*\n`{pos['symbol']}` {pos['type']} #{ticket}\nSL → Entry `{entry:.5f}`"
+                                await _to_thread(
+                                    send_telegram_notification,
+                                    f"🔒 *Breakeven SL*\n`{pos['symbol']}` {pos['type']} #{ticket}\nSL → Entry `{entry:.5f}`",
                                 )
                             else:
                                 log.warning("Breakeven SL failed for %s #%d: %s", pos["symbol"], ticket, res.get("comment"))
@@ -316,7 +325,7 @@ async def position_monitor_loop() -> None:
                                 continue  # not yet at trigger point
                             trail_sl = round(peak - sl_dist, 6)
                             if trail_sl > sl:
-                                res = mt5_client.modify_position_sl(ticket, trail_sl, tp or None)
+                                res = await _to_thread(mt5_client.modify_position_sl, ticket, trail_sl, tp or None)
                                 if res.get("ok"):
                                     msg = f"Trail SL → {pos['symbol']} BUY #{ticket}  {sl:.5f} → {trail_sl:.5f}  (peak {peak:.5f})"
                                     log.info(msg)
@@ -329,7 +338,7 @@ async def position_monitor_loop() -> None:
                                 continue
                             trail_sl = round(peak + sl_dist, 6)
                             if trail_sl < sl:
-                                res = mt5_client.modify_position_sl(ticket, trail_sl, tp or None)
+                                res = await _to_thread(mt5_client.modify_position_sl, ticket, trail_sl, tp or None)
                                 if res.get("ok"):
                                     msg = f"Trail SL → {pos['symbol']} SELL #{ticket}  {sl:.5f} → {trail_sl:.5f}  (peak {peak:.5f})"
                                     log.info(msg)
@@ -342,7 +351,7 @@ async def position_monitor_loop() -> None:
 
             if current:
                 try:
-                    acct = mt5_client.account_info()
+                    acct = await _to_thread(mt5_client.account_info)
                     equity = acct["equity"]
                     if session_equity_high is None or equity > session_equity_high:
                         session_equity_high = equity
@@ -350,7 +359,7 @@ async def position_monitor_loop() -> None:
                     if session_equity_high and equity_alert_cooldown == 0:
                         drop = (session_equity_high - equity) / session_equity_high
                         if drop >= 0.05:
-                            _notify_equity_alert(equity, session_equity_high, drop)
+                            await _to_thread(_notify_equity_alert, equity, session_equity_high, drop)
                             equity_alert_cooldown = 1800
                 except Exception as e:
                     log.debug("Equity monitor error: %s", e)
@@ -388,8 +397,8 @@ async def auto_trade_loop() -> None:
             _cb_msg = ""
             if settings.max_daily_loss_pct > 0 or settings.max_consecutive_losses > 0:
                 try:
-                    _acct = mt5_client.account_info()
-                    _deals = mt5_client.history_deals(days=1)
+                    _acct = await _to_thread(mt5_client.account_info)
+                    _deals = await _to_thread(mt5_client.history_deals, 1)
                     _bot_magics = {
                         settings.magic,
                         settings.gold_magic,
@@ -436,7 +445,7 @@ async def auto_trade_loop() -> None:
                 log.warning(_cb_msg)
                 log_store.push("warning", "circuit_breaker", _cb_msg)
                 if now_mono - _last_cb_notify_time > 1800:
-                    send_telegram_notification(f"⛔ *Circuit Breaker*\n{_cb_msg}")
+                    await _to_thread(send_telegram_notification, f"⛔ *Circuit Breaker*\n{_cb_msg}")
                     _last_cb_notify_time = now_mono
                 await asyncio.sleep(max(10, settings.auto_trade_interval))
                 continue
@@ -506,7 +515,7 @@ async def auto_trade_loop() -> None:
                             cycle_skipped_dup += 1
                             continue
 
-                        df = mt5_client.get_rates(symbol, timeframe, 3)
+                        df = await _to_thread(mt5_client.get_rates, symbol, timeframe, 3)
                         if df is not None and len(df) > 0:
                             latest_candle_time = str(df["time"].iloc[-1])
                             cache_key = (symbol.upper(), timeframe.upper())
@@ -533,7 +542,7 @@ async def auto_trade_loop() -> None:
                             # Spread filter — skip high-spread conditions
                             if settings.max_spread_points > 0:
                                 try:
-                                    _sym_info = mt5_client.symbol_info(symbol)
+                                    _sym_info = await _to_thread(mt5_client.symbol_info, symbol)
                                     _spread = _sym_info.get("spread", 0)
                                     if _spread > settings.max_spread_points:
                                         log.info("%s spread %d > limit %d — skipped", symbol, _spread, settings.max_spread_points)
@@ -591,7 +600,7 @@ async def auto_trade_loop() -> None:
                                      "error": failure_reason, "result": pending.result,
                                      "strategy": rec.indicators.strategy_name},
                                 )
-                                send_telegram_notification(format_trade_executed(rec, pending.lot, pending.status))
+                                await _to_thread(send_telegram_notification, format_trade_executed(rec, pending.lot, pending.status))
                                 if failure_reason:
                                     log.info("Signal %s %s (status: %s, reason: %s)", symbol, rec.action.value, pending.status, failure_reason)
                                 else:
