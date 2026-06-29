@@ -146,6 +146,11 @@ def release_trade_slot(symbol: str, keep_after_success: bool = False) -> None:
 class TradeManager:
     def __init__(self) -> None:
         self._pending: Dict[str, PendingTrade] = {}
+        # The single manager instance is shared by the API (now served on a
+        # threadpool) and the worker thread. This guards the _pending map and,
+        # crucially, makes the confirm() status check-and-claim atomic so the
+        # same pending trade can't be executed twice by concurrent callers.
+        self._lock = threading.RLock()
 
     def evaluate_technical_signal(
         self,
@@ -516,27 +521,37 @@ class TradeManager:
     def stage(self, rec: Recommendation, lot: Optional[float] = None) -> PendingTrade:
         lot = lot or rec.suggested_lot or self.risk_lot(rec.symbol, rec)
         pending = PendingTrade(id=uuid.uuid4().hex[:8], recommendation=rec, lot=lot)
-        self._pending[pending.id] = pending
+        with self._lock:
+            self._pending[pending.id] = pending
         return pending
 
     def get(self, pending_id: str) -> Optional[PendingTrade]:
-        return self._pending.get(pending_id)
+        with self._lock:
+            return self._pending.get(pending_id)
 
     def list_pending(self) -> List[PendingTrade]:
-        return [p for p in self._pending.values() if p.status == "pending"]
+        with self._lock:
+            return [p for p in self._pending.values() if p.status == "pending"]
 
     def cancel(self, pending_id: str) -> Optional[PendingTrade]:
-        p = self._pending.get(pending_id)
-        if p and p.status == "pending":
-            p.status = "cancelled"
-        return p
+        with self._lock:
+            p = self._pending.get(pending_id)
+            if p and p.status == "pending":
+                p.status = "cancelled"
+            return p
 
     def confirm(self, pending_id: str, lot: Optional[float] = None, slot_reserved: bool = False) -> PendingTrade:
-        p = self._pending.get(pending_id)
-        if p is None:
-            raise KeyError(f"Unknown pending trade {pending_id}")
-        if p.status != "pending":
-            raise ValueError(f"Trade {pending_id} is already {p.status}")
+        # Atomically claim the trade: check it's still pending and flip it to
+        # "executing" under the lock, so a second concurrent confirm() for the
+        # same id loses the race and can't fire a duplicate order. The slow
+        # order_send runs outside the lock (it has its own MT5 lock).
+        with self._lock:
+            p = self._pending.get(pending_id)
+            if p is None:
+                raise KeyError(f"Unknown pending trade {pending_id}")
+            if p.status != "pending":
+                raise ValueError(f"Trade {pending_id} is already {p.status}")
+            p.status = "executing"
 
         rec = p.recommendation
         use_lot = lot or p.lot
