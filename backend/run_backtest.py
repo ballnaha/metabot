@@ -38,11 +38,31 @@ def _print_row(r: dict) -> None:
     print(
         f"  {r['symbol']:<12} {r.get('strategy', ''):<16} {r.get('timeframe', ''):<5}"
         f" trades={r['trades']:<4} win={r['win_rate']*100:5.1f}%"
-        f" net={r['net_r']:+8.2f}R  PF={r['profit_factor']:5.2f}"
-        f" maxDD={r['max_drawdown_r']:6.2f}R"
+        f" net={r['net_r']:+8.2f}R  exp={r.get('expectancy_r', 0.0):+6.3f}R"
+        f" PF={r['profit_factor']:5.2f}  maxDD={r['max_drawdown_r']:6.2f}R"
         f" cost={r.get('total_cost_r', 0.0):6.2f}R"
-        f" spread={r.get('spread_points', 0.0):5.1f}pt"
     )
+
+
+def _print_detail(r: dict) -> None:
+    """Full metrics panel, shown when a single symbol/strategy was tested."""
+    print(f"  {r['symbol']}  {r.get('strategy', '')}  {r.get('timeframe', '')}"
+          f"  ({r.get('bars', 0)} bars, spread {r.get('spread_points', 0)}pt)")
+    pairs = [
+        ("Trades", f"{r['trades']}  (win {r['win_rate']*100:.1f}%)"),
+        ("Net / Gross R", f"{r['net_r']:+.2f}R  /  {r.get('gross_net_r', 0.0):+.2f}R"),
+        ("Total cost", f"{r.get('total_cost_r', 0.0):.2f}R"),
+        ("Expectancy", f"{r.get('expectancy_r', 0.0):+.3f}R per trade"),
+        ("Profit factor", f"{r['profit_factor']:.2f}"),
+        ("Sharpe (per-trade)", f"{r.get('sharpe', 0.0):+.2f}"),
+        ("Avg win / loss", f"{r.get('avg_win_r', 0.0):+.2f}R / {r.get('avg_loss_r', 0.0):+.2f}R"),
+        ("Largest win / loss", f"{r.get('largest_win_r', 0.0):+.2f}R / {r.get('largest_loss_r', 0.0):+.2f}R"),
+        ("Max consec W / L", f"{r.get('max_consecutive_wins', 0)} / {r.get('max_consecutive_losses', 0)}"),
+        ("Max drawdown", f"{r['max_drawdown_r']:.2f}R"),
+        ("Avg hold / exposure", f"{r.get('avg_bars_held', 0.0):.1f} bars / {r.get('exposure', 0.0)*100:.0f}%"),
+    ]
+    for label, value in pairs:
+        print(f"    {label:<22} {value}")
 
 
 def main() -> None:
@@ -106,14 +126,21 @@ def main() -> None:
     finally:
         mt5_client.shutdown()
 
-    # Best net_r first.
-    rows.sort(key=lambda r: r["net_r"], reverse=True)
     print()
-    print("Backtest results (sorted by net R):")
-    for r in rows:
-        _print_row(r)
+    if len(rows) == 1:
+        # Single result → show the full metrics panel.
+        _print_detail(rows[0])
+    else:
+        # Multiple → ranked summary table, best expectancy first.
+        rows.sort(key=lambda r: r.get("expectancy_r", 0.0), reverse=True)
+        print("Backtest results (sorted by expectancy R/trade):")
+        for r in rows:
+            _print_row(r)
     print()
 
 
 if __name__ == "__main__":
     main()
+    # Exit explicitly; some MT5 builds write to stderr on shutdown, which can
+    # otherwise be picked up as a non-zero exit by the calling shell.
+    sys.exit(0)

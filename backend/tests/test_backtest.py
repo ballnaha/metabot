@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from app.backtest import backtest_strategy, run_symbol_backtest
+from app.backtest import _compute_metrics, backtest_strategy, run_symbol_backtest
 from app.models import Action, StrategySignal
 
 
@@ -52,6 +52,45 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual(trade["entry_index"], 51)
         self.assertEqual(trade["reason"], "sl")
         self.assertEqual(trade["r"], -1.0)
+
+
+class MetricsTests(unittest.TestCase):
+    """_compute_metrics derives the professional stats from per-trade R."""
+
+    def _trades(self, rs):
+        # Give each trade a 2-bar hold (entry i, exit i+2) at increasing indices.
+        return [
+            {"r": r, "entry_index": k * 4, "exit_index": k * 4 + 2}
+            for k, r in enumerate(rs)
+        ]
+
+    def test_expectancy_winloss_and_streaks(self):
+        # 3 wins (+2 each), 2 losses (-1 each): sum 4 over 5 = +0.8 expectancy.
+        rs = [2.0, 2.0, -1.0, -1.0, 2.0]
+        m = _compute_metrics(self._trades(rs), total_bars=100)
+
+        self.assertAlmostEqual(m["expectancy_r"], 0.8)
+        self.assertAlmostEqual(m["avg_win_r"], 2.0)
+        self.assertAlmostEqual(m["avg_loss_r"], -1.0)
+        self.assertAlmostEqual(m["largest_win_r"], 2.0)
+        self.assertAlmostEqual(m["largest_loss_r"], -1.0)
+        self.assertEqual(m["max_consecutive_wins"], 2)   # first two
+        self.assertEqual(m["max_consecutive_losses"], 2)  # middle two
+        # 5 trades * 2 bars held / 100 bars = 0.1 exposure; avg hold 2 bars.
+        self.assertAlmostEqual(m["avg_bars_held"], 2.0)
+        self.assertAlmostEqual(m["exposure"], 0.1)
+
+    def test_sharpe_is_mean_over_std(self):
+        rs = [1.0, -1.0, 1.0, -1.0]  # mean 0 => Sharpe 0
+        m = _compute_metrics(self._trades(rs), total_bars=100)
+        self.assertAlmostEqual(m["expectancy_r"], 0.0)
+        self.assertAlmostEqual(m["sharpe"], 0.0)
+
+    def test_empty_is_safe(self):
+        m = _compute_metrics([], total_bars=0)
+        self.assertEqual(m["expectancy_r"], 0.0)
+        self.assertEqual(m["max_consecutive_losses"], 0)
+        self.assertEqual(m["exposure"], 0.0)
 
 
 class CostModelTests(unittest.TestCase):

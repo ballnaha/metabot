@@ -241,9 +241,27 @@ or worst-case spread instead of the snapshot.
 Set a default commission with `BACKTEST_COMMISSION_PER_LOT` in `.env` (check
 your account's contract specs). Via the API: `POST /api/backtest` with
 `{"symbol": "BTCUSD"}` (optional `timeframe`, `strategy`, `bars`,
-`commission_per_lot`, `spread_points`, `include_details`). Key metrics:
-`net_r` (after costs), `gross_net_r` (before), `total_cost_r`, `spread_points`,
-`win_rate`, `profit_factor`, `max_drawdown_r`.
+`commission_per_lot`, `spread_points`, `include_details`).
+
+A single-symbol run prints a full metrics panel; `--all` /
+`--compare-strategies` print a table ranked by expectancy. Metrics (all in R):
+
+| metric | meaning |
+|---|---|
+| `expectancy_r` | average R per trade — the strategy's edge (the headline number) |
+| `net_r` / `gross_net_r` | total R after / before costs |
+| `total_cost_r` | commission + swap paid, in R |
+| `profit_factor` | gross profit ÷ gross loss (>1 = profitable) |
+| `sharpe` | per-trade risk-adjusted return (mean R ÷ std R) |
+| `avg_win_r` / `avg_loss_r` | average winning / losing trade |
+| `max_consecutive_losses` | worst losing streak (risk of ruin / psychology) |
+| `max_drawdown_r` | largest peak-to-trough drop in R |
+| `avg_bars_held` / `exposure` | how long, and what fraction of time, you're in a position |
+
+> ⚠️ The backtest excludes AI filtering and assumes fills at the modelled
+> price (no slippage on gaps) — treat results as a **relative** comparison
+> between strategies/parameters, not a promise of live returns. Beware
+> overfitting.
 
 > ⚠️ The backtest excludes AI filtering and assumes fills at the modelled
 > price (no slippage on gaps) — treat results as a **relative** comparison

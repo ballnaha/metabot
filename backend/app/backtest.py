@@ -25,6 +25,67 @@ _TIMEFRAME_HOURS = {
 }
 
 
+def _compute_metrics(trades: list[dict[str, Any]], total_bars: int) -> dict[str, Any]:
+    """Professional performance metrics derived from the per-trade R results.
+
+    Everything is in R (risk units) so it stays lot/equity-independent. These
+    are the numbers a discretionary or systematic trader actually evaluates:
+    expectancy (edge per trade), risk-adjusted return (per-trade Sharpe), the
+    win/loss profile, the worst losing streak (risk of ruin), and how long /
+    how much of the time capital is exposed.
+    """
+    n = len(trades)
+    if n == 0:
+        return {
+            "expectancy_r": 0.0, "avg_win_r": 0.0, "avg_loss_r": 0.0,
+            "largest_win_r": 0.0, "largest_loss_r": 0.0,
+            "max_consecutive_wins": 0, "max_consecutive_losses": 0,
+            "sharpe": 0.0, "avg_bars_held": 0.0, "exposure": 0.0,
+        }
+
+    rs = [t["r"] for t in trades]
+    wins = [r for r in rs if r > 0]
+    losses = [r for r in rs if r <= 0]
+
+    # Risk-adjusted return: mean / std of per-trade R (a per-trade Sharpe).
+    mean_r = sum(rs) / n
+    if n > 1:
+        variance = sum((r - mean_r) ** 2 for r in rs) / (n - 1)
+        std_r = variance ** 0.5
+    else:
+        std_r = 0.0
+    sharpe = mean_r / std_r if std_r > 0 else 0.0
+
+    # Worst streaks — drives psychological tolerance and risk of ruin.
+    max_win_streak = max_loss_streak = cur_win = cur_loss = 0
+    for r in rs:
+        if r > 0:
+            cur_win += 1
+            cur_loss = 0
+        else:
+            cur_loss += 1
+            cur_win = 0
+        max_win_streak = max(max_win_streak, cur_win)
+        max_loss_streak = max(max_loss_streak, cur_loss)
+
+    bars_held = [t["exit_index"] - t["entry_index"] for t in trades]
+    total_held = sum(bars_held)
+
+    return {
+        "expectancy_r": round(mean_r, 4),
+        "avg_win_r": round(sum(wins) / len(wins), 4) if wins else 0.0,
+        "avg_loss_r": round(sum(losses) / len(losses), 4) if losses else 0.0,
+        "largest_win_r": round(max(rs), 4),
+        "largest_loss_r": round(min(rs), 4),
+        "max_consecutive_wins": max_win_streak,
+        "max_consecutive_losses": max_loss_streak,
+        "sharpe": round(sharpe, 4),
+        "avg_bars_held": round(total_held / n, 2),
+        # Fraction of the tested bars spent in a position.
+        "exposure": round(total_held / total_bars, 4) if total_bars else 0.0,
+    }
+
+
 def backtest_strategy(
     df: pd.DataFrame,
     symbol: str,
@@ -179,6 +240,7 @@ def backtest_strategy(
         "total_cost_r": round(total_cost_r, 4),
         "profit_factor": round(gross_profit / gross_loss, 4) if gross_loss else 0.0,
         "max_drawdown_r": round(max_drawdown, 4),
+        **_compute_metrics(trades, len(df)),
         "rejected_spread": rejected_spread,
         "rejected_drift": rejected_drift,
         "details": trades,
