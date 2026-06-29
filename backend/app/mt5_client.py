@@ -174,13 +174,22 @@ def symbol_info(symbol: str) -> Dict[str, Any]:
 # Cache resolved symbol names so we don't scan all symbols every call.
 _symbol_resolution: Dict[str, str] = {}
 
+# Aliases for instruments whose name differs by more than a suffix between
+# brokers (e.g. XM calls spot gold "GOLD", Exness calls it "XAUUSD"). Each
+# requested name maps to candidate base names tried in order.
+_SYMBOL_ALIASES: Dict[str, tuple[str, ...]] = {
+    "GOLD": ("XAUUSD", "GOLD"),
+    "SILVER": ("XAGUSD", "SILVER"),
+}
+
 
 def resolve_symbol(symbol: str) -> str:
     """Map a requested ticker to the actual broker symbol name.
 
-    Brokers add suffixes/prefixes to equities (e.g. AAPL -> AAPL.OQ, #AAPL,
-    AAPLm). If an exact match can't be selected, search all available symbols
-    for one whose base ticker matches.
+    Brokers add suffixes/prefixes (Exness uses a trailing "m": EURUSD->EURUSDm,
+    XAUUSD->XAUUSDm; others use .OQ / #AAPL) and sometimes a different base name
+    entirely (GOLD vs XAUUSD). Resolve in order: exact, alias bases, common
+    variants, then a full scan by base ticker.
     """
     if symbol in _symbol_resolution:
         return _symbol_resolution[symbol]
@@ -201,10 +210,16 @@ def resolve_symbol(symbol: str) -> str:
             _symbol_resolution[symbol] = s.name
             return s.name
 
-    # 3. Try common broker ticker variants (AAPL -> AAPL.OQ / #AAPL / AAPLm).
+    # 3. Try alias bases + common broker variants. Aliases (GOLD->XAUUSD) are
+    #    tried first so spot gold resolves regardless of broker; each base is
+    #    also tried with the Exness "m" suffix.
     base = symbol.upper().lstrip("#@").split(".")[0]
-    for cand in (f"{base}.OQ", f"{base}.N", f"{base}.NY", f"{base}.US",
-                 base, f"{base}m", f"#{base}"):
+    bases = _SYMBOL_ALIASES.get(base, (base,))
+    candidates: list[str] = []
+    for b in bases:
+        candidates += [f"{b}.OQ", f"{b}.N", f"{b}.NY", f"{b}.US",
+                       b, f"{b}m", f"#{b}"]
+    for cand in candidates:
         if mt5.symbol_select(cand, True):
             _symbol_resolution[symbol] = cand
             return cand

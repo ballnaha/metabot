@@ -5,6 +5,7 @@ import os
 from functools import lru_cache
 from typing import List
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -21,6 +22,15 @@ class Settings(BaseSettings):
     mt5_server: str | None = None
     mt5_path: str | None = None
     mt5_server_utc_offset: int = 3
+
+    @field_validator("mt5_login", mode="before")
+    @classmethod
+    def _empty_login_is_none(cls, v):
+        # An empty MT5_LOGIN in .env (used to attach to a running terminal)
+        # would otherwise fail int parsing; treat blank as "not set".
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
 
     # AI providers
     deepseek_api_key: str | None = None
