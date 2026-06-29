@@ -40,6 +40,7 @@ def _print_row(r: dict) -> None:
         f" trades={r['trades']:<4} win={r['win_rate']*100:5.1f}%"
         f" net={r['net_r']:+8.2f}R  PF={r['profit_factor']:5.2f}"
         f" maxDD={r['max_drawdown_r']:6.2f}R"
+        f" cost={r.get('total_cost_r', 0.0):6.2f}R"
     )
 
 
@@ -49,6 +50,10 @@ def main() -> None:
     parser.add_argument("--timeframe", "-t", help="Override timeframe (M15, H1, H4, …).")
     parser.add_argument("--strategy", "-s", help="Override strategy name.")
     parser.add_argument("--bars", "-b", type=int, default=1000, help="Bars of history (default 1000).")
+    parser.add_argument(
+        "--commission", "-c", type=float, default=None,
+        help="Round-turn commission $/lot (overrides BACKTEST_COMMISSION_PER_LOT).",
+    )
     parser.add_argument("--all", action="store_true", help="Backtest every symbol in SYMBOLS.")
     parser.add_argument(
         "--compare-strategies",
@@ -71,7 +76,10 @@ def main() -> None:
                 name = info["name"]
                 try:
                     rows.append(
-                        backtest.run_symbol_backtest(args.symbol.upper(), args.timeframe, name, args.bars)
+                        backtest.run_symbol_backtest(
+                            args.symbol.upper(), args.timeframe, name, args.bars,
+                            commission_per_lot=args.commission,
+                        )
                     )
                 except Exception as e:  # noqa: BLE001
                     print(f"  {args.symbol} / {name}: skipped ({e})")
@@ -80,7 +88,10 @@ def main() -> None:
             for sym in symbols:
                 try:
                     rows.append(
-                        backtest.run_symbol_backtest(sym, args.timeframe, args.strategy, args.bars)
+                        backtest.run_symbol_backtest(
+                            sym, args.timeframe, args.strategy, args.bars,
+                            commission_per_lot=args.commission,
+                        )
                     )
                 except Exception as e:  # noqa: BLE001
                     print(f"  {sym}: skipped ({e})")

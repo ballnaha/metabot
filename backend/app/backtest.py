@@ -17,6 +17,14 @@ from .market_groups import market_group
 from .models import Action
 
 
+# Hours per candle, used to convert a holding period (in bars) into the number
+# of nights a swap is charged for.
+_TIMEFRAME_HOURS = {
+    "M1": 1 / 60, "M5": 5 / 60, "M15": 0.25, "M30": 0.5,
+    "H1": 1.0, "H4": 4.0, "D1": 24.0, "W1": 168.0,
+}
+
+
 def backtest_strategy(
     df: pd.DataFrame,
     symbol: str,
@@ -28,11 +36,22 @@ def backtest_strategy(
     max_hold_bars: int = 96,
     max_spread_to_sl: float = 0.25,
     max_entry_drift_to_sl: float = 0.50,
+    # ---- Cost model (all per 1.0 lot; converted to R using the trade's SL) ----
+    # money risked per 1R per lot = (sl_distance / tick_size) * tick_value.
+    tick_size: float = 0.0,
+    tick_value: float = 0.0,
+    commission_per_lot: float = 0.0,   # round-turn $/lot (entry + exit)
+    swap_long_per_lot: float = 0.0,    # $/lot/night when long
+    swap_short_per_lot: float = 0.0,   # $/lot/night when short
 ) -> dict[str, Any]:
     trades: list[dict[str, Any]] = []
     rejected_spread = 0
     rejected_drift = 0
     i = max(50, warmup_bars)
+
+    bar_hours = _TIMEFRAME_HOURS.get(timeframe.upper(), 1.0)
+    # Costs only apply when we can value a tick; otherwise they stay at 0 R.
+    costs_enabled = tick_size > 0 and tick_value > 0
 
     while i < len(df) - 1:
         # Include i+1 only as the forming candle expected by indicators.compute;
@@ -102,7 +121,25 @@ def backtest_strategy(
             if sig.action == Action.BUY
             else entry - exit_price
         )
-        r_multiple = pnl_distance / sl_distance
+        gross_r = pnl_distance / sl_distance
+
+        # Convert commission + swap (money per 1.0 lot) into R. Money risked per
+        # 1R per lot is (sl_distance / tick_size) * tick_value; cost in R is the
+        # money cost divided by that — lot cancels, so this is lot-independent.
+        # commission is always a positive cost; swap is signed P&L from the
+        # broker (negative = charged, positive = credited), so it subtracts from
+        # the cost. cost_r > 0 means the trade was made worse by costs.
+        cost_r = 0.0
+        if costs_enabled:
+            money_per_r = (sl_distance / tick_size) * tick_value
+            if money_per_r > 0:
+                bars_held = exit_i - entry_i
+                nights = (bars_held * bar_hours) / 24.0
+                swap_rate = swap_long_per_lot if sig.action == Action.BUY else swap_short_per_lot
+                cost_money = commission_per_lot - (swap_rate * nights)
+                cost_r = cost_money / money_per_r
+
+        r_multiple = gross_r - cost_r
         trades.append(
             {
                 "signal_index": i,
@@ -112,11 +149,13 @@ def backtest_strategy(
                 "setup": sig.reasons[0] if sig.reasons else "",
                 "reason": reason,
                 "r": round(r_multiple, 4),
+                "gross_r": round(gross_r, 4),
+                "cost_r": round(cost_r, 4),
             }
         )
         i = exit_i + 1
 
-    rs = [t["r"] for t in trades]
+    rs = [t["r"] for t in trades]              # net R (after costs)
     wins = [r for r in rs if r > 0]
     losses = [r for r in rs if r <= 0]
     gross_profit = sum(wins)
@@ -127,6 +166,8 @@ def backtest_strategy(
         peak = max(peak, equity)
         max_drawdown = max(max_drawdown, peak - equity)
 
+    total_cost_r = sum(t["cost_r"] for t in trades)
+
     return {
         "strategy": strategy_name,
         "symbol": symbol,
@@ -134,6 +175,8 @@ def backtest_strategy(
         "wins": len(wins),
         "win_rate": round(len(wins) / len(trades), 4) if trades else 0.0,
         "net_r": round(sum(rs), 4),
+        "gross_net_r": round(sum(rs) + total_cost_r, 4),  # before commission/swap
+        "total_cost_r": round(total_cost_r, 4),
         "profit_factor": round(gross_profit / gross_loss, 4) if gross_loss else 0.0,
         "max_drawdown_r": round(max_drawdown, 4),
         "rejected_spread": rejected_spread,
@@ -148,6 +191,7 @@ def run_symbol_backtest(
     strategy_name: str | None = None,
     bars: int = 1000,
     *,
+    commission_per_lot: float | None = None,
     include_details: bool = False,
 ) -> dict[str, Any]:
     """Fetch live OHLC history from MT5 and backtest one strategy on it.
@@ -155,6 +199,8 @@ def run_symbol_backtest(
     Shared by the /api/backtest endpoint and the CLI. Defaults the timeframe,
     strategy and spread/drift caps to the same settings the live bot uses for
     that symbol's market group, so a backtest reflects how the bot would behave.
+    Commission (round-turn $/lot) defaults to BACKTEST_COMMISSION_PER_LOT; swap
+    rates come from the symbol itself.
     """
     group = market_group(symbol)
     timeframe = timeframe or {
@@ -169,15 +215,18 @@ def run_symbol_backtest(
         "forex": settings.forex_strategy,
         "stock": settings.stock_strategy,
     }.get(group, settings.strategy)
+    if commission_per_lot is None:
+        commission_per_lot = settings.backtest_commission_per_lot
 
     df = mt5_client.get_rates(symbol, timeframe, bars)
 
-    # Approximate spread in price units from the symbol's current spread (points).
+    # Pull spread (points) + tick/swap data once; used for both the spread model
+    # and the commission/swap cost model.
     try:
         info = mt5_client.symbol_info(symbol)
-        spread_price = float(info.get("spread", 0) or 0) * float(info.get("point", 0) or 0)
     except Exception:
-        spread_price = 0.0
+        info = {}
+    spread_price = float(info.get("spread", 0) or 0) * float(info.get("point", 0) or 0)
 
     max_spread = (
         settings.crypto_max_spread_to_sl if group == "crypto" else settings.max_spread_to_sl
@@ -191,10 +240,16 @@ def run_symbol_backtest(
         spread_price=spread_price,
         max_spread_to_sl=max_spread,
         max_entry_drift_to_sl=settings.max_entry_drift_to_sl,
+        tick_size=float(info.get("trade_tick_size", 0) or 0),
+        tick_value=float(info.get("trade_tick_value", 0) or 0),
+        commission_per_lot=float(commission_per_lot or 0),
+        swap_long_per_lot=float(info.get("swap_long", 0) or 0),
+        swap_short_per_lot=float(info.get("swap_short", 0) or 0),
     )
     result["timeframe"] = timeframe
     result["bars"] = int(len(df))
     result["spread_price"] = round(spread_price, 8)
+    result["commission_per_lot"] = float(commission_per_lot or 0)
     if not include_details:
         result.pop("details", None)
     return result

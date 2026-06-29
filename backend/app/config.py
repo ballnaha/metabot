@@ -126,6 +126,12 @@ class Settings(BaseSettings):
     # to the local Next.js dashboard. Set to "*" only if you understand the risk.
     cors_origins: str = "http://localhost:4016,http://127.0.0.1:4016"
 
+    # Backtest cost model: round-turn commission ($/lot, entry + exit) charged
+    # by your broker. Swap is read from each symbol; this is the one cost MT5
+    # doesn't expose per-symbol. 0 = ignore commission. Check your account's
+    # contract specs (e.g. raw-spread accounts often charge ~$7/lot round-turn).
+    backtest_commission_per_lot: float = 0.0
+
     @property
     def cors_origin_list(self) -> List[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

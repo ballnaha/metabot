@@ -165,6 +165,9 @@ def symbol_info(symbol: str) -> Dict[str, Any]:
         "trade_contract_size": s.trade_contract_size,
         "trade_tick_value": s.trade_tick_value,
         "trade_tick_size": s.trade_tick_size,
+        # Swap charged per lot per night held (account currency), long vs short.
+        "swap_long": getattr(s, "swap_long", 0.0),
+        "swap_short": getattr(s, "swap_short", 0.0),
     }
 
 

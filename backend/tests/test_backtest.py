@@ -54,6 +54,76 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual(trade["r"], -1.0)
 
 
+class CostModelTests(unittest.TestCase):
+    """Commission + swap are converted from money to R and deducted."""
+
+    def _winning_buy_df(self, rows: int = 55) -> pd.DataFrame:
+        df = _flat_df(rows)
+        # Entry bar 51 immediately hits TP (=> bars_held 0, no swap), gross +2R.
+        df.loc[51, "high"] = 105.0
+        return df
+
+    def _signal(self):
+        return StrategySignal(
+            action=Action.BUY, confidence=0.8, stop_loss=98.0, take_profit=104.0, reasons=["t"]
+        )
+
+    def test_commission_deducted_in_R(self):
+        # money_per_R per lot = (sl_dist 2.0 / tick 0.01) * tick_value 0.10 = $20.
+        # commission $10/lot => 0.5R. The first trade wins +2R gross => 1.5R net.
+        with patch("app.backtest.strategy.apply", return_value=self._signal()):
+            result = backtest_strategy(
+                self._winning_buy_df(), "BTCUSD", "M15", "t",
+                warmup_bars=50, max_hold_bars=2,
+                tick_size=0.01, tick_value=0.10, commission_per_lot=10.0,
+            )
+        trade = result["details"][0]
+        self.assertEqual(trade["reason"], "tp")
+        self.assertAlmostEqual(trade["gross_r"], 2.0)
+        self.assertAlmostEqual(trade["cost_r"], 0.5)
+        self.assertAlmostEqual(trade["r"], 1.5)
+        # net_r and gross_net_r differ by exactly the summed cost, whatever the
+        # trade count.
+        self.assertAlmostEqual(
+            result["gross_net_r"] - result["net_r"], result["total_cost_r"]
+        )
+        self.assertGreater(result["total_cost_r"], 0.0)
+
+    def test_no_costs_when_tick_value_missing(self):
+        # Without tick data the cost model can't value a tick → 0 cost, net=gross.
+        with patch("app.backtest.strategy.apply", return_value=self._signal()):
+            result = backtest_strategy(
+                self._winning_buy_df(), "BTCUSD", "M15", "t",
+                warmup_bars=50, max_hold_bars=2,
+                commission_per_lot=10.0,  # ignored: tick_size/value default to 0
+            )
+        self.assertAlmostEqual(result["details"][0]["cost_r"], 0.0)
+        self.assertAlmostEqual(result["net_r"], result["gross_net_r"])
+
+    def test_swap_scales_with_nights_held(self):
+        # Hold across many H4 bars so swap accrues. Trade never hits SL/TP and
+        # exits flat at timeout → gross 0R, so net R is purely the swap cost.
+        rows = 80
+        df = _flat_df(rows)  # flat: no TP/SL touch, exits at timeout
+        signal = StrategySignal(
+            action=Action.BUY, confidence=0.8, stop_loss=98.0, take_profit=110.0, reasons=["t"]
+        )
+        with patch("app.backtest.strategy.apply", return_value=signal):
+            result = backtest_strategy(
+                df, "BTCUSD", "H4", "t",
+                warmup_bars=50, max_hold_bars=12,  # 12 H4 bars from entry
+                tick_size=0.01, tick_value=0.10,
+                swap_long_per_lot=-2.0,  # $-2/lot/night (cost)
+            )
+        trade = result["details"][0]
+        self.assertEqual(trade["reason"], "timeout")
+        # bars_held = exit_i - entry_i; nights = bars_held*4/24. swap_money =
+        # -2 * nights; cost_r = -swap_money/20 (positive cost). Just assert the
+        # cost is positive and the gross was ~0.
+        self.assertAlmostEqual(trade["gross_r"], 0.0, places=4)
+        self.assertGreater(trade["cost_r"], 0.0)
+
+
 class RunSymbolBacktestTests(unittest.TestCase):
     """run_symbol_backtest wires MT5 data + group defaults into backtest_strategy."""
 

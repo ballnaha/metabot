@@ -194,6 +194,7 @@ class BacktestRequest(BaseModel):
     timeframe: str | None = None
     strategy: str | None = None
     bars: int = 1000
+    commission_per_lot: float | None = None  # round-turn $/lot; None = use setting
     include_details: bool = False
 
 
@@ -201,13 +202,15 @@ class BacktestRequest(BaseModel):
 def run_backtest(req: BacktestRequest):
     """Backtest one strategy on a symbol's recent OHLC history. Timeframe and
     strategy default to the live settings for that symbol's market group.
-    Results are in R (risk units) so symbols can be compared directly."""
+    Costs (commission + swap) are deducted; results are in R (risk units) so
+    symbols can be compared directly."""
     try:
         return backtest.run_symbol_backtest(
             req.symbol.upper(),
             req.timeframe,
             req.strategy,
             req.bars,
+            commission_per_lot=req.commission_per_lot,
             include_details=req.include_details,
         )
     except KeyError as e:  # unknown strategy name

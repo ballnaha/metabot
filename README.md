@@ -205,8 +205,9 @@ command or `GET /api/strategies`.
 Before changing a strategy or risk parameter, test it on history. The
 backtester pulls recent candles from MT5 and replays a strategy with no
 look-ahead bias (signal on a closed candle, fill at the next open, spread
-included, same-bar SL+TP counted as SL). Results are in **R** (risk units) so
-symbols compare directly.
+included, same-bar SL+TP counted as SL). It also deducts **costs**: swap (read
+from the symbol, scaled by nights held) and round-turn commission. Results are
+in **R** (risk units) so symbols compare directly.
 
 ```bash
 cd backend
@@ -218,6 +219,9 @@ python run_backtest.py BTCUSD
 # Override timeframe / strategy / history length
 python run_backtest.py EURUSD --timeframe H1 --strategy trend --bars 2000
 
+# Set commission ($/lot round-turn) — e.g. a raw-spread account
+python run_backtest.py BTCUSD --commission 7
+
 # Compare every configured symbol (SYMBOLS in .env)
 python run_backtest.py --all
 
@@ -225,13 +229,17 @@ python run_backtest.py --all
 python run_backtest.py GOLD --compare-strategies
 ```
 
-Or via the API: `POST /api/backtest` with `{"symbol": "BTCUSD"}` (optional
-`timeframe`, `strategy`, `bars`, `include_details`). Key metrics: `net_r`,
-`win_rate`, `profit_factor`, `max_drawdown_r`.
+Set a default commission with `BACKTEST_COMMISSION_PER_LOT` in `.env` (check
+your account's contract specs). Via the API: `POST /api/backtest` with
+`{"symbol": "BTCUSD"}` (optional `timeframe`, `strategy`, `bars`,
+`commission_per_lot`, `include_details`). Key metrics: `net_r` (after costs),
+`gross_net_r` (before), `total_cost_r`, `win_rate`, `profit_factor`,
+`max_drawdown_r`.
 
-> ⚠️ The backtest excludes commission/swap and AI filtering, and assumes fills
-> at the modelled price — treat results as a **relative** comparison between
-> strategies/parameters, not a promise of live returns. Beware overfitting.
+> ⚠️ The backtest excludes AI filtering and assumes fills at the modelled
+> price (no slippage on gaps) — treat results as a **relative** comparison
+> between strategies/parameters, not a promise of live returns. Beware
+> overfitting.
 
 ---
 
