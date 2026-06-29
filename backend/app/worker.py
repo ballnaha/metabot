@@ -76,6 +76,10 @@ def _symbol_timeframe(symbol: str) -> str:
 
 
 def _symbol_strategy(symbol: str) -> str:
+    # A per-symbol override from --optimize wins over the group default.
+    override = settings.symbol_strategy_map.get(symbol.upper())
+    if override:
+        return override
     group = market_group(symbol)
     if group == "crypto": return settings.crypto_strategy or settings.strategy
     if group == "stock": return settings.stock_strategy

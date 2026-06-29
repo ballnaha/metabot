@@ -230,7 +230,31 @@ python run_backtest.py --all
 
 # Find the best strategy for one symbol
 python run_backtest.py GOLD --compare-strategies
+
+# Auto-pick the best strategy for EVERY symbol → backtest_best.json
+python run_backtest.py --optimize --bars 10000 --min-trades 30
 ```
+
+### Per-symbol strategy optimisation
+
+`--optimize` backtests every strategy on every symbol in `SYMBOLS` and writes
+the winner per symbol to `backtest_best.json`. "Winner" = highest expectancy
+(R/trade) among strategies with at least `--min-trades` trades **and** positive
+expectancy — a flukey 3-trade winner can't be picked, and a symbol with no real
+edge is left out (the bot keeps its group default for those).
+
+Point the bot at the file to trade each symbol with its strongest strategy:
+
+```bash
+# in backend/.env
+SYMBOL_STRATEGIES_FILE=backtest_best.json
+```
+
+Symbols listed in the file use their optimised strategy; everything else falls
+back to the group strategy (`GOLD_STRATEGY`, `FOREX_STRATEGY`, …). Re-run
+`--optimize` periodically as the market changes. Use plenty of history
+(`--bars 10000`) — a strategy that looks great on 3,000 bars often regresses on
+10,000, which is closer to its true edge.
 
 **Spread-based accounts (e.g. XM Standard).** Such accounts charge $0
 commission but a wider spread — so the spread *is* the cost, and the default

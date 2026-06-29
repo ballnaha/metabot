@@ -3,7 +3,12 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from app.backtest import _compute_metrics, backtest_strategy, run_symbol_backtest
+from app.backtest import (
+    _compute_metrics,
+    backtest_strategy,
+    optimize_symbol,
+    run_symbol_backtest,
+)
 from app.models import Action, StrategySignal
 
 
@@ -233,6 +238,89 @@ class RunSymbolBacktestTests(unittest.TestCase):
         self.assertEqual(result["timeframe"], "M30")
         # include_details defaults to False → no per-trade list in the result.
         self.assertNotIn("details", result)
+
+
+class OptimizeSymbolTests(unittest.TestCase):
+    """optimize_symbol picks the highest-expectancy strategy that clears the
+    min_trades gate and is actually profitable."""
+
+    def _fake(self, name, trades, expectancy):
+        # Minimal shape optimize_symbol reads from run_symbol_backtest.
+        return {
+            "strategy": name, "trades": trades, "expectancy_r": expectancy,
+            "net_r": expectancy * trades, "profit_factor": 1.5 if expectancy > 0 else 0.5,
+            "win_rate": 0.5, "max_drawdown_r": 1.0,
+        }
+
+    def test_best_respects_min_trades_and_positive_expectancy(self):
+        # A: best expectancy but too few trades (flukey) -> rejected.
+        # B: solid expectancy, enough trades -> chosen.
+        # C: enough trades but negative expectancy -> rejected.
+        results = {
+            "A_flukey": self._fake("A_flukey", trades=5, expectancy=2.0),
+            "B_solid":  self._fake("B_solid", trades=50, expectancy=0.4),
+            "C_neg":    self._fake("C_neg", trades=80, expectancy=-0.3),
+        }
+        strat_list = [{"name": k} for k in results]
+
+        def dispatch(symbol, timeframe, strategy_name, bars, **kw):
+            return results[strategy_name]
+        with patch("app.strategy.list_strategies", return_value=strat_list), \
+             patch("app.backtest.run_symbol_backtest", side_effect=dispatch):
+            out = optimize_symbol("GOLD", "H4", 5000, min_trades=30)
+
+        self.assertIsNotNone(out["best"])
+        self.assertEqual(out["best"]["strategy"], "B_solid")
+        # All candidates are still reported, sorted by expectancy desc.
+        self.assertEqual(out["candidates"][0]["strategy"], "A_flukey")
+
+    def test_best_is_none_when_nothing_qualifies(self):
+        results = {
+            "X": self._fake("X", trades=5, expectancy=1.0),   # too few
+            "Y": self._fake("Y", trades=99, expectancy=-0.1),  # negative
+        }
+        strat_list = [{"name": k} for k in results]
+
+        def dispatch(symbol, timeframe, strategy_name, bars, **kw):
+            return results[strategy_name]
+        with patch("app.strategy.list_strategies", return_value=strat_list), \
+             patch("app.backtest.run_symbol_backtest", side_effect=dispatch):
+            out = optimize_symbol("EURUSD", "H1", 5000, min_trades=30)
+
+        self.assertIsNone(out["best"])
+        self.assertEqual(len(out["candidates"]), 2)
+
+
+class SymbolStrategyMapTests(unittest.TestCase):
+    """settings.symbol_strategy_map loads the --optimize JSON, upper-cased."""
+
+    def test_loads_and_uppercases(self):
+        import json
+        import tempfile
+        import os
+        from app.config import Settings
+
+        data = {"strategies": {"gold": "crypto_early_stage", "Salesforce": "stock_pullback"}}
+        fd, path = tempfile.mkstemp(suffix=".json")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+            s = Settings(symbol_strategies_file=path)
+            m = s.symbol_strategy_map
+            self.assertEqual(m["GOLD"], "crypto_early_stage")
+            self.assertEqual(m["SALESFORCE"], "stock_pullback")
+        finally:
+            os.remove(path)
+
+    def test_empty_when_unset(self):
+        from app.config import Settings
+        self.assertEqual(Settings(symbol_strategies_file="").symbol_strategy_map, {})
+
+    def test_empty_when_missing_file(self):
+        from app.config import Settings
+        self.assertEqual(
+            Settings(symbol_strategies_file="/nonexistent/nope.json").symbol_strategy_map, {}
+        )
 
 
 if __name__ == "__main__":

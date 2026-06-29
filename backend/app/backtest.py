@@ -326,3 +326,56 @@ def run_symbol_backtest(
     if not include_details:
         result.pop("details", None)
     return result
+
+
+def optimize_symbol(
+    symbol: str,
+    timeframe: str | None = None,
+    bars: int = 5000,
+    *,
+    min_trades: int = 30,
+    commission_per_lot: float | None = None,
+    spread_points: float | None = None,
+) -> dict[str, Any]:
+    """Backtest every built-in strategy on one symbol and pick the best.
+
+    "Best" = highest expectancy (R/trade) among strategies with at least
+    ``min_trades`` trades AND positive expectancy — so a flukey 3-trade winner
+    can't be chosen. If nothing clears the bar, ``best`` is None (the bot should
+    skip this symbol) but every candidate is still returned for inspection.
+    """
+    from . import strategy as _strategy
+
+    candidates: list[dict[str, Any]] = []
+    for info in _strategy.list_strategies():
+        try:
+            r = run_symbol_backtest(
+                symbol, timeframe, info["name"], bars,
+                commission_per_lot=commission_per_lot, spread_points=spread_points,
+            )
+        except Exception:  # noqa: BLE001 — skip strategies that error on this symbol
+            continue
+        candidates.append({
+            "strategy": r["strategy"],
+            "trades": r["trades"],
+            "expectancy_r": r.get("expectancy_r", 0.0),
+            "net_r": r["net_r"],
+            "profit_factor": r["profit_factor"],
+            "win_rate": r["win_rate"],
+            "max_drawdown_r": r["max_drawdown_r"],
+        })
+
+    candidates.sort(key=lambda c: c["expectancy_r"], reverse=True)
+    eligible = [
+        c for c in candidates
+        if c["trades"] >= min_trades and c["expectancy_r"] > 0
+    ]
+    best = eligible[0] if eligible else None
+
+    return {
+        "symbol": symbol,
+        "timeframe": candidates[0].get("timeframe") if candidates else timeframe,
+        "best": best,
+        "min_trades": min_trades,
+        "candidates": candidates,
+    }

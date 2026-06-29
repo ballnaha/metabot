@@ -65,6 +65,55 @@ def _print_detail(r: dict) -> None:
         print(f"    {label:<22} {value}")
 
 
+def _run_optimize(args) -> None:
+    """Find the best strategy per symbol and write backtest_best.json — a
+    mapping the bot can load to trade each symbol with its strongest strategy."""
+    import json
+    from datetime import datetime, timezone
+
+    mt5_client.connect()
+    symbols = settings.symbol_list if (args.all or not args.symbol) else [args.symbol.upper()]
+    bars = args.bars if args.bars != 1000 else 5000  # default to more data for optimisation
+
+    mapping: dict[str, str] = {}
+    report: list[dict] = []
+    try:
+        print(f"Optimizing {len(symbols)} symbols ({bars} bars, min {args.min_trades} trades)...\n")
+        for sym in symbols:
+            try:
+                res = backtest.optimize_symbol(
+                    sym, args.timeframe, bars,
+                    min_trades=args.min_trades,
+                    commission_per_lot=args.commission,
+                    spread_points=args.spread_points,
+                )
+            except Exception as e:  # noqa: BLE001
+                print(f"  {sym:<13} skipped ({e})")
+                continue
+            best = res["best"]
+            report.append(res)
+            if best:
+                mapping[sym.upper()] = best["strategy"]
+                print(f"  {sym:<13} -> {best['strategy']:<16} "
+                      f"exp={best['expectancy_r']:+.3f}R trades={best['trades']} PF={best['profit_factor']:.2f}")
+            else:
+                print(f"  {sym:<13} -> (none cleared {args.min_trades} trades + positive expectancy)")
+    finally:
+        mt5_client.shutdown()
+
+    out = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "bars": bars,
+        "min_trades": args.min_trades,
+        "strategies": mapping,
+    }
+    with open("backtest_best.json", "w", encoding="utf-8") as f:
+        json.dump(out, f, indent=2)
+    print(f"\nWrote {len(mapping)} symbol->strategy entries to backtest_best.json")
+    print("Set SYMBOL_STRATEGIES_FILE=backtest_best.json in .env to have the bot use it.")
+    sys.exit(0)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backtest MetaBot strategies on MT5 history.")
     parser.add_argument("symbol", nargs="?", help="Symbol to test (e.g. BTCUSD). Omit with --all.")
@@ -86,7 +135,21 @@ def main() -> None:
         action="store_true",
         help="Run every built-in strategy on the symbol and rank them.",
     )
+    parser.add_argument(
+        "--optimize",
+        action="store_true",
+        help="For each symbol (or --all), find the best strategy and write a "
+             "per-symbol mapping to backtest_best.json.",
+    )
+    parser.add_argument(
+        "--min-trades", type=int, default=30,
+        help="Minimum trades for a strategy to be eligible in --optimize (default 30).",
+    )
     args = parser.parse_args()
+
+    if args.optimize:
+        _run_optimize(args)
+        return
 
     if not args.symbol and not args.all:
         parser.error("provide a symbol, or --all")

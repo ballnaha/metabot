@@ -132,6 +132,33 @@ class Settings(BaseSettings):
     # contract specs (e.g. raw-spread accounts often charge ~$7/lot round-turn).
     backtest_commission_per_lot: float = 0.0
 
+    # Optional per-symbol strategy overrides, produced by `run_backtest.py
+    # --optimize`. When set, the bot trades each listed symbol with its best
+    # backtested strategy; symbols not listed fall back to the group strategy.
+    symbol_strategies_file: str = ""
+
+    @property
+    def symbol_strategy_map(self) -> dict:
+        """Load (and cache) the per-symbol strategy mapping from the JSON file
+        written by --optimize. Returns {} if not configured or unreadable."""
+        path = self.symbol_strategies_file.strip()
+        if not path:
+            return {}
+        cache = getattr(self, "_symbol_strategy_cache", None)
+        if cache is not None and cache[0] == path:
+            return cache[1]
+        import json, os
+        if not os.path.isabs(path):
+            path = os.path.join(os.path.dirname(__file__), "..", path)
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            mapping = {k.upper(): v for k, v in (data.get("strategies") or {}).items()}
+        except Exception:
+            mapping = {}
+        object.__setattr__(self, "_symbol_strategy_cache", (self.symbol_strategies_file.strip(), mapping))
+        return mapping
+
     @property
     def cors_origin_list(self) -> List[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
