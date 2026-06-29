@@ -346,7 +346,7 @@ export default function CryptoPage() {
     bot_enabled: true,
     use_ai: false,
     auto_trade_interval: 60,
-    crypto_strategy: "crypto_regime",
+    crypto_strategy: "adaptive_trend",
     crypto_timeframe: "H4",
     magic: 556677,
     telegram_enabled: true,
@@ -438,7 +438,7 @@ export default function CryptoPage() {
           bot_enabled: data.bot_enabled ?? true,
           use_ai: data.use_ai ?? false,
           auto_trade_interval: data.auto_trade_interval ?? 60,
-          crypto_strategy: data.crypto_strategy || "crypto_regime",
+          crypto_strategy: data.crypto_strategy || "adaptive_trend",
           crypto_timeframe: data.crypto_timeframe || "H4",
           magic: data.magic ?? 556677,
           telegram_enabled: data.telegram_enabled ?? true,
@@ -454,7 +454,7 @@ export default function CryptoPage() {
           ...prev,
           crypto_strategy: nextStrategies.some((s: StrategyInfo) => s.name === prev.crypto_strategy)
             ? prev.crypto_strategy
-            : "crypto_regime",
+            : "adaptive_trend",
           use_ai: prev.use_ai ?? data.use_ai_default ?? false,
         }));
       })
@@ -1077,7 +1077,7 @@ export default function CryptoPage() {
             const TF_MINS: Record<string, number> = { M15: 15, M30: 30, H1: 60, H4: 240, D1: 1440 };
             const tf = settingsForm.crypto_timeframe || "H4";
             const tradeMins = TF_MINS[tf] ?? 240;
-            const strat = settingsForm.crypto_strategy || "crypto_regime";
+            const strat = settingsForm.crypto_strategy || "adaptive_trend";
             const cond = STRATEGY_CONDITIONS[strat];
             return (
               <Box sx={{ display: "flex", alignItems: "center", gap: { xs: 0.75, md: 2 }, mb: { xs: 1, md: 2 }, px: 0.5, flexWrap: "wrap" }}>
@@ -1115,7 +1115,7 @@ export default function CryptoPage() {
 
           {/* Conditions Modal */}
           {(() => {
-            const strat = settingsForm.crypto_strategy || "crypto_regime";
+            const strat = settingsForm.crypto_strategy || "adaptive_trend";
             const cond = STRATEGY_CONDITIONS[strat];
             if (!cond) return null;
             return (
