@@ -11,7 +11,9 @@ from typing import Any
 
 import pandas as pd
 
-from . import indicators, strategy
+from . import indicators, mt5_client, strategy
+from .config import settings
+from .market_groups import market_group
 from .models import Action
 
 
@@ -138,3 +140,61 @@ def backtest_strategy(
         "rejected_drift": rejected_drift,
         "details": trades,
     }
+
+
+def run_symbol_backtest(
+    symbol: str,
+    timeframe: str | None = None,
+    strategy_name: str | None = None,
+    bars: int = 1000,
+    *,
+    include_details: bool = False,
+) -> dict[str, Any]:
+    """Fetch live OHLC history from MT5 and backtest one strategy on it.
+
+    Shared by the /api/backtest endpoint and the CLI. Defaults the timeframe,
+    strategy and spread/drift caps to the same settings the live bot uses for
+    that symbol's market group, so a backtest reflects how the bot would behave.
+    """
+    group = market_group(symbol)
+    timeframe = timeframe or {
+        "crypto": settings.crypto_timeframe,
+        "gold": settings.gold_timeframe,
+        "forex": settings.forex_timeframe,
+        "stock": settings.stock_timeframe,
+    }.get(group, settings.default_timeframe)
+    strategy_name = strategy_name or {
+        "crypto": settings.crypto_strategy,
+        "gold": settings.gold_strategy,
+        "forex": settings.forex_strategy,
+        "stock": settings.stock_strategy,
+    }.get(group, settings.strategy)
+
+    df = mt5_client.get_rates(symbol, timeframe, bars)
+
+    # Approximate spread in price units from the symbol's current spread (points).
+    try:
+        info = mt5_client.symbol_info(symbol)
+        spread_price = float(info.get("spread", 0) or 0) * float(info.get("point", 0) or 0)
+    except Exception:
+        spread_price = 0.0
+
+    max_spread = (
+        settings.crypto_max_spread_to_sl if group == "crypto" else settings.max_spread_to_sl
+    )
+
+    result = backtest_strategy(
+        df,
+        symbol,
+        timeframe,
+        strategy_name,
+        spread_price=spread_price,
+        max_spread_to_sl=max_spread,
+        max_entry_drift_to_sl=settings.max_entry_drift_to_sl,
+    )
+    result["timeframe"] = timeframe
+    result["bars"] = int(len(df))
+    result["spread_price"] = round(spread_price, 8)
+    if not include_details:
+        result.pop("details", None)
+    return result

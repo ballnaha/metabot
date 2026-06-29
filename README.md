@@ -200,6 +200,41 @@ command or `GET /api/strategies`.
 
 ---
 
+## Backtesting (validate before you trade)
+
+Before changing a strategy or risk parameter, test it on history. The
+backtester pulls recent candles from MT5 and replays a strategy with no
+look-ahead bias (signal on a closed candle, fill at the next open, spread
+included, same-bar SL+TP counted as SL). Results are in **R** (risk units) so
+symbols compare directly.
+
+```bash
+cd backend
+.venv\Scripts\activate
+
+# One symbol (timeframe + strategy default to the live settings for its group)
+python run_backtest.py BTCUSD
+
+# Override timeframe / strategy / history length
+python run_backtest.py EURUSD --timeframe H1 --strategy trend --bars 2000
+
+# Compare every configured symbol (SYMBOLS in .env)
+python run_backtest.py --all
+
+# Find the best strategy for one symbol
+python run_backtest.py GOLD --compare-strategies
+```
+
+Or via the API: `POST /api/backtest` with `{"symbol": "BTCUSD"}` (optional
+`timeframe`, `strategy`, `bars`, `include_details`). Key metrics: `net_r`,
+`win_rate`, `profit_factor`, `max_drawdown_r`.
+
+> ⚠️ The backtest excludes commission/swap and AI filtering, and assumes fills
+> at the modelled price — treat results as a **relative** comparison between
+> strategies/parameters, not a promise of live returns. Beware overfitting.
+
+---
+
 ## Switching to full auto-trade
 
 Set `REQUIRE_CONFIRM=false` in `backend/.env`. Now `/analyze` (and the API) will

@@ -12,7 +12,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from . import mt5_client, strategy, worker
+from . import backtest, mt5_client, strategy, worker
 from .config import settings
 from .market_groups import is_crypto_symbol, market_group, check_market_open
 from .models import AnalyzeRequest, IndicatorSnapshot, Recommendation
@@ -187,6 +187,33 @@ async def scan(req: ScanRequest):
     rank = {"BUY": 0, "SELL": 0, "HOLD": 1}
     items.sort(key=lambda r: (rank.get(r["action"], 2), -r["confidence"]))
     return {"results": items}
+
+
+class BacktestRequest(BaseModel):
+    symbol: str
+    timeframe: str | None = None
+    strategy: str | None = None
+    bars: int = 1000
+    include_details: bool = False
+
+
+@app.post("/api/backtest", dependencies=[Depends(require_key)])
+def run_backtest(req: BacktestRequest):
+    """Backtest one strategy on a symbol's recent OHLC history. Timeframe and
+    strategy default to the live settings for that symbol's market group.
+    Results are in R (risk units) so symbols can be compared directly."""
+    try:
+        return backtest.run_symbol_backtest(
+            req.symbol.upper(),
+            req.timeframe,
+            req.strategy,
+            req.bars,
+            include_details=req.include_details,
+        )
+    except KeyError as e:  # unknown strategy name
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 # Pending, Confirm and Cancel endpoints removed as require_confirm has been deleted
