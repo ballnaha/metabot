@@ -5,6 +5,7 @@ import { useToastr } from "../components/Toastr";
 import Sidebar, { SIDEBAR_W } from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import { isCryptoSymbol } from "../lib/symbols";
+import HistoryTable from "../components/HistoryTable";
 import BotLog from "../crypto/components/BotLog";
 import PnLChart from "../crypto/components/PnLChart";
 import {
@@ -1430,115 +1431,17 @@ export default function GoldPage() {
                 </Stack>
                 <Box sx={{ display: historyOpen ? undefined : { xs: "none", md: "block" } }}>
                 <PnLChart deals={goldHistory} />
-                <Box sx={{ overflowX: "auto", mt: 2 }}>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow sx={{ "& th": { bgcolor: "#0a1020", borderBottomColor: "rgba(255,255,255,0.08)", py: 1.25 } }}>
-                        <TableCell sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>เวลา</TableCell>
-                        <TableCell sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>Symbol</TableCell>
-                        <TableCell sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>ประเภท</TableCell>
-                        <TableCell align="right" sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>Volume</TableCell>
-                        <TableCell align="right" sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>ราคา</TableCell>
-                        <TableCell align="right" sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>กำไร / ขาดทุน</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {paginatedGoldHistory.map((h) => {
-                        const isLong   = h.entry === "IN" ? h.type === "BUY" : h.type === "SELL";
-                        const isOpen   = h.entry === "IN";
-                        const isBot    = _gBotMagics.has(h.magic);
-                        // IN (open) = blue · OUT (close) = green/red based on realized P/L
-                        const ac       = isOpen ? "#60a5fa" : h.profit > 0 ? "#10b981" : h.profit < 0 ? "#ef4444" : "#64748b";
-                        const abg      = isOpen ? "rgba(59,130,246,0.1)"   : h.profit > 0 ? "rgba(16,185,129,0.08)"  : h.profit < 0 ? "rgba(239,68,68,0.08)"  : "rgba(100,116,139,0.08)";
-                        const aborder  = isOpen ? "rgba(59,130,246,0.25)"  : h.profit > 0 ? "rgba(16,185,129,0.22)"  : h.profit < 0 ? "rgba(239,68,68,0.22)"  : "rgba(100,116,139,0.15)";
-                        const rowBg    = isOpen ? "rgba(59,130,246,0.022)" : h.profit > 0 ? "rgba(16,185,129,0.02)"  : h.profit < 0 ? "rgba(239,68,68,0.02)"  : "transparent";
-                        const accentBorder = isOpen ? "rgba(59,130,246,0.45)" : h.profit > 0 ? "rgba(16,185,129,0.45)" : h.profit < 0 ? "rgba(239,68,68,0.45)" : "rgba(100,116,139,0.25)";
-                        return (
-                          <TableRow key={`${h.ticket}-${h.time}`} sx={{ bgcolor: rowBg, "& td": { borderBottomColor: "rgba(255,255,255,0.04)", py: 0.6 }, "&:hover": { bgcolor: `${rowBg} !important`, filter: "brightness(1.4)" } }}>
-                            <TableCell sx={{ ...MONO, color: "#64748b", fontSize: "0.75rem", whiteSpace: "nowrap", borderLeft: `3px solid ${accentBorder}`, pl: 2 }}>{formatBangkokTime(h.time)}</TableCell>
-                            <TableCell>
-                              <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
-                                <Typography sx={{ ...MONO, fontWeight: 800, fontSize: "0.82rem", color: "#e2e8f0" }}>{h.symbol}</Typography>
-                                <Typography sx={{ ...MONO, fontSize: "0.68rem", color: "#334155" }}>#{h.ticket}</Typography>
-                              </Stack>
-                            </TableCell>
-                            <TableCell>
-                              <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
-                                <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.4, px: 0.75, py: 0.2, borderRadius: 0.75, bgcolor: abg, border: `1px solid ${aborder}` }}>
-                                  <Box sx={{ width: 4, height: 4, borderRadius: isOpen ? "50%" : "1px", bgcolor: ac, flexShrink: 0 }} />
-                                  <Typography sx={{ fontSize: "0.7rem", fontWeight: 800, color: ac, whiteSpace: "nowrap" }}>
-                                    {isOpen ? "Open" : "Close"} {isLong ? "Long" : "Short"}
-                                  </Typography>
-                                </Box>
-                                <Box sx={{ display: "inline-flex", px: 0.6, py: 0.15, borderRadius: 0.5, bgcolor: isBot ? "rgba(59,130,246,0.1)" : "rgba(100,116,139,0.1)", border: `1px solid ${isBot ? "rgba(59,130,246,0.2)" : "rgba(100,116,139,0.15)"}` }}>
-                                  <Typography sx={{ fontSize: "0.62rem", fontWeight: 800, color: isBot ? "#60a5fa" : "#64748b", letterSpacing: "0.03em" }}>
-                                    {isBot ? "Bot" : "Manual"}
-                                  </Typography>
-                                </Box>
-                              </Stack>
-                            </TableCell>
-                            <TableCell align="right" sx={{ ...MONO, color: "#94a3b8", fontSize: "0.78rem" }}>{fmt(h.volume, 2)}</TableCell>
-                            <TableCell align="right">
-                              <Typography sx={{ ...MONO, color: "#94a3b8", fontSize: "0.78rem" }}>{fmt(h.price, 2)}</Typography>
-                              <Typography sx={{ ...MONO, color: "#475569", fontSize: "0.68rem" }}>≈ {fmt(h.price * h.volume, 2)} {account?.currency || ""}</Typography>
-                            </TableCell>
-                            <TableCell align="right">
-                              <Stack direction="row" spacing={0.75} sx={{ justifyContent: "flex-end", alignItems: "center" }}>
-                                {h.commission !== 0 && (
-                                  <Typography sx={{ ...MONO, fontSize: "0.68rem", color: "#475569" }}>comm {fmt(h.commission)}</Typography>
-                                )}
-                                {isOpen ? (
-                                  <Typography sx={{ ...MONO, fontWeight: 700, fontSize: "0.78rem", color: "#475569", fontStyle: "italic" }}>—</Typography>
-                                ) : (
-                                  <Stack sx={{ alignItems: "flex-end" }}>
-                                    <Typography sx={{ ...MONO, fontWeight: 800, fontSize: "0.85rem", color: h.profit > 0 ? "#10b981" : h.profit < 0 ? "#ef4444" : "#64748b" }}>
-                                      {h.profit > 0 ? "+" : ""}{fmt(h.profit)}
-                                    </Typography>
-                                    {h.pct != null && (
-                                      <Typography sx={{ ...MONO, fontWeight: 700, fontSize: "0.68rem", color: h.pct > 0 ? "#10b981" : h.pct < 0 ? "#ef4444" : "#64748b" }}>
-                                        {h.pct > 0 ? "+" : ""}{fmt(h.pct, 2)}%
-                                      </Typography>
-                                    )}
-                                  </Stack>
-                                )}
-                              </Stack>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                      {goldHistory.length === 0 && (
-                        <TableRow>
-                          <TableCell colSpan={6}>
-                            <Typography color="text.secondary" variant="body2">ยังไม่มีประวัติเทรดทองใน 7 วันล่าสุด</Typography>
-                          </TableCell>
-                        </TableRow>
-                      )}
-                    </TableBody>
-                  </Table>
-                  <TablePagination
-                    rowsPerPageOptions={[5, 10, 20, 50]}
-                    component="div"
-                    count={goldHistory.length}
-                    rowsPerPage={historyRowsPerPage}
-                    page={historyPage}
-                    onPageChange={(_event, newPage) => setHistoryPage(newPage)}
-                    onRowsPerPageChange={(event) => {
-                      setHistoryRowsPerPage(parseInt(event.target.value, 10));
-                      setHistoryPage(0);
-                    }}
-                    labelRowsPerPage="แถวต่อหน้า:"
-                    labelDisplayedRows={({ from, to, count }) => `${from}–${to} จาก ${count}`}
-                    sx={{
-                      color: "#94a3b8",
-                      borderTop: "1px solid rgba(255,255,255,0.06)",
-                      "& .MuiTablePagination-toolbar": { minHeight: 44, px: 1 },
-                      "& .MuiTablePagination-selectLabel, & .MuiTablePagination-displayedRows": { fontSize: "0.78rem" },
-                      "& .MuiTablePagination-selectIcon": { color: "#64748b" },
-                      "& .MuiIconButton-root": { color: "#64748b" },
-                      "& .MuiIconButton-root.Mui-disabled": { color: "rgba(255,255,255,0.1)" },
-                    }}
-                  />
-                </Box>
+                <HistoryTable
+                  deals={paginatedGoldHistory}
+                  totalCount={goldHistory.length}
+                  page={historyPage}
+                  rowsPerPage={historyRowsPerPage}
+                  onPageChange={setHistoryPage}
+                  onRowsPerPageChange={setHistoryRowsPerPage}
+                  isBot={(h) => _gBotMagics.has(h.magic)}
+                  priceSubtitle={(h) => `≈ ${fmt(h.price * h.volume, 2)} ${account?.currency || ""}`}
+                  emptyMessage="ยังไม่มีประวัติเทรดทองใน 7 วันล่าสุด"
+                />
                 </Box>{/* end collapsible history body */}
               </CardContent>
             </Card>

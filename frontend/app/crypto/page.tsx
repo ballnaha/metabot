@@ -8,6 +8,7 @@ import TopBar from "../components/TopBar";
 import PnLChart from "./components/PnLChart";
 import BotLog from "./components/BotLog";
 import { isCryptoSymbol, isMetalSymbol } from "../lib/symbols";
+import HistoryTable from "../components/HistoryTable";
 import {
   Alert,
   Autocomplete,
@@ -1736,94 +1737,18 @@ export default function CryptoPage() {
                     <Box sx={{ overflowX: "auto", mt: 2 }}>
                       {/* DESKTOP TABLE VIEW - Renders on sm (tablet) and up */}
                       <Box sx={{ display: { xs: "none", sm: "block" } }}>
-                        <Table size="small">
-                          <TableHead>
-                            <TableRow sx={{ "& th": { bgcolor: "#0a1020", borderBottomColor: "rgba(255,255,255,0.08)", py: 1.25 } }}>
-                              <TableCell sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>เวลา</TableCell>
-                              <TableCell sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>Symbol</TableCell>
-                              <TableCell sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>ประเภท</TableCell>
-                              <TableCell align="right" sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>Volume</TableCell>
-                              <TableCell align="right" sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>ราคา</TableCell>
-                              <TableCell align="right" sx={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>กำไร / ขาดทุน</TableCell>
-                            </TableRow>
-                          </TableHead>
-                          <TableBody>
-                            {paginatedCryptoHistory.map((h) => {
-                              const isLong  = h.entry === "IN" ? h.type === "BUY" : h.type === "SELL";
-                              const isOpen  = h.entry === "IN";
-                              const isBot   = _cBotMagics.has(h.magic);
-                              // IN (open) = blue · OUT (close) = green/red based on realized P/L
-                              const ac      = isOpen ? "#60a5fa" : h.profit > 0 ? "#10b981" : h.profit < 0 ? "#ef4444" : "#64748b";
-                              const abg     = isOpen ? "rgba(59,130,246,0.1)"    : h.profit > 0 ? "rgba(16,185,129,0.08)"  : h.profit < 0 ? "rgba(239,68,68,0.08)"  : "rgba(100,116,139,0.08)";
-                              const aborder = isOpen ? "rgba(59,130,246,0.25)"   : h.profit > 0 ? "rgba(16,185,129,0.22)"  : h.profit < 0 ? "rgba(239,68,68,0.22)"  : "rgba(100,116,139,0.15)";
-                              const rowBg   = isOpen ? "rgba(59,130,246,0.022)"  : h.profit > 0 ? "rgba(16,185,129,0.02)"  : h.profit < 0 ? "rgba(239,68,68,0.02)"  : "transparent";
-                              const accentBorder = isOpen ? "rgba(59,130,246,0.45)" : h.profit > 0 ? "rgba(16,185,129,0.45)" : h.profit < 0 ? "rgba(239,68,68,0.45)" : "rgba(100,116,139,0.25)";
-                              return (
-                                <TableRow
-                                  key={`${h.ticket}-${h.time}`}
-                                  sx={{ bgcolor: rowBg, "& td": { borderBottomColor: "rgba(255,255,255,0.04)", py: 0.6 }, "&:hover": { bgcolor: `${rowBg} !important`, filter: "brightness(1.4)" } }}
-                                >
-                                  <TableCell sx={{ ...MONO, color: "#64748b", fontSize: "0.75rem", whiteSpace: "nowrap", borderLeft: `3px solid ${accentBorder}`, pl: 2 }}>
-                                    {formatBangkokTime(h.time)}
-                                  </TableCell>
-                                  <TableCell>
-                                    <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
-                                      <Typography sx={{ ...MONO, fontWeight: 800, fontSize: "0.82rem", color: "#e2e8f0" }}>{h.symbol}</Typography>
-                                      <Typography sx={{ ...MONO, fontSize: "0.68rem", color: "#334155" }}>#{h.ticket}</Typography>
-                                    </Stack>
-                                  </TableCell>
-                                  <TableCell>
-                                    <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
-                                      {/* action badge — blue=open, green/red=close */}
-                                      <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.4, px: 0.75, py: 0.2, borderRadius: 0.75, bgcolor: abg, border: `1px solid ${aborder}` }}>
-                                        <Box sx={{ width: 4, height: 4, borderRadius: isOpen ? "50%" : "1px", bgcolor: ac, flexShrink: 0 }} />
-                                        <Typography sx={{ fontSize: "0.7rem", fontWeight: 800, color: ac, whiteSpace: "nowrap" }}>
-                                          {isOpen ? "Open" : "Close"} {isLong ? "Long" : "Short"}
-                                        </Typography>
-                                      </Box>
-                                      {/* source badge */}
-                                      <Box sx={{ display: "inline-flex", px: 0.6, py: 0.15, borderRadius: 0.5, bgcolor: isBot ? "rgba(59,130,246,0.1)" : "rgba(100,116,139,0.15)", border: `1px solid ${isBot ? "rgba(59,130,246,0.2)" : "rgba(100,116,139,0.15)"}` }}>
-                                        <Typography sx={{ fontSize: "0.62rem", fontWeight: 800, color: isBot ? "#60a5fa" : "#64748b", letterSpacing: "0.03em" }}>
-                                          {isBot ? "Bot" : "Manual"}
-                                        </Typography>
-                                      </Box>
-                                    </Stack>
-                                  </TableCell>
-                                  <TableCell align="right" sx={{ ...MONO, color: "#94a3b8", fontSize: "0.78rem" }}>{fmt(h.volume, 2)}</TableCell>
-                                  <TableCell align="right">
-                                    <Typography sx={{ ...MONO, color: "#94a3b8", fontSize: "0.78rem" }}>{fmt(h.price, 4)}</Typography>
-                                    <Typography sx={{ ...MONO, color: "#475569", fontSize: "0.68rem" }}>≈ {fmt(h.price * h.volume, 2)} {ccy}</Typography>
-                                  </TableCell>
-                                  <TableCell align="right">
-                                    <Stack direction="row" spacing={0.75} sx={{ justifyContent: "flex-end", alignItems: "center" }}>
-                                      {h.commission !== 0 && (
-                                        <Typography sx={{ ...MONO, fontSize: "0.68rem", color: "#475569" }}>
-                                          comm {fmt(h.commission)}
-                                        </Typography>
-                                      )}
-                                      {isOpen ? (
-                                        <Typography sx={{ ...MONO, fontWeight: 700, fontSize: "0.78rem", color: "#475569", fontStyle: "italic" }}>
-                                          —
-                                        </Typography>
-                                      ) : (
-                                        <Stack sx={{ alignItems: "flex-end" }}>
-                                          <Typography sx={{ ...MONO, fontWeight: 800, fontSize: "0.85rem", color: h.profit > 0 ? "#10b981" : h.profit < 0 ? "#ef4444" : "#64748b" }}>
-                                            {h.profit > 0 ? "+" : ""}{fmt(h.profit)}
-                                          </Typography>
-                                          {h.pct != null && (
-                                            <Typography sx={{ ...MONO, fontWeight: 700, fontSize: "0.68rem", color: h.pct > 0 ? "#10b981" : h.pct < 0 ? "#ef4444" : "#64748b" }}>
-                                              {h.pct > 0 ? "+" : ""}{fmt(h.pct, 2)}%
-                                            </Typography>
-                                          )}
-                                        </Stack>
-                                      )}
-                                    </Stack>
-                                  </TableCell>
-                                </TableRow>
-                              );
-                            })}
-                          </TableBody>
-                        </Table>
+                        <HistoryTable
+                          deals={paginatedCryptoHistory}
+                          totalCount={cryptoHistory.length}
+                          page={historyPage}
+                          rowsPerPage={historyRowsPerPage}
+                          onPageChange={setHistoryPage}
+                          onRowsPerPageChange={setHistoryRowsPerPage}
+                          isBot={(h) => _cBotMagics.has(h.magic)}
+                          priceDecimals={() => 4}
+                          priceSubtitle={(h) => `≈ ${fmt(h.price * h.volume, 2)} ${ccy}`}
+                          emptyMessage="ไม่มีรายการใน 7 วันที่ผ่านมา"
+                        />
                       </Box>
 
                       {/* MOBILE COMPACT LIST - Renders on phone only */}
@@ -1912,6 +1837,7 @@ export default function CryptoPage() {
                         })}
                       </Box>
                     </Box>
+                    {/* Mobile-only pagination; the desktop table (HistoryTable) has its own. */}
                     <TablePagination
                       rowsPerPageOptions={[5, 10, 20, 50]}
                       component="div"
@@ -1926,6 +1852,7 @@ export default function CryptoPage() {
                       labelRowsPerPage="แถวต่อหน้า:"
                       labelDisplayedRows={({ from, to, count }) => `${from}–${to} จาก ${count}`}
                       sx={{
+                        display: { xs: "block", sm: "none" },
                         color: "#94a3b8",
                         borderTop: "1px solid rgba(255,255,255,0.06)",
                         "& .MuiTablePagination-toolbar": { minHeight: 44, px: 1 },
