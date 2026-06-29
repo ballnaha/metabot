@@ -78,8 +78,10 @@ def _run_optimize(args) -> None:
     mapping: dict[str, str] = {}
     report: list[dict] = []
     try:
-        print(f"Optimizing {len(symbols)} symbols ({bars} bars, min {args.min_trades} trades)...\n")
-        for sym in symbols:
+        total = len(symbols)
+        print(f"Optimizing {total} symbols ({bars} bars, min {args.min_trades} trades)...\n", flush=True)
+        for idx, sym in enumerate(symbols, 1):
+            prefix = f"[{idx:>3}/{total}] {sym:<13}"
             try:
                 res = backtest.optimize_symbol(
                     sym, args.timeframe, bars,
@@ -88,16 +90,17 @@ def _run_optimize(args) -> None:
                     spread_points=args.spread_points,
                 )
             except Exception as e:  # noqa: BLE001
-                print(f"  {sym:<13} skipped ({e})")
+                print(f"{prefix} skipped ({e})", flush=True)
                 continue
             best = res["best"]
             report.append(res)
             if best:
                 mapping[sym.upper()] = best["strategy"]
-                print(f"  {sym:<13} -> {best['strategy']:<16} "
-                      f"exp={best['expectancy_r']:+.3f}R trades={best['trades']} PF={best['profit_factor']:.2f}")
+                print(f"{prefix} -> {best['strategy']:<16} "
+                      f"exp={best['expectancy_r']:+.3f}R trades={best['trades']} PF={best['profit_factor']:.2f}",
+                      flush=True)
             else:
-                print(f"  {sym:<13} -> (none cleared {args.min_trades} trades + positive expectancy)")
+                print(f"{prefix} -> (none cleared {args.min_trades} trades + positive expectancy)", flush=True)
     finally:
         mt5_client.shutdown()
 
