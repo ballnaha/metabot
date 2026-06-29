@@ -24,8 +24,8 @@ export type TopBarProps = {
 const MONO = { fontFamily: "ui-monospace, monospace", fontVariantNumeric: "tabular-nums" } as const;
 
 const strategyShort: Record<string, string> = {
-  crypto_early_stage: "CryptoEarly",
-  crypto_regime: "CryptoRegime",
+  squeeze_breakout: "Squeeze",
+  adaptive_trend: "AdaptiveTrend",
   stock_pullback: "StockPullback",
   supertrend_ema: "SuperTrend+EMA",
   ema_macd_rsi: "EMA+MACD",
@@ -35,8 +35,8 @@ const strategyShort: Record<string, string> = {
 };
 
 const STRATEGIES: { name: string; label: string; desc: string }[] = [
-  { name: "crypto_regime",      label: "Crypto Regime",      desc: "กรองสภาวะตลาด + Trend Pullback + Range Reversal" },
-  { name: "crypto_early_stage", label: "Crypto Early Stage", desc: "หาเหรียญต้นน้ำ — BB Squeeze + Volume Spike" },
+  { name: "adaptive_trend",     label: "Adaptive Trend",     desc: "ปรับตามสภาวะตลาด — Trend Pullback + Breakout + Range Reversal" },
+  { name: "squeeze_breakout",   label: "Squeeze Breakout",   desc: "ระเบิดหลังบีบอัด — BB Squeeze + Volume Spike" },
   { name: "stock_pullback",     label: "Stock Pullback",     desc: "ซื้อย่อตัวหุ้นขาขึ้น — EMA200 + RSI Pullback" },
   { name: "supertrend_ema",     label: "SuperTrend + EMA",   desc: "เทรนด์หลัก EMA200 + SuperTrend กลับตัว" },
   { name: "ema_macd_rsi",       label: "EMA + MACD + RSI",   desc: "แนวโน้ม + Momentum + RSI รวม 3 สัญญาณ" },
@@ -47,7 +47,7 @@ const STRATEGIES: { name: string; label: string; desc: string }[] = [
 
 // 5-star strategies per asset type (from the strategy suitability guide)
 const FIVE_STAR: Record<string, string[]> = {
-  crypto: ["crypto_regime", "crypto_early_stage", "supertrend_ema", "breakout"],
+  crypto: ["adaptive_trend", "squeeze_breakout", "supertrend_ema", "breakout"],
   gold:   ["mean_reversion"],
   stock:  ["stock_pullback"],
   forex:  ["ema_macd_rsi"],
@@ -57,8 +57,8 @@ const FIVE_STAR: Record<string, string[]> = {
 // each Strategy in backend/app/strategy.py. Strategies absent from a list are
 // hidden for that asset type (e.g. crypto-only strategies on the forex page).
 const STRATEGY_GROUPS: Record<string, string[]> = {
-  crypto_regime:      ["crypto"],
-  crypto_early_stage: ["crypto"],
+  adaptive_trend:     ["crypto", "gold", "stock", "forex"],
+  squeeze_breakout:   ["crypto", "gold", "stock", "forex"],
   stock_pullback:     ["stock"],
   supertrend_ema:     ["crypto", "gold", "stock"],
   ema_macd_rsi:       ["crypto", "gold", "stock", "forex"],
@@ -519,9 +519,9 @@ export default function TopBar({
 
             {[
               {
-                name: "crypto_early_stage",
-                label: "Crypto Early Stage (หาเหรียญต้นน้ำ - กลยุทธ์แนะนำ 5 ดาว คริปโต)",
-                desc: "ตรวจจับความผันผวนบีบแคบ (Bollinger Band Squeeze) เพื่อหาช่วงพักฐาน และสแกนแรงซื้อผิดปกติ (Volume Spike >= 1.5x) เพื่อจับสัญญาณเหรียญที่พร้อมขึ้นเป็นแท่งแรกสุดก่อนใคร",
+                name: "squeeze_breakout",
+                label: "Squeeze Breakout (ระเบิดหลังบีบอัด - ใช้ได้ทุก asset)",
+                desc: "ตรวจจับความผันผวนบีบแคบ (Bollinger Band Squeeze) เพื่อหาช่วงพักฐาน และสแกนแรงซื้อผิดปกติ (Volume Spike >= 1.5x) เพื่อจับสัญญาณการระเบิดของราคา",
                 assets: [
                   { name: "Crypto", score: "ดีที่สุด", color: "success" },
                   { name: "Gold", score: "ดีมาก", color: "success" },

@@ -178,21 +178,21 @@ class RunSymbolBacktestTests(unittest.TestCase):
     @patch("app.backtest.settings")
     def test_defaults_timeframe_and_strategy_from_group(self, settings_mock, get_rates, sym_info):
         settings_mock.crypto_timeframe = "H4"
-        settings_mock.crypto_strategy = "crypto_regime"
+        settings_mock.crypto_strategy = "adaptive_trend"
         settings_mock.crypto_max_spread_to_sl = 0.5
         settings_mock.max_entry_drift_to_sl = 0.75
         get_rates.return_value = _flat_df()
         sym_info.return_value = self.SYMBOL_INFO
 
         with patch("app.backtest.market_group", return_value="crypto"), \
-             patch("app.backtest.backtest_strategy", return_value={"strategy": "crypto_regime"}) as bt:
+             patch("app.backtest.backtest_strategy", return_value={"strategy": "adaptive_trend"}) as bt:
             result = run_symbol_backtest("BTCUSD")
 
         # get_rates was asked for the crypto timeframe.
         get_rates.assert_called_once_with("BTCUSD", "H4", 1000)
         # backtest_strategy got the group's strategy + computed spread + caps.
         kwargs = bt.call_args.kwargs
-        self.assertEqual(bt.call_args.args[3], "crypto_regime")
+        self.assertEqual(bt.call_args.args[3], "adaptive_trend")
         self.assertAlmostEqual(kwargs["spread_price"], 0.2)
         self.assertEqual(kwargs["max_spread_to_sl"], 0.5)
         # Enriched fields are attached.
@@ -300,14 +300,14 @@ class SymbolStrategyMapTests(unittest.TestCase):
         import os
         from app.config import Settings
 
-        data = {"strategies": {"gold": "crypto_early_stage", "Salesforce": "stock_pullback"}}
+        data = {"strategies": {"gold": "squeeze_breakout", "Salesforce": "stock_pullback"}}
         fd, path = tempfile.mkstemp(suffix=".json")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f)
             s = Settings(symbol_strategies_file=path)
             m = s.symbol_strategy_map
-            self.assertEqual(m["GOLD"], "crypto_early_stage")
+            self.assertEqual(m["GOLD"], "squeeze_breakout")
             self.assertEqual(m["SALESFORCE"], "stock_pullback")
         finally:
             os.remove(path)

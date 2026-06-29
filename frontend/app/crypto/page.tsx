@@ -113,8 +113,8 @@ const STRATEGY_CONDITIONS: Record<string, {
     ],
     note: "threshold สูงที่สุด 35% — ต้องทะลุชัดเจน ระวัง false breakout",
   },
-  crypto_regime: {
-    label: "Crypto Regime",
+  adaptive_trend: {
+    label: "Adaptive Trend",
     buy: [
       "Trend pullback: EMA50 > EMA200, ADX >= 20, price reclaims EMA20",
       "Range reversal: price returns inside the lower Bollinger Band with RSI <= 42",
@@ -281,8 +281,8 @@ const entryLabel = (entry?: string) =>
 
 const strategyLabel = (name: string) =>
   ({
-    crypto_regime: "Crypto Regime",
-    crypto_early_stage: "Crypto Early Stage",
+    adaptive_trend: "Adaptive Trend",
+    squeeze_breakout: "Squeeze Breakout",
     ema_macd_rsi: "พื้นฐาน: แนวโน้ม + แรงส่ง + RSI",
     trend: "ตามเทรนด์",
     mean_reversion: "รอเด้งกลับ",

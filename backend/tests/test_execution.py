@@ -18,7 +18,7 @@ def recommendation(action=Action.BUY):
             symbol="BTCUSD",
             timeframe="M15",
             price=100.0,
-            strategy_name="crypto_early_stage",
+            strategy_name="squeeze_breakout",
         ),
     )
 
@@ -107,10 +107,10 @@ class MarketExecutionTests(unittest.TestCase):
 
         self.assertEqual(result.status, "executed")
         kwargs = order_send.call_args.kwargs
-        self.assertEqual(kwargs["comment"], "mb|crypto_early_stage")
+        self.assertEqual(kwargs["comment"], "mb|squeeze_breakout")
         self.assertEqual(kwargs["sl"], 98.2)
         self.assertEqual(kwargs["tp"], 104.2)
-        self.assertEqual(result.result["strategy"], "crypto_early_stage")
+        self.assertEqual(result.result["strategy"], "squeeze_breakout")
 
 
 class MinLotExposureGuardTests(unittest.TestCase):

@@ -6,7 +6,7 @@ import pandas as pd
 from app.models import Action, IndicatorSnapshot
 from app.strategy import (
     BreakoutStrategy,
-    CryptoRegimeStrategy,
+    AdaptiveTrendStrategy,
     CryptoScalpStrategy,
     EmaMacdRsiStrategy,
     TrendFollowStrategy,
@@ -29,7 +29,7 @@ class StrategyTests(unittest.TestCase):
             atr=0.4, rsi=60.0,
         )
 
-        signal = CryptoRegimeStrategy().evaluate(df, snap)
+        signal = AdaptiveTrendStrategy().evaluate(df, snap)
 
         self.assertGreater(signal.confidence, 0.0)
         self.assertTrue(signal.reasons)
@@ -43,7 +43,7 @@ class StrategyTests(unittest.TestCase):
         })
         snap = IndicatorSnapshot(symbol="BTCUSD", timeframe="H4", price=100.0)
 
-        signal = CryptoRegimeStrategy().evaluate(df, snap)
+        signal = AdaptiveTrendStrategy().evaluate(df, snap)
 
         self.assertEqual(signal.action, Action.HOLD)
         self.assertEqual(signal.confidence, 0.0)

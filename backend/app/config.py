@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     default_timeframe: str = "H1"
     # Crypto swings hard 24/7; H4 filters the noise and rides trends cleanly.
     crypto_timeframe: str = "H4"
-    crypto_strategy: str = "crypto_regime"
+    crypto_strategy: str = "adaptive_trend"
     crypto_atr_sl_mult: float = 1.8
     crypto_rr: float = 2.5
     # Minimum SL distance as a fraction of price. ATR-based stops collapse when

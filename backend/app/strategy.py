@@ -613,15 +613,19 @@ class StockPullbackStrategy(Strategy):
 
 
 @register
-class CryptoEarlyStageStrategy(Strategy):
-    """Crypto Early Stage (Pump Detector - 5-star for Crypto)."""
+class SqueezeBreakoutStrategy(Strategy):
+    """Squeeze breakout (Bollinger squeeze + volume spike).
 
-    name = "crypto_early_stage"
-    groups = ("crypto",)
+    Despite the old "crypto_early_stage" name, backtests show this fits gold,
+    forex and stocks too — so it's open to all groups.
+    """
+
+    name = "squeeze_breakout"
+    groups = ("crypto", "gold", "forex", "stock")
     description = (
-        "กลยุทธ์ล่าเหรียญต้นน้ำระดับ 5 ดาวสำหรับ Crypto (Crypto Pump Detector) "
-        "ตรวจจับการบีบอัดความผันผวน (Bollinger Band Squeeze) ควบคู่กับปริมาณการซื้อขายที่ทะลักเข้าผิดปกติ (Volume Spike) "
-        "ช่วยตรวจจับสัญญาณระเบิดราคาของเหรียญตั้งแต่ต้นแนวโน้มขาขึ้นรอบใหม่"
+        "กลยุทธ์จับการระเบิดราคาหลังการบีบอัดความผันผวน (Bollinger Band Squeeze) "
+        "ควบคู่กับปริมาณการซื้อขายที่ทะลักเข้าผิดปกติ (Volume Spike) "
+        "ใช้ได้ทั้ง crypto / gold / forex / หุ้น"
     )
 
     def evaluate(self, df: pd.DataFrame, snap: IndicatorSnapshot) -> StrategySignal:
@@ -701,21 +705,22 @@ class CryptoEarlyStageStrategy(Strategy):
 
 
 @register
-class CryptoRegimeStrategy(Strategy):
-    """Regime-aware crypto strategy for liquid H1/H4 markets.
+class AdaptiveTrendStrategy(Strategy):
+    """Regime-aware adaptive trend strategy for liquid H1/H4 markets.
 
     It trades three explicit setups instead of voting on unrelated indicators:
     trend pullbacks, confirmed breakouts, and rare range reversals.  Every
     calculation uses the last closed candle (-2) and excludes it from breakout
-    lookbacks to avoid look-ahead bias.
+    lookbacks to avoid look-ahead bias. Formerly "crypto_regime"; backtests show
+    it fits gold/forex/stocks, so it's open to all groups.
     """
 
-    name = "crypto_regime"
-    groups = ("crypto",)
+    name = "adaptive_trend"
+    groups = ("crypto", "gold", "forex", "stock")
     description = (
-        "กลยุทธ์ทดลอง Crypto แบบปรับตามสภาวะตลาด (ยังไม่ใช่ค่าเริ่มต้น): ตามเทรนด์เมื่อ ADX แข็งแรง, "
+        "กลยุทธ์ปรับตามสภาวะตลาด (regime-aware): ตามเทรนด์เมื่อ ADX แข็งแรง, "
         "เข้า breakout ที่มี volume ยืนยัน และเล่นกลับตัวเฉพาะกรอบที่ชัดเจน "
-        "พร้อม SL ตาม ATR/โครงสร้างราคา"
+        "พร้อม SL ตาม ATR/โครงสร้างราคา ใช้ได้ทั้ง crypto / gold / forex / หุ้น"
     )
 
     @staticmethod
