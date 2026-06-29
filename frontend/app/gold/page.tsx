@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useToastr } from "../components/Toastr";
 import Sidebar, { SIDEBAR_W } from "../components/Sidebar";
 import TopBar from "../components/TopBar";
+import { isCryptoSymbol } from "../lib/symbols";
 import BotLog from "../crypto/components/BotLog";
 import PnLChart from "../crypto/components/PnLChart";
 import {
@@ -118,6 +119,8 @@ type HistoryDeal = {
   commission: number;
   swap: number;
   profit: number;
+  entry_price?: number | null;
+  pct?: number | null;
   magic: number;
   comment: string;
 };
@@ -201,25 +204,6 @@ const actionLabel = (action?: string) =>
 const isGoldSymbol = (sym: string) => {
   const s = sym.toUpperCase();
   return s.includes("GOLD") || s.startsWith("XAU");
-};
-
-const CRYPTO_BASES = [
-  "1INCH", "AAVE", "ADA", "AGIX", "ALGO", "APE", "APT", "ARB", "ATOM", "AVAX", "AXS",
-  "BAT", "BCH", "BNB", "BONK", "BTC", "BTG", "CHZ", "COMP", "CRV", "DASH", "DOGE",
-  "DOT", "DYDX", "EGLD", "ENJ", "ETC", "ETH", "FET", "FIL", "FLOKI", "FLOW", "GALA",
-  "GRT", "HBAR", "ICP", "IMX", "INJ", "JUP", "LDO", "LINK", "LRC", "LTC", "LUNA",
-  "MANA", "MATIC", "MKR", "NEAR", "OCEAN", "OP", "PEPE", "RNDR", "SAND", "SEI",
-  "SHIB", "SNX", "SOL", "STORJ", "STX", "SUI", "SUSHI", "THETA", "TIA", "UMA",
-  "UNI", "WIF", "XLM", "XRP", "XTZ", "ZEC", "ZRX",
-].sort((a, b) => b.length - a.length);
-
-const CRYPTO_QUOTES = ["USD", "USDT", "BTC", "ETH", "EUR"];
-
-const isCryptoSymbol = (sym: string) => {
-  const s = sym.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  if (/GOLD|SILVER|XAU|XAG|PLATINUM|PALLADIUM/.test(s)) return false;
-  if (/^(EUR|GBP|AUD|NZD|CAD|CHF|HKD|SGD|ZAR|MXN|NOK|SEK|DKK|TRY|CNH|RUB)[A-Z]{3}$/.test(s)) return false;
-  return CRYPTO_BASES.some((base) => s === base || CRYPTO_QUOTES.some((quote) => s.startsWith(`${base}${quote}`)));
 };
 
 const isSilverOrOtherMetal = (sym: string) => {
@@ -1506,9 +1490,16 @@ export default function GoldPage() {
                                 {isOpen ? (
                                   <Typography sx={{ ...MONO, fontWeight: 700, fontSize: "0.78rem", color: "#475569", fontStyle: "italic" }}>—</Typography>
                                 ) : (
-                                  <Typography sx={{ ...MONO, fontWeight: 800, fontSize: "0.85rem", color: h.profit > 0 ? "#10b981" : h.profit < 0 ? "#ef4444" : "#64748b" }}>
-                                    {h.profit > 0 ? "+" : ""}{fmt(h.profit)}
-                                  </Typography>
+                                  <Stack sx={{ alignItems: "flex-end" }}>
+                                    <Typography sx={{ ...MONO, fontWeight: 800, fontSize: "0.85rem", color: h.profit > 0 ? "#10b981" : h.profit < 0 ? "#ef4444" : "#64748b" }}>
+                                      {h.profit > 0 ? "+" : ""}{fmt(h.profit)}
+                                    </Typography>
+                                    {h.pct != null && (
+                                      <Typography sx={{ ...MONO, fontWeight: 700, fontSize: "0.68rem", color: h.pct > 0 ? "#10b981" : h.pct < 0 ? "#ef4444" : "#64748b" }}>
+                                        {h.pct > 0 ? "+" : ""}{fmt(h.pct, 2)}%
+                                      </Typography>
+                                    )}
+                                  </Stack>
                                 )}
                               </Stack>
                             </TableCell>

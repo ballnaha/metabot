@@ -1,0 +1,6 @@
+# Development / test dependencies.
+# Installs the locked runtime deps plus tooling needed to run the test suite.
+#   pip install -r requirements-dev.txt
+-r requirements.lock
+
+pytest==8.3.2

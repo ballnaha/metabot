@@ -7,6 +7,7 @@ import Sidebar, { SIDEBAR_W } from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import PnLChart from "./components/PnLChart";
 import BotLog from "./components/BotLog";
+import { isCryptoSymbol, isMetalSymbol } from "../lib/symbols";
 import {
   Alert,
   Autocomplete,
@@ -163,6 +164,8 @@ type HistoryDeal = {
   commission: number;
   swap: number;
   profit: number;
+  entry_price?: number | null;
+  pct?: number | null;
   magic: number;
   comment: string;
 };
@@ -312,36 +315,6 @@ function SectionTitle({ icon, children }: { icon: React.ReactNode; children: Rea
     </Stack>
   );
 }
-
-const CRYPTO_BASES = [
-  "1INCH", "AAVE", "ADA", "AGIX", "ALGO", "APE", "APT", "ARB", "ATOM", "AVAX", "AXS",
-  "BAT", "BCH", "BNB", "BONK", "BTC", "BTG", "CHZ", "COMP", "CRV", "DASH", "DOGE",
-  "DOT", "DYDX", "EGLD", "ENJ", "ETC", "ETH", "FET", "FIL", "FLOKI", "FLOW", "GALA",
-  "GRT", "HBAR", "ICP", "IMX", "INJ", "JUP", "LDO", "LINK", "LRC", "LTC", "LUNA",
-  "MANA", "MATIC", "MKR", "NEAR", "OCEAN", "OP", "PEPE", "RNDR", "SAND", "SEI",
-  "SHIB", "SNX", "SOL", "STORJ", "STX", "SUI", "SUSHI", "THETA", "TIA", "UMA",
-  "UNI", "WIF", "XLM", "XRP", "XTZ", "ZEC", "ZRX",
-].sort((a, b) => b.length - a.length);
-
-const CRYPTO_QUOTES = ["USD", "USDT", "BTC", "ETH", "EUR"];
-
-const isCryptoSymbol = (sym: string) => {
-  const s = sym.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  if (/GOLD|SILVER|XAU|XAG|PLATINUM|PALLADIUM/.test(s)) return false;
-  if (/^(EUR|GBP|AUD|NZD|CAD|CHF|HKD|SGD|ZAR|MXN|NOK|SEK|DKK|TRY|CNH|RUB)[A-Z]{3}$/.test(s)) return false;
-  return CRYPTO_BASES.some((base) => s === base || CRYPTO_QUOTES.some((quote) => s.startsWith(`${base}${quote}`)));
-};
-
-const isMetalSymbol = (sym: string) => {
-  return /GOLD|SILVER|XAU|XAG|PLATINUM|PALLADIUM/i.test(sym);
-};
-
-const FOREX_PREFIXES = ["EUR", "GBP", "AUD", "NZD", "CAD", "CHF", "HKD", "SGD", "ZAR", "MXN", "NOK", "SEK", "DKK", "TRY", "CNH", "RUB", "USD", "JPY"];
-
-const isForexSymbol = (sym: string) => {
-  const s = sym.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 6);
-  return s.length === 6 && FOREX_PREFIXES.some((p) => s.startsWith(p)) && !isCryptoSymbol(sym) && !isMetalSymbol(sym);
-};
 
 export default function CryptoPage() {
   const toastr = useToastr();
@@ -1833,9 +1806,16 @@ export default function CryptoPage() {
                                           —
                                         </Typography>
                                       ) : (
-                                        <Typography sx={{ ...MONO, fontWeight: 800, fontSize: "0.85rem", color: h.profit > 0 ? "#10b981" : h.profit < 0 ? "#ef4444" : "#64748b" }}>
-                                          {h.profit > 0 ? "+" : ""}{fmt(h.profit)}
-                                        </Typography>
+                                        <Stack sx={{ alignItems: "flex-end" }}>
+                                          <Typography sx={{ ...MONO, fontWeight: 800, fontSize: "0.85rem", color: h.profit > 0 ? "#10b981" : h.profit < 0 ? "#ef4444" : "#64748b" }}>
+                                            {h.profit > 0 ? "+" : ""}{fmt(h.profit)}
+                                          </Typography>
+                                          {h.pct != null && (
+                                            <Typography sx={{ ...MONO, fontWeight: 700, fontSize: "0.68rem", color: h.pct > 0 ? "#10b981" : h.pct < 0 ? "#ef4444" : "#64748b" }}>
+                                              {h.pct > 0 ? "+" : ""}{fmt(h.pct, 2)}%
+                                            </Typography>
+                                          )}
+                                        </Stack>
                                       )}
                                     </Stack>
                                   </TableCell>
@@ -1910,9 +1890,16 @@ export default function CryptoPage() {
                                 {isOpen ? (
                                   <Typography sx={{ ...MONO, fontWeight: 700, fontSize: "0.75rem", color: "#475569", fontStyle: "italic" }}>—</Typography>
                                 ) : (
-                                  <Typography sx={{ ...MONO, fontWeight: 800, fontSize: "0.82rem", color: h.profit > 0 ? "#10b981" : h.profit < 0 ? "#ef4444" : "#64748b" }}>
-                                    {h.profit > 0 ? "+" : ""}{fmt(h.profit)}
-                                  </Typography>
+                                  <>
+                                    <Typography sx={{ ...MONO, fontWeight: 800, fontSize: "0.82rem", color: h.profit > 0 ? "#10b981" : h.profit < 0 ? "#ef4444" : "#64748b" }}>
+                                      {h.profit > 0 ? "+" : ""}{fmt(h.profit)}
+                                    </Typography>
+                                    {h.pct != null && (
+                                      <Typography sx={{ ...MONO, fontWeight: 700, fontSize: "0.62rem", color: h.pct > 0 ? "#10b981" : h.pct < 0 ? "#ef4444" : "#64748b" }}>
+                                        {h.pct > 0 ? "+" : ""}{fmt(h.pct, 2)}%
+                                      </Typography>
+                                    )}
+                                  </>
                                 )}
                                 {h.commission !== 0 && (
                                   <Typography sx={{ ...MONO, fontSize: "0.55rem", color: "#475569" }}>

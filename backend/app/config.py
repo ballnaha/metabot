@@ -122,6 +122,13 @@ class Settings(BaseSettings):
     api_host: str = "127.0.0.1"
     api_port: int = 8383
     api_key: str = "change-me-please"
+    # Browser origins allowed to call the API (CORS). Comma-separated. Defaults
+    # to the local Next.js dashboard. Set to "*" only if you understand the risk.
+    cors_origins: str = "http://localhost:4016,http://127.0.0.1:4016"
+
+    @property
+    def cors_origin_list(self) -> List[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @property
     def provider_list(self) -> List[str]:

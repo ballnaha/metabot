@@ -1,3 +1,8 @@
+# Direct (top-level) dependencies — human-maintained.
+# For a reproducible install with every transitive dependency pinned, use the
+# lockfile instead:  pip install -r requirements.lock
+# (regenerate it with:  pip freeze | Sort-Object > requirements.lock)
+
 # MT5 connectivity (Windows only)
 MetaTrader5==5.0.5735
 

@@ -35,7 +35,11 @@ _TIMEFRAME_NAMES = {
     "W1": "TIMEFRAME_W1",
 }
 
-_lock = threading.Lock()
+# Reentrant: the MetaTrader5 library is NOT thread-safe (single global session),
+# so every call that touches mt5.* must serialise on this lock. Many public
+# functions here call each other (e.g. order_send -> _ensure_symbol -> ...), so
+# the lock must be reentrant or those nested calls would deadlock.
+_lock = threading.RLock()
 
 
 def _mt5_server_timestamp_to_utc(timestamp: int | float) -> float:
@@ -98,12 +102,14 @@ def connect() -> Dict[str, Any]:
 
 def shutdown() -> None:
     if mt5 is not None:
-        mt5.shutdown()
+        with _lock:
+            mt5.shutdown()
 
 
 def account_info() -> Dict[str, Any]:
     _require_mt5()
-    info = mt5.account_info()
+    with _lock:
+        info = mt5.account_info()
     if info is None:
         raise MT5Error("No account info — is the terminal logged in?")
     return {
@@ -122,8 +128,9 @@ def account_info() -> Dict[str, Any]:
 def get_rates(symbol: str, timeframe: str, bars: int = 200) -> pd.DataFrame:
     """Return recent OHLCV candles as a DataFrame (oldest first)."""
     _require_mt5()
-    symbol = _ensure_symbol(symbol)
-    rates = mt5.copy_rates_from_pos(symbol, timeframe_const(timeframe), 0, bars)
+    with _lock:
+        symbol = _ensure_symbol(symbol)
+        rates = mt5.copy_rates_from_pos(symbol, timeframe_const(timeframe), 0, bars)
     if rates is None or len(rates) == 0:
         code, msg = mt5.last_error()
         raise MT5Error(f"No rates for {symbol} {timeframe} ({code}): {msg}")
@@ -134,8 +141,9 @@ def get_rates(symbol: str, timeframe: str, bars: int = 200) -> pd.DataFrame:
 
 def get_tick(symbol: str) -> Dict[str, float]:
     _require_mt5()
-    symbol = _ensure_symbol(symbol)
-    tick = mt5.symbol_info_tick(symbol)
+    with _lock:
+        symbol = _ensure_symbol(symbol)
+        tick = mt5.symbol_info_tick(symbol)
     if tick is None:
         raise MT5Error(f"No tick for {symbol}")
     return {"bid": tick.bid, "ask": tick.ask, "last": tick.last, "time": _mt5_server_timestamp_to_utc(tick.time)}
@@ -143,8 +151,9 @@ def get_tick(symbol: str) -> Dict[str, float]:
 
 def symbol_info(symbol: str) -> Dict[str, Any]:
     _require_mt5()
-    symbol = _ensure_symbol(symbol)
-    s = mt5.symbol_info(symbol)
+    with _lock:
+        symbol = _ensure_symbol(symbol)
+        s = mt5.symbol_info(symbol)
     return {
         "name": s.name,
         "digits": s.digits,
@@ -221,7 +230,8 @@ def _ensure_symbol(symbol: str) -> str:
 
 def positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     _require_mt5()
-    raw = mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()
+    with _lock:
+        raw = mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()
     raw = raw or []
     out = []
     for p in raw:
@@ -257,13 +267,41 @@ def history_deals(days: int = 30) -> List[Dict[str, Any]]:
     from_date = datetime.now() - timedelta(days=days)
     to_date = datetime.now() + timedelta(days=1)
     
-    deals = mt5.history_deals_get(from_date, to_date)
+    with _lock:
+        deals = mt5.history_deals_get(from_date, to_date)
     deals = deals or []
+
+    # Map each position_id to its entry (IN) deal so we can compute the price
+    # move % on the closing (OUT) deal. The trade direction is taken from the
+    # entry deal: an IN of type BUY means the position was long (its OUT is a
+    # SELL), and vice versa.
+    entry_by_position: Dict[int, Any] = {}
+    for d in deals:
+        if d.type not in (mt5.DEAL_TYPE_BUY, mt5.DEAL_TYPE_SELL):
+            continue
+        if d.entry == mt5.DEAL_ENTRY_IN and d.position_id:
+            entry_by_position.setdefault(d.position_id, d)
+
     out = []
     for d in deals:
         if d.type not in (mt5.DEAL_TYPE_BUY, mt5.DEAL_TYPE_SELL):
             continue
-            
+
+        entry_label = "IN" if d.entry == mt5.DEAL_ENTRY_IN else ("OUT" if d.entry == mt5.DEAL_ENTRY_OUT else "INOUT")
+
+        # Price move % on close, relative to the position's entry price.
+        entry_price = None
+        pct = None
+        if entry_label == "OUT":
+            ind = entry_by_position.get(d.position_id)
+            if ind is not None and ind.price:
+                entry_price = ind.price
+                # Long if the entry deal was a BUY.
+                if ind.type == mt5.DEAL_TYPE_BUY:
+                    pct = (d.price - ind.price) / ind.price * 100.0
+                else:
+                    pct = (ind.price - d.price) / ind.price * 100.0
+
         out.append(
             {
                 "ticket": d.ticket,
@@ -272,9 +310,11 @@ def history_deals(days: int = 30) -> List[Dict[str, Any]]:
                 "time": _mt5_server_time_to_bangkok(d.time),
                 "symbol": d.symbol,
                 "type": "BUY" if d.type == mt5.DEAL_TYPE_BUY else "SELL",
-                "entry": "IN" if d.entry == mt5.DEAL_ENTRY_IN else ("OUT" if d.entry == mt5.DEAL_ENTRY_OUT else "INOUT"),
+                "entry": entry_label,
                 "volume": d.volume,
                 "price": d.price,
+                "entry_price": entry_price,
+                "pct": pct,
                 "commission": d.commission,
                 "swap": d.swap,
                 "profit": d.profit,
@@ -299,18 +339,19 @@ def normalize_lot(symbol: str, lot: float) -> float:
 def modify_position_sl(ticket: int, sl: float, tp: Optional[float] = None) -> Dict[str, Any]:
     """Move stop-loss (and optionally take-profit) on an open position."""
     _require_mt5()
-    pos = mt5.positions_get(ticket=ticket)
-    if not pos:
-        raise MT5Error(f"Position {ticket} not found")
-    p = pos[0]
-    request = {
-        "action": mt5.TRADE_ACTION_SLTP,
-        "symbol": p.symbol,
-        "position": ticket,
-        "sl": float(sl),
-        "tp": float(tp) if tp is not None else p.tp,
-    }
-    result = mt5.order_send(request)
+    with _lock:
+        pos = mt5.positions_get(ticket=ticket)
+        if not pos:
+            raise MT5Error(f"Position {ticket} not found")
+        p = pos[0]
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "symbol": p.symbol,
+            "position": ticket,
+            "sl": float(sl),
+            "tp": float(tp) if tp is not None else p.tp,
+        }
+        result = mt5.order_send(request)
     if result is None:
         code, msg = mt5.last_error()
         raise MT5Error(f"modify SL returned None ({code}): {msg}")
@@ -333,36 +374,37 @@ def order_send(
 ) -> Dict[str, Any]:
     """Send a market order. Returns a normalised result dict."""
     _require_mt5()
-    symbol = _ensure_symbol(symbol)
-    tick = mt5.symbol_info_tick(symbol)
-    if action == Action.BUY:
-        order_type = mt5.ORDER_TYPE_BUY
-        price = tick.ask
-    elif action == Action.SELL:
-        order_type = mt5.ORDER_TYPE_SELL
-        price = tick.bid
-    else:
-        raise MT5Error("order_send requires BUY or SELL")
+    with _lock:
+        symbol = _ensure_symbol(symbol)
+        tick = mt5.symbol_info_tick(symbol)
+        if action == Action.BUY:
+            order_type = mt5.ORDER_TYPE_BUY
+            price = tick.ask
+        elif action == Action.SELL:
+            order_type = mt5.ORDER_TYPE_SELL
+            price = tick.bid
+        else:
+            raise MT5Error("order_send requires BUY or SELL")
 
-    lot = normalize_lot(symbol, lot)
-    request = {
-        "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": symbol,
-        "volume": float(lot),
-        "type": order_type,
-        "price": price,
-        "deviation": deviation,
-        "magic": settings.magic if magic is None else int(magic),
-        "comment": comment,
-        "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": _filling_mode(symbol),
-    }
-    if sl:
-        request["sl"] = float(sl)
-    if tp:
-        request["tp"] = float(tp)
+        lot = normalize_lot(symbol, lot)
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": float(lot),
+            "type": order_type,
+            "price": price,
+            "deviation": deviation,
+            "magic": settings.magic if magic is None else int(magic),
+            "comment": comment,
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": _filling_mode(symbol),
+        }
+        if sl:
+            request["sl"] = float(sl)
+        if tp:
+            request["tp"] = float(tp)
 
-    result = mt5.order_send(request)
+        result = mt5.order_send(request)
     if result is None:
         code, msg = mt5.last_error()
         raise MT5Error(f"order_send returned None ({code}): {msg}")
@@ -380,31 +422,32 @@ def order_send(
 
 def close_position(ticket: int, deviation: int = 20) -> Dict[str, Any]:
     _require_mt5()
-    pos = mt5.positions_get(ticket=ticket)
-    if not pos:
-        raise MT5Error(f"Position {ticket} not found")
-    p = pos[0]
-    tick = mt5.symbol_info_tick(p.symbol)
-    if p.type == mt5.POSITION_TYPE_BUY:
-        order_type = mt5.ORDER_TYPE_SELL
-        price = tick.bid
-    else:
-        order_type = mt5.ORDER_TYPE_BUY
-        price = tick.ask
-    request = {
-        "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": p.symbol,
-        "volume": p.volume,
-        "type": order_type,
-        "position": p.ticket,
-        "price": price,
-        "deviation": deviation,
-        "magic": settings.magic,
-        "comment": "metabot-close",
-        "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": _filling_mode(p.symbol),
-    }
-    result = mt5.order_send(request)
+    with _lock:
+        pos = mt5.positions_get(ticket=ticket)
+        if not pos:
+            raise MT5Error(f"Position {ticket} not found")
+        p = pos[0]
+        tick = mt5.symbol_info_tick(p.symbol)
+        if p.type == mt5.POSITION_TYPE_BUY:
+            order_type = mt5.ORDER_TYPE_SELL
+            price = tick.bid
+        else:
+            order_type = mt5.ORDER_TYPE_BUY
+            price = tick.ask
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": p.symbol,
+            "volume": p.volume,
+            "type": order_type,
+            "position": p.ticket,
+            "price": price,
+            "deviation": deviation,
+            "magic": settings.magic,
+            "comment": "metabot-close",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": _filling_mode(p.symbol),
+        }
+        result = mt5.order_send(request)
     if result is None:
         code, msg = mt5.last_error()
         raise MT5Error(f"close order_send returned None ({code}): {msg}")

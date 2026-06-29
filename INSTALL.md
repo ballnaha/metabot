@@ -57,7 +57,7 @@ py -3.11 --version
 
 ```powershell
 # 1. Clone โปรเจกต์
-git clone https://github.com/ballnaha/metabot.git
+git clone https://github.com/YOUR_USERNAME/metabot.git
 cd metabot
 
 # 2. รัน start.bat (ดับเบิลคลิกก็ได้)
@@ -87,7 +87,7 @@ start.bat
 ### ขั้นตอนที่ 1: Clone โปรเจกต์
 
 ```powershell
-git clone https://github.com/ballnaha/metabot.git
+git clone https://github.com/YOUR_USERNAME/metabot.git
 cd metabot
 ```
 
@@ -176,7 +176,7 @@ npm run dev
 |---|---|---|
 | `MT5_LOGIN` | *(เว้นว่างได้)* | เลข login MT5 — เว้นว่างถ้าเปิด terminal อยู่แล้ว |
 | `MT5_PASSWORD` | *(เว้นว่างได้)* | รหัสผ่าน MT5 |
-| `MT5_SERVER` | *(เว้นว่างได้)* | ชื่อ server เช่น `Exness-MT5Trial` |
+| `MT5_SERVER` | *(เว้นว่างได้)* | ชื่อ server เช่น `YourBroker-MT5Trial` |
 | `MT5_PATH` | *(เว้นว่างได้)* | path ไปยัง `terminal64.exe` (ถ้าหาเองไม่เจอ) |
 | `DEEPSEEK_API_KEY` | `sk-xxx...` | API key ของ Deepseek |
 | `GEMINI_API_KEY` | `AIza...` | API key ของ Gemini |

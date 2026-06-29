@@ -46,9 +46,13 @@ _tick_cache: dict[str, tuple[float, dict]] = {}
 
 app = FastAPI(title="MetaBot API", version="0.1.0")
 
+_cors_origins = settings.cors_origin_list
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten to your dashboard origin in production
+    allow_origins=_cors_origins,
+    # Only allow credentials when the origin list is explicit (not "*"); the
+    # CORS spec forbids credentials with a wildcard origin.
+    allow_credentials="*" not in _cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
