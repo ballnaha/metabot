@@ -15,7 +15,7 @@ CRYPTO_BASES = {
 }
 
 CRYPTO_QUOTES = ("USD", "USDT", "BTC", "ETH", "EUR")
-FOREX_PREFIXES = ("EUR", "GBP", "AUD", "NZD", "CAD", "CHF", "HKD", "SGD", "ZAR", "MXN", "NOK", "SEK", "DKK", "TRY", "CNH", "RUB")
+FOREX_PREFIXES = ("EUR", "GBP", "AUD", "NZD", "CAD", "CHF", "HKD", "SGD", "ZAR", "MXN", "NOK", "SEK", "DKK", "TRY", "CNH", "RUB", "USD", "JPY")
 
 
 def is_gold_symbol(symbol: str) -> bool:
