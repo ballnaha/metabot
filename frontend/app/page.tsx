@@ -7,6 +7,7 @@ import TopBar from "./components/TopBar";
 import BotLog from "./crypto/components/BotLog";
 import { PixelBotAvatar, SlotCapacity } from "./components/PixelBotStatus";
 import { isCryptoSymbol, isMetalSymbol, isForexSymbol, isStockSymbol } from "./lib/symbols";
+import { type HistoryDeal } from "./components/HistoryTable";
 import {
   Alert,
   Box,
@@ -65,21 +66,6 @@ type Position = {
   price_open: number;
   price_current: number;
   profit: number;
-};
-type HistoryDeal = {
-  ticket: number;
-  order: number;
-  time: string;
-  symbol: string;
-  type: string;
-  entry: string;
-  volume: number;
-  price: number;
-  commission: number;
-  swap: number;
-  profit: number;
-  magic: number;
-  comment: string;
 };
 
 async function api(path: string, opts?: RequestInit) {

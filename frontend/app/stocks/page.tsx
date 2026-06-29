@@ -8,7 +8,7 @@ import BotLog from "../crypto/components/BotLog";
 import PnLChart from "../crypto/components/PnLChart";
 import StockBotSettings from "./components/StockBotSettings";
 import { isCryptoSymbol, isMetalSymbol, isForexSymbol, isStockSymbol } from "../lib/symbols";
-import HistoryTable from "../components/HistoryTable";
+import HistoryTable, { type HistoryDeal } from "../components/HistoryTable";
 import {
   Alert,
   Box,
@@ -101,24 +101,6 @@ type Position = {
   profit: number;
   magic: number;
   contract_size?: number;
-};
-
-type HistoryDeal = {
-  ticket: number;
-  order: number;
-  time: string;
-  symbol: string;
-  type: string;
-  entry: string;
-  volume: number;
-  price: number;
-  commission: number;
-  swap: number;
-  profit: number;
-  entry_price?: number | null;
-  pct?: number | null;
-  magic: number;
-  comment: string;
 };
 
 type StrategyInfo = {

@@ -8,7 +8,7 @@ import TopBar from "../components/TopBar";
 import PnLChart from "./components/PnLChart";
 import BotLog from "./components/BotLog";
 import { isCryptoSymbol, isMetalSymbol } from "../lib/symbols";
-import HistoryTable from "../components/HistoryTable";
+import HistoryTable, { type HistoryDeal } from "../components/HistoryTable";
 import {
   Alert,
   Autocomplete,
@@ -153,23 +153,6 @@ type Position = {
   contract_size?: number;
 };
 
-type HistoryDeal = {
-  ticket: number;
-  order: number;
-  time: string;
-  symbol: string;
-  type: string;
-  entry: string;
-  volume: number;
-  price: number;
-  commission: number;
-  swap: number;
-  profit: number;
-  entry_price?: number | null;
-  pct?: number | null;
-  magic: number;
-  comment: string;
-};
 
 type StrategyInfo = {
   name: string;
