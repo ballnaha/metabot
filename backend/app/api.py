@@ -648,19 +648,27 @@ def detect_stock_symbols(filter_type: str = "liquid_100"):
                     return True
             return False
             
-        # XM path structure: Stocks\US\Apple, Stocks\EU\Spain\ACS, etc.
+        # Brokers structure equities differently:
+        #   XM:     Stocks\US\Apple, Stocks\EU\Spain\ACS
+        #   Exness: Standard\Stocks\AAPLm  (ticker + "m", no region folder)
         def is_us_stock(s) -> bool:
             if is_crypto(s) or is_metal(s) or is_forex(s):
                 return False
             path_lower = getattr(s, 'path', '').lower()
+            name = s.name
             # Skip leveraged / turbo derivative products
-            if 'turbo' in path_lower or 'turbo' in s.name.lower():
+            if 'turbo' in path_lower or 'turbo' in name.lower():
                 return False
-            # XM explicitly marks US stocks in path: "Stocks\US\..."
+            # XM explicitly marks US stocks by region in the path.
             if 'stocks\\us\\' in path_lower or 'stocks/us/' in path_lower:
                 return True
-            # Fallback: exchange-suffix patterns for US exchanges
-            if re.match(r'^[A-Z]{1,6}\.(OQ|N|NY)$', s.name, re.IGNORECASE):
+            # Exness (and similar): anything under a Stocks folder is an equity.
+            # Region isn't in the path, so accept all stocks here; the preset
+            # filters (liquid_30/100) narrow it to US large-caps below.
+            if 'stocks\\' in path_lower or 'stocks/' in path_lower or path_lower.endswith('stocks'):
+                return True
+            # Fallback: exchange-suffix patterns for US exchanges (.OQ/.N/.NY).
+            if re.match(r'^[A-Z]{1,6}\.(OQ|N|NY)$', name, re.IGNORECASE):
                 return True
             return False
 
@@ -722,16 +730,24 @@ def detect_stock_symbols(filter_type: str = "liquid_100"):
                         return True
             return False
 
+        def _stock_base(name: str) -> str:
+            # Strip exchange suffix (.OQ) and a trailing broker "m" (Exness:
+            # AAPLm -> AAPL) so names match the presets.
+            base = name.split(".")[0].upper()
+            if len(base) > 1 and base.endswith("M") and not base.endswith("MM"):
+                base = base[:-1]
+            return base
+
         detected = []
         for s in raw_symbols:
             if is_us_stock(s) and getattr(s, 'trade_mode', 0) > 0:
                 if not any(x in s.name.upper() for x in EXCLUDE):
-                    base = s.name.split(".")[0].upper()
-                    is_in_30 = matches_preset(base, LIQUID_30)
-                    is_in_100 = matches_preset(base, LIQUID_100)
-                    if filter_type == "liquid_30" and not is_in_30:
+                    base = _stock_base(s.name)
+                    # filter_type "all" returns every tradeable stock; the
+                    # liquid_* presets narrow to US large-caps.
+                    if filter_type == "liquid_30" and not matches_preset(base, LIQUID_30):
                         continue
-                    elif filter_type == "liquid_100" and not is_in_100:
+                    elif filter_type == "liquid_100" and not matches_preset(base, LIQUID_100):
                         continue
                     detected.append(s.name)
 
@@ -746,7 +762,7 @@ def detect_stock_symbols(filter_type: str = "liquid_100"):
                 return (1, name)
 
         return {"symbols": sorted(detected, key=sort_key),
-                "note": f"Found {len(detected)} US stocks with filter '{filter_type}'. If 0, your XM account type may not include US stock CFDs."}
+                "note": f"Found {len(detected)} stocks with filter '{filter_type}'. If 0, your account type may not include stock CFDs."}
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
 
