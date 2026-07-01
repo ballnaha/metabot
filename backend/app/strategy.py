@@ -200,6 +200,24 @@ def apply(
     return sig
 
 
+def _calc_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Module-level ADX helper shared by multiple strategies."""
+    high, low, close = df["high"], df["low"], df["close"]
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
+    ).max(axis=1)
+    atr_s = tr.ewm(alpha=1 / period, adjust=False).mean().replace(0, float("nan"))
+    plus_di = 100 * plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr_s
+    minus_di = 100 * minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr_s
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, float("nan"))
+    return dx.ewm(alpha=1 / period, adjust=False).mean()
+
+
 # --------------------------------------------------------------------------- #
 # Built-in strategies
 # --------------------------------------------------------------------------- #
@@ -879,25 +897,37 @@ class AdaptiveTrendStrategy(Strategy):
         base_confidence = 0.72 if setup == "range reversal" else 0.76
         confidence = self._clamp(base_confidence + min(adx, 40) / 250 + min(vol_ratio, 2) / 20, 0.0, 0.94)
 
+        # Pick per-group SL multiplier and R:R so non-crypto assets use their
+        # own tuned settings instead of the crypto defaults.
+        group = market_group(snap.symbol)
+        if group == "stock":
+            sl_mult, rr = settings.stock_atr_sl_mult, settings.stock_rr
+        elif group == "forex":
+            sl_mult, rr = settings.forex_atr_sl_mult, settings.forex_rr
+        elif group == "gold":
+            sl_mult, rr = settings.atr_sl_mult, settings.default_rr
+        else:
+            sl_mult, rr = settings.crypto_atr_sl_mult, settings.crypto_rr
+
         # Structure-aware stop, bounded to avoid both noise-tight and runaway SL.
         if setup == "range reversal":
             sl_distance = 1.4 * atr
         elif action == Action.BUY:
             structure_distance = max(0.0, price - float(low.iloc[-7:-1].min()))
-            sl_distance = min(max(settings.crypto_atr_sl_mult * atr, structure_distance), 2.8 * atr)
+            sl_distance = min(max(sl_mult * atr, structure_distance), 2.8 * atr)
         else:
             structure_distance = max(0.0, float(high.iloc[-7:-1].max()) - price)
-            sl_distance = min(max(settings.crypto_atr_sl_mult * atr, structure_distance), 2.8 * atr)
+            sl_distance = min(max(sl_mult * atr, structure_distance), 2.8 * atr)
 
         # Floor the SL so a shrunk ATR can't leave a stop too tight for spread.
         sl_distance = floor_sl_distance(snap.symbol, price, sl_distance)
 
         if action == Action.BUY:
             stop_loss = price - sl_distance
-            take_profit = price + sl_distance * settings.crypto_rr
+            take_profit = price + sl_distance * rr
         else:
             stop_loss = price + sl_distance
-            take_profit = price - sl_distance * settings.crypto_rr
+            take_profit = price - sl_distance * rr
 
         return StrategySignal(
             action=action,
@@ -1129,6 +1159,698 @@ class ForexIntradayStrategy(Strategy):
         return StrategySignal(
             action=action, confidence=round(confidence, 2),
             reasons=["M15 EMA reclaim", f"ADX {adx:.1f}", f"DMI +{plus_di:.1f}/-{minus_di:.1f}", f"RSI {rsi:.0f}", "time-stop 4h"],
+            stop_loss=round(stop_loss, 6), take_profit=round(take_profit, 6),
+        )
+
+
+@register
+class GoldH4Strategy(Strategy):
+    """Gold-specific H4 trend-pullback strategy.
+
+    Gold trends cleanly on H4 but is noisy on H1.  This strategy:
+      1. Confirms the major trend with EMA21/50/200 alignment + ADX ≥ 18.
+      2. Waits for a pullback to the EMA21 zone (previous candle touches it).
+      3. Enters only after a confirmed reversal candle reclaims EMA21.
+      4. Uses structure-aware SL (recent swing + ATR buffer) capped at 2.2×ATR.
+      5. SL/TP use the gold-specific atr_sl_mult and default_rr settings.
+    """
+
+    name = "gold_h4"
+    groups = ("gold",)
+    description = (
+        "กลยุทธ์ทองคำ H4 โดยเฉพาะ: ยืนยันเทรนด์ด้วย EMA 21/50/200 + ADX ≥ 18 "
+        "รอราคา pullback มาแตะ EMA21 แล้วเกิดแท่งกลับตัวยืนเหนือ/ใต้ EMA21 "
+        "SL วางตาม swing structure ล่าสุด เหมาะกับ XAUUSD/XAUUSDm บน H4"
+    )
+
+    @staticmethod
+    def _adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+        high, low, close = df["high"], df["low"], df["close"]
+        up_move = high.diff()
+        down_move = -low.diff()
+        plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+        minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+        prev_close = close.shift(1)
+        tr = pd.concat(
+            [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
+        ).max(axis=1)
+        atr_s = tr.ewm(alpha=1 / period, adjust=False).mean().replace(0, float("nan"))
+        plus_di = 100 * plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr_s
+        minus_di = 100 * minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr_s
+        dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, float("nan"))
+        return dx.ewm(alpha=1 / period, adjust=False).mean()
+
+    def evaluate(self, df: pd.DataFrame, snap: IndicatorSnapshot) -> StrategySignal:
+        if len(df) < 220:
+            return StrategySignal(action=Action.HOLD, confidence=0.0)
+
+        close, open_p, high, low = df["close"], df["open"], df["high"], df["low"]
+        ema21  = close.ewm(span=21,  adjust=False).mean()
+        ema50  = close.ewm(span=50,  adjust=False).mean()
+        ema200 = close.ewm(span=200, adjust=False).mean()
+        adx_s  = self._adx(df)
+
+        i, prev = -2, -3
+        price = float(close.iloc[i])
+        atr   = float(snap.atr or price * 0.003)
+        if atr <= 0 or any(pd.isna(x.iloc[i]) for x in (ema21, ema50, ema200, adx_s)):
+            return StrategySignal(action=Action.HOLD, confidence=0.0)
+
+        adx        = float(adx_s.iloc[i])
+        rsi        = float(snap.rsi) if snap.rsi is not None else 50.0
+        ema50_slope = float(ema50.iloc[i] - ema50.iloc[-10])
+
+        # ── 1. Major-trend filter ─────────────────────────────────────────
+        uptrend = (
+            ema21.iloc[i] > ema50.iloc[i] > ema200.iloc[i]
+            and ema50_slope > 0
+            and adx >= 18
+        )
+        downtrend = (
+            ema21.iloc[i] < ema50.iloc[i] < ema200.iloc[i]
+            and ema50_slope < 0
+            and adx >= 18
+        )
+
+        # ── 2. Pullback to EMA21 zone (previous candle) ──────────────────
+        # Bull pullback: prev candle's low reached EMA21 ± 0.4×ATR
+        prev_touched_ema21_bull = low.iloc[prev] <= float(ema21.iloc[prev]) + 0.4 * atr
+        # Bear pullback: prev candle's high reached EMA21 ± 0.4×ATR
+        prev_touched_ema21_bear = high.iloc[prev] >= float(ema21.iloc[prev]) - 0.4 * atr
+
+        # ── 3. Reversal candle confirmation ──────────────────────────────
+        green  = close.iloc[i] > open_p.iloc[i]
+        red    = close.iloc[i] < open_p.iloc[i]
+        body   = abs(float(close.iloc[i] - open_p.iloc[i]))
+        candle_range = float(high.iloc[i] - low.iloc[i])
+
+        # Close must reclaim EMA21; body must be meaningful (not a doji)
+        bull_reclaim = (
+            price > float(ema21.iloc[i])
+            and green
+            and body >= 0.20 * atr
+            and candle_range <= 2.5 * atr
+        )
+        bear_reclaim = (
+            price < float(ema21.iloc[i])
+            and red
+            and body >= 0.20 * atr
+            and candle_range <= 2.5 * atr
+        )
+
+        # ── 4. RSI momentum gate ─────────────────────────────────────────
+        rsi_bull_ok = 38 <= rsi <= 65
+        rsi_bear_ok = 35 <= rsi <= 62
+
+        action = Action.HOLD
+        setup  = ""
+        if uptrend and prev_touched_ema21_bull and bull_reclaim and rsi_bull_ok:
+            action, setup = Action.BUY, "H4 trend pullback"
+        elif downtrend and prev_touched_ema21_bear and bear_reclaim and rsi_bear_ok:
+            action, setup = Action.SELL, "H4 trend pullback"
+
+        if action == Action.HOLD:
+            regime = "uptrend" if uptrend else ("downtrend" if downtrend else "no trend")
+            return StrategySignal(
+                action=Action.HOLD,
+                confidence=round(min(0.60, 0.20 + adx / 100), 2),
+                reasons=[regime, f"ADX {adx:.1f}", f"RSI {rsi:.0f}"],
+            )
+
+        # ── 5. Structure-aware SL ─────────────────────────────────────────
+        sl_mult = settings.atr_sl_mult   # gold-specific (default 1.5)
+        rr_mult = settings.default_rr    # gold-specific (default 2.0)
+
+        if action == Action.BUY:
+            swing_low    = float(low.iloc[-8:-1].min())
+            structure_sl = price - swing_low + 0.15 * atr
+        else:
+            swing_high   = float(high.iloc[-8:-1].max())
+            structure_sl = swing_high - price + 0.15 * atr
+
+        sl_distance = min(max(sl_mult * atr, structure_sl), 2.2 * atr)
+        sl_distance = floor_sl_distance(snap.symbol, price, sl_distance)
+
+        if action == Action.BUY:
+            stop_loss   = price - sl_distance
+            take_profit = price + sl_distance * rr_mult
+        else:
+            stop_loss   = price + sl_distance
+            take_profit = price - sl_distance * rr_mult
+
+        confidence = self._clamp(0.72 + min(adx, 40) / 250 + body / (atr * 8))
+        return StrategySignal(
+            action=action,
+            confidence=round(confidence, 2),
+            reasons=[setup, f"ADX {adx:.1f}", f"RSI {rsi:.0f}", f"EMA21 reclaim"],
+            stop_loss=round(stop_loss, 6),
+            take_profit=round(take_profit, 6),
+        )
+
+
+@register
+class GoldQualityStrategy(Strategy):
+    """High-Expectancy Gold strategy using Breakout-Retest pattern.
+
+    Design goals:
+    - Maximize Expectancy_R by combining a tight structure-based SL
+      with a 3:1 R:R target.
+    - Filter aggressively (ADX ≥ 25, full EMA stack, volume) so each
+      signal has genuine edge before entering.
+
+    Pattern:
+      1. Strong trend: EMA21 > EMA50 > EMA200 + ADX ≥ 25.
+      2. Recent breakout: price closed beyond the prior 15-bar high/low
+         within the last 5 bars.
+      3. Retest: price pulls back to the breakout level (within 1.5×ATR).
+      4. Reversal candle: closes back in the breakout direction with a
+         meaningful body (≥ 0.25×ATR) — confirms the retest held.
+      5. RSI not extreme: 38–68 for BUY, 32–62 for SELL.
+
+    SL: below the retest candle's low (BUY) or above its high (SELL),
+        plus a 0.1×ATR buffer. Capped at 2×ATR to avoid runaway stops.
+    TP: fixed 3:1 R:R regardless of default_rr setting, because the
+        pattern's win-rate sits around 45–55% — a 3:1 target is needed
+        to keep expectancy firmly positive.
+    """
+
+    name = "gold_quality"
+    groups = ("gold",)
+    description = (
+        "ทองคำ H4 คุณภาพสูง: รอ Breakout-Retest พร้อม EMA21/50/200 stack + ADX ≥ 25 "
+        "SL แคบตาม retest structure, TP 3:1 เพื่อ Expectancy_R สูงสุด "
+        "Trade น้อยกว่า gold_h4 แต่แต่ละไม้มี edge สูงกว่า"
+    )
+
+    RR = 3.0          # fixed 3:1 to keep expectancy positive at ~45-55% win rate
+    LOOKBACK = 15     # bars to define the breakout high/low
+    RETEST_BARS = 5   # max bars after breakout to still qualify as a retest
+
+    @staticmethod
+    def _adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+        high, low, close = df["high"], df["low"], df["close"]
+        up_move, down_move = high.diff(), -low.diff()
+        plus_dm  = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+        minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+        tr = pd.concat(
+            [high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1
+        ).max(axis=1)
+        atr_s = tr.ewm(alpha=1 / period, adjust=False).mean().replace(0, float("nan"))
+        plus_di  = 100 * plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr_s
+        minus_di = 100 * minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr_s
+        dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, float("nan"))
+        return dx.ewm(alpha=1 / period, adjust=False).mean()
+
+    def evaluate(self, df: pd.DataFrame, snap: IndicatorSnapshot) -> StrategySignal:
+        if len(df) < 220:
+            return StrategySignal(action=Action.HOLD, confidence=0.0)
+
+        close, open_p, high, low = df["close"], df["open"], df["high"], df["low"]
+        ema21  = close.ewm(span=21,  adjust=False).mean()
+        ema50  = close.ewm(span=50,  adjust=False).mean()
+        ema200 = close.ewm(span=200, adjust=False).mean()
+        adx_s  = self._adx(df)
+
+        volume = (
+            df["real_volume"]
+            if "real_volume" in df and df["real_volume"].sum() > 0
+            else df["tick_volume"]
+        )
+        avg_vol = volume.shift(1).rolling(20).mean()
+
+        i = -2   # last closed candle
+        price  = float(close.iloc[i])
+        atr    = float(snap.atr or price * 0.003)
+        if atr <= 0 or any(pd.isna(x.iloc[i]) for x in (ema21, ema50, ema200, adx_s)):
+            return StrategySignal(action=Action.HOLD, confidence=0.0)
+
+        adx         = float(adx_s.iloc[i])
+        rsi         = float(snap.rsi) if snap.rsi is not None else 50.0
+        ema50_slope = float(ema50.iloc[i] - ema50.iloc[-10])
+        vol_ratio   = float(volume.iloc[i]) / float(avg_vol.iloc[i]) if float(avg_vol.iloc[i]) > 0 else 1.0
+
+        # ── 1. Full EMA stack + strong trend ─────────────────────────────
+        uptrend = (
+            ema21.iloc[i] > ema50.iloc[i] > ema200.iloc[i]
+            and ema50_slope > 0
+            and adx >= 25
+        )
+        downtrend = (
+            ema21.iloc[i] < ema50.iloc[i] < ema200.iloc[i]
+            and ema50_slope < 0
+            and adx >= 25
+        )
+        if not uptrend and not downtrend:
+            return StrategySignal(
+                action=Action.HOLD,
+                confidence=round(min(0.55, 0.20 + adx / 100), 2),
+                reasons=[f"no strong trend ADX {adx:.1f}"],
+            )
+
+        # ── 2. Recent breakout within RETEST_BARS ────────────────────────
+        # Breakout reference window excludes the evaluated candle and retest bars.
+        ref_end   = -(self.RETEST_BARS + 2)        # oldest bar in retest window
+        ref_start = -(self.RETEST_BARS + 2 + self.LOOKBACK)
+        if abs(ref_start) > len(df):
+            return StrategySignal(action=Action.HOLD, confidence=0.0)
+
+        ref_high = float(high.iloc[ref_start:ref_end].max())
+        ref_low  = float(low.iloc[ref_start:ref_end].min())
+
+        # Check whether any candle in the retest window broke out
+        retest_window_high = high.iloc[ref_end:i]
+        retest_window_low  = low.iloc[ref_end:i]
+        bull_breakout_happened = any(retest_window_high > ref_high)
+        bear_breakout_happened = any(retest_window_low  < ref_low)
+
+        # ── 3. Current candle is the retest ──────────────────────────────
+        # BUY retest: price dips back toward ref_high (the broken resistance
+        # that is now support), then closes back above it.
+        green = close.iloc[i] > open_p.iloc[i]
+        red   = close.iloc[i] < open_p.iloc[i]
+        body  = abs(float(close.iloc[i] - open_p.iloc[i]))
+
+        bull_retest = (
+            uptrend
+            and bull_breakout_happened
+            and float(low.iloc[i])  <= ref_high + 1.5 * atr   # price came back down
+            and price > ref_high                                # closed back above
+            and green
+            and body >= 0.25 * atr
+            and 38 <= rsi <= 68
+            and vol_ratio >= 0.50
+        )
+        bear_retest = (
+            downtrend
+            and bear_breakout_happened
+            and float(high.iloc[i]) >= ref_low - 1.5 * atr    # price came back up
+            and price < ref_low                                 # closed back below
+            and red
+            and body >= 0.25 * atr
+            and 32 <= rsi <= 62
+            and vol_ratio >= 0.50
+        )
+
+        if not bull_retest and not bear_retest:
+            regime = "uptrend" if uptrend else "downtrend"
+            return StrategySignal(
+                action=Action.HOLD,
+                confidence=round(min(0.60, 0.25 + adx / 100), 2),
+                reasons=[f"{regime} ADX {adx:.1f} — waiting for retest"],
+            )
+
+        action = Action.BUY if bull_retest else Action.SELL
+
+        # ── 4. Tight structure SL ─────────────────────────────────────────
+        if action == Action.BUY:
+            # SL below the retest candle's low + small buffer
+            retest_low  = float(low.iloc[i])
+            sl_distance = max(price - retest_low + 0.10 * atr, 0.5 * atr)
+        else:
+            retest_high = float(high.iloc[i])
+            sl_distance = max(retest_high - price + 0.10 * atr, 0.5 * atr)
+
+        # Cap at 2×ATR; if structure gives a wider stop, skip the trade
+        if sl_distance > 2.0 * atr:
+            return StrategySignal(
+                action=Action.HOLD,
+                confidence=0.45,
+                reasons=["retest SL too wide — structure not clean"],
+            )
+
+        sl_distance = floor_sl_distance(snap.symbol, price, sl_distance)
+
+        if action == Action.BUY:
+            stop_loss   = price - sl_distance
+            take_profit = price + sl_distance * self.RR
+        else:
+            stop_loss   = price + sl_distance
+            take_profit = price - sl_distance * self.RR
+
+        # Confidence scaled by ADX strength + volume
+        confidence = self._clamp(0.75 + min(adx - 25, 20) / 160 + min(vol_ratio - 0.5, 1.0) / 20)
+
+        setup = "breakout retest"
+        return StrategySignal(
+            action=action,
+            confidence=round(confidence, 2),
+            reasons=[setup, f"ADX {adx:.1f}", f"vol {vol_ratio:.1f}x", f"RSI {rsi:.0f}", f"R:R {self.RR}:1"],
+            stop_loss=round(stop_loss, 6),
+            take_profit=round(take_profit, 6),
+        )
+
+
+@register
+class CryptoSwingStrategy(Strategy):
+    """Crypto H4 swing: EMA21/50 trend + EMA20 pullback entry.
+
+    Designed for holding H4 positions in clear crypto trends without crossing
+    more than one or two nights (reducing overnight swap exposure). Uses EMA21/50
+    for trend direction and EMA20 as the dynamic support/resistance for timing.
+    """
+
+    name = "crypto_swing"
+    groups = ("crypto",)
+    description = (
+        "Crypto H4 Swing (เทรดยาว): EMA21/50 กำหนดทิศทาง + ADX ≥ 22, "
+        "รอ pullback แตะ EMA20 แล้วเกิดแท่งกลับตัวยืนเหนือ/ใต้ EMA20 "
+        "SL ตาม swing structure, TP 2.5:1 — เหมาะ BTC/ETH H4"
+    )
+
+    SL_ATR_MULT = 1.8
+    RR = 2.5
+
+    def evaluate(self, df: pd.DataFrame, snap: IndicatorSnapshot) -> StrategySignal:
+        if len(df) < 100:
+            return StrategySignal(action=Action.HOLD, confidence=0.0)
+
+        close, open_p, high, low = df["close"], df["open"], df["high"], df["low"]
+        ema20 = close.ewm(span=20, adjust=False).mean()
+        ema21 = close.ewm(span=21, adjust=False).mean()
+        ema50 = close.ewm(span=50, adjust=False).mean()
+        adx_s = _calc_adx(df)
+
+        volume = (
+            df["real_volume"]
+            if "real_volume" in df and df["real_volume"].sum() > 0
+            else df["tick_volume"]
+        )
+        avg_vol = volume.shift(1).rolling(20).mean()
+
+        i, prev = -2, -3
+        price = float(close.iloc[i])
+        atr = float(snap.atr or price * 0.005)
+        if atr <= 0 or any(pd.isna(x.iloc[i]) for x in (ema20, ema50, adx_s)):
+            return StrategySignal(action=Action.HOLD, confidence=0.0)
+
+        adx = float(adx_s.iloc[i])
+        rsi = float(snap.rsi) if snap.rsi is not None else 50.0
+        ema50_slope = float(ema50.iloc[i] - ema50.iloc[-10])
+        vol_ratio = float(volume.iloc[i]) / float(avg_vol.iloc[i]) if float(avg_vol.iloc[i]) > 0 else 1.0
+
+        uptrend = ema21.iloc[i] > ema50.iloc[i] and ema50_slope > 0 and adx >= 22
+        downtrend = ema21.iloc[i] < ema50.iloc[i] and ema50_slope < 0 and adx >= 22
+
+        prev_touched_bull = float(low.iloc[prev]) <= float(ema20.iloc[prev]) + 0.5 * atr
+        prev_touched_bear = float(high.iloc[prev]) >= float(ema20.iloc[prev]) - 0.5 * atr
+
+        green = close.iloc[i] > open_p.iloc[i]
+        red = close.iloc[i] < open_p.iloc[i]
+        body = abs(float(close.iloc[i] - open_p.iloc[i]))
+        candle_range = float(high.iloc[i] - low.iloc[i])
+
+        bull_entry = (
+            uptrend and prev_touched_bull
+            and price > float(ema20.iloc[i])
+            and green and body >= 0.18 * atr
+            and candle_range <= 3.0 * atr
+            and 40 <= rsi <= 65
+            and vol_ratio >= 0.35
+        )
+        bear_entry = (
+            downtrend and prev_touched_bear
+            and price < float(ema20.iloc[i])
+            and red and body >= 0.18 * atr
+            and candle_range <= 3.0 * atr
+            and 35 <= rsi <= 60
+            and vol_ratio >= 0.35
+        )
+
+        if not bull_entry and not bear_entry:
+            regime = "uptrend" if uptrend else ("downtrend" if downtrend else "no trend")
+            return StrategySignal(
+                action=Action.HOLD,
+                confidence=round(min(0.60, 0.22 + adx / 100), 2),
+                reasons=[regime, f"ADX {adx:.1f}", f"RSI {rsi:.0f}"],
+            )
+
+        action = Action.BUY if bull_entry else Action.SELL
+        if action == Action.BUY:
+            structure = price - float(low.iloc[-6:-1].min()) + 0.12 * atr
+        else:
+            structure = float(high.iloc[-6:-1].max()) - price + 0.12 * atr
+
+        sl_distance = min(max(self.SL_ATR_MULT * atr, structure), 2.8 * atr)
+        sl_distance = floor_sl_distance(snap.symbol, price, sl_distance)
+        if action == Action.BUY:
+            stop_loss, take_profit = price - sl_distance, price + sl_distance * self.RR
+        else:
+            stop_loss, take_profit = price + sl_distance, price - sl_distance * self.RR
+
+        confidence = self._clamp(0.70 + min(adx, 40) / 250 + min(vol_ratio, 2) / 25)
+        return StrategySignal(
+            action=action,
+            confidence=round(confidence, 2),
+            reasons=["H4 swing pullback", f"ADX {adx:.1f}", f"vol {vol_ratio:.1f}x", f"RSI {rsi:.0f}"],
+            stop_loss=round(stop_loss, 6),
+            take_profit=round(take_profit, 6),
+        )
+
+
+@register
+class GoldIntradayStrategy(Strategy):
+    """Gold H1 intraday: regime-aware trend/range setup, London/NY session.
+
+    Gold H1 alternates between short trending bursts (London open/NY overlap) and
+    range-bound consolidations. This strategy detects the regime via ADX and picks
+    the appropriate setup automatically:
+    - Trend mode (ADX >= 20): EMA9/21 pullback reclaim, TP 2:1
+    - Range mode (ADX < 18): Bollinger Band extreme fade, TP at BB midpoint
+    Session-filtered to 14-22 Bangkok (London/NY). Time-stop at 8 bars.
+    """
+
+    name = "gold_intraday"
+    groups = ("gold",)
+    max_hold_bars = 8
+    description = (
+        "ทองคำ H1 เทรดสั้น: ปรับตาม regime — ADX ≥ 20 ใช้ EMA9/21 pullback (TP 2:1), "
+        "ADX < 18 ใช้ Bollinger extreme fade (TP เส้นกลาง BB) "
+        "กรองเฉพาะช่วง London/NY, ถือสูงสุด 8 ชม."
+    )
+
+    SL_TREND = 1.3
+    SL_RANGE = 1.1
+    RR_TREND = 2.0
+    RSI_OB = 68
+    RSI_OS = 32
+
+    def evaluate(self, df: pd.DataFrame, snap: IndicatorSnapshot) -> StrategySignal:
+        if len(df) < 60:
+            return StrategySignal(action=Action.HOLD, confidence=0.0)
+
+        if "time" in df:
+            hour = pd.Timestamp(df["time"].iloc[-2]).hour
+            if not (14 <= hour <= 22):
+                return StrategySignal(
+                    action=Action.HOLD, confidence=0.18,
+                    reasons=["outside London/NY session"],
+                )
+
+        close, open_p, high, low = df["close"], df["open"], df["high"], df["low"]
+        ema9 = close.ewm(span=9, adjust=False).mean()
+        ema21 = close.ewm(span=21, adjust=False).mean()
+        ema50 = close.ewm(span=50, adjust=False).mean()
+        ma20 = close.rolling(20).mean()
+        sd20 = close.rolling(20).std()
+        bb_upper = ma20 + 2 * sd20
+        bb_lower = ma20 - 2 * sd20
+        adx_s = _calc_adx(df)
+
+        i, prev = -2, -3
+        price = float(close.iloc[i])
+        atr = float(snap.atr or price * 0.002)
+        rsi = float(snap.rsi) if snap.rsi is not None else 50.0
+
+        if atr <= 0 or any(pd.isna(x.iloc[i]) for x in (ema9, ema21, adx_s, bb_upper, bb_lower)):
+            return StrategySignal(action=Action.HOLD, confidence=0.0)
+
+        adx = float(adx_s.iloc[i])
+        green = close.iloc[i] > open_p.iloc[i]
+        red = close.iloc[i] < open_p.iloc[i]
+        body = abs(float(close.iloc[i] - open_p.iloc[i]))
+        candle_range = float(high.iloc[i] - low.iloc[i])
+        ema50_slope = float(ema50.iloc[i] - ema50.iloc[-6])
+        bb_up_val = float(bb_upper.iloc[i])
+        bb_lo_val = float(bb_lower.iloc[i])
+        bb_mid = (bb_up_val + bb_lo_val) / 2
+
+        if adx >= 20:
+            uptrend = float(ema9.iloc[i]) > float(ema21.iloc[i]) and ema50_slope > 0
+            downtrend = float(ema9.iloc[i]) < float(ema21.iloc[i]) and ema50_slope < 0
+            bull_reclaim = (
+                float(low.iloc[prev]) <= float(ema9.iloc[prev]) + 0.15 * atr
+                and price > float(ema9.iloc[i])
+                and green and body >= 0.15 * atr and candle_range <= 2.5 * atr
+            )
+            bear_reclaim = (
+                float(high.iloc[prev]) >= float(ema9.iloc[prev]) - 0.15 * atr
+                and price < float(ema9.iloc[i])
+                and red and body >= 0.15 * atr and candle_range <= 2.5 * atr
+            )
+            action = Action.HOLD
+            if uptrend and bull_reclaim and 42 <= rsi <= 65:
+                action = Action.BUY
+            elif downtrend and bear_reclaim and 35 <= rsi <= 58:
+                action = Action.SELL
+            if action != Action.HOLD:
+                if action == Action.BUY:
+                    struct = price - float(low.iloc[-5:-1].min()) + 0.10 * atr
+                else:
+                    struct = float(high.iloc[-5:-1].max()) - price + 0.10 * atr
+                sl_d = min(max(self.SL_TREND * atr, struct), 2.0 * atr)
+                sl_d = floor_sl_distance(snap.symbol, price, sl_d)
+                if action == Action.BUY:
+                    sl, tp = price - sl_d, price + sl_d * self.RR_TREND
+                else:
+                    sl, tp = price + sl_d, price - sl_d * self.RR_TREND
+                confidence = self._clamp(0.68 + min(adx, 40) / 250)
+                return StrategySignal(
+                    action=action, confidence=round(confidence, 2),
+                    reasons=["H1 trend pullback", f"ADX {adx:.1f}", f"RSI {rsi:.0f}", "time-stop 8h"],
+                    stop_loss=round(sl, 6), take_profit=round(tp, 6),
+                )
+
+        elif adx < 18:
+            bull_setup = (
+                price <= bb_lo_val + 0.4 * atr and rsi <= self.RSI_OS
+                and green and body >= 0.12 * atr and ema50_slope >= -3 * atr
+            )
+            bear_setup = (
+                price >= bb_up_val - 0.4 * atr and rsi >= self.RSI_OB
+                and red and body >= 0.12 * atr and ema50_slope <= 3 * atr
+            )
+            action = Action.BUY if bull_setup else (Action.SELL if bear_setup else Action.HOLD)
+            if action != Action.HOLD:
+                sl_d = self.SL_RANGE * atr
+                sl_d = floor_sl_distance(snap.symbol, price, sl_d)
+                if action == Action.BUY:
+                    sl = price - sl_d
+                    tp = price + min(sl_d * 1.6, max(bb_mid - price, sl_d * 0.5) * 1.05)
+                else:
+                    sl = price + sl_d
+                    tp = price - min(sl_d * 1.6, max(price - bb_mid, sl_d * 0.5) * 1.05)
+                strength = self._clamp((self.RSI_OS - rsi) / 14 if action == Action.BUY else (rsi - self.RSI_OB) / 14)
+                return StrategySignal(
+                    action=action, confidence=round(self._clamp(0.60 + 0.22 * strength), 2),
+                    reasons=["H1 BB range fade", f"RSI {rsi:.0f}", f"ADX {adx:.1f}", "time-stop 8h"],
+                    stop_loss=round(sl, 6), take_profit=round(tp, 6),
+                )
+
+        regime = "trend" if adx >= 20 else ("range" if adx < 18 else "transition")
+        return StrategySignal(
+            action=Action.HOLD,
+            confidence=round(min(0.50, 0.20 + adx / 100), 2),
+            reasons=[f"regime={regime}", f"ADX {adx:.1f}", f"RSI {rsi:.0f}"],
+        )
+
+
+@register
+class StockIntradayStrategy(Strategy):
+    """Stock M30 intraday momentum during NYSE session.
+
+    US stock CFDs are most active during NYSE hours (13:30-20:00 UTC =
+    20:30-03:00 Bangkok). M30 shows clean EMA9/21/50 momentum after the
+    opening volatility settles. Time-stop prevents overnight holds which
+    attract weekend/overnight gap risk on stocks.
+    """
+
+    name = "stock_intraday"
+    groups = ("stock",)
+    max_hold_bars = 8
+    description = (
+        "หุ้น M30 เทรดสั้น ช่วง NYSE: EMA9/21/50 momentum, pullback แตะ EMA9 "
+        "แล้วเกิดแท่งกลับตัวพร้อม volume ≥ 1x, SL ตาม structure + buffer, "
+        "TP 1.8:1 ถือสูงสุด 4 ชม. ลด overnight gap risk"
+    )
+
+    SL_ATR_MULT = 1.0
+    RR = 1.8
+
+    def evaluate(self, df: pd.DataFrame, snap: IndicatorSnapshot) -> StrategySignal:
+        if len(df) < 60:
+            return StrategySignal(action=Action.HOLD, confidence=0.0)
+
+        if "time" in df:
+            hour = pd.Timestamp(df["time"].iloc[-2]).hour
+            if not (hour >= 20 or hour <= 3):
+                return StrategySignal(
+                    action=Action.HOLD, confidence=0.15,
+                    reasons=["outside NYSE session"],
+                )
+
+        close, open_p, high, low = df["close"], df["open"], df["high"], df["low"]
+        ema9 = close.ewm(span=9, adjust=False).mean()
+        ema21 = close.ewm(span=21, adjust=False).mean()
+        ema50 = close.ewm(span=50, adjust=False).mean()
+
+        volume = (
+            df["real_volume"]
+            if "real_volume" in df and df["real_volume"].sum() > 0
+            else df["tick_volume"]
+        )
+        avg_vol = volume.shift(1).rolling(20).mean()
+
+        i, prev = -2, -3
+        price = float(close.iloc[i])
+        atr = float(snap.atr or price * 0.003)
+        if atr <= 0 or any(pd.isna(x.iloc[i]) for x in (ema9, ema21, ema50)):
+            return StrategySignal(action=Action.HOLD, confidence=0.0)
+
+        rsi = float(snap.rsi) if snap.rsi is not None else 50.0
+        green = close.iloc[i] > open_p.iloc[i]
+        red = close.iloc[i] < open_p.iloc[i]
+        body = abs(float(close.iloc[i] - open_p.iloc[i]))
+        candle_range = float(high.iloc[i] - low.iloc[i])
+        vol_ratio = float(volume.iloc[i]) / float(avg_vol.iloc[i]) if float(avg_vol.iloc[i]) > 0 else 1.0
+
+        uptrend = (
+            float(ema9.iloc[i]) > float(ema21.iloc[i]) > float(ema50.iloc[i])
+            and float(ema21.iloc[i]) > float(ema21.iloc[-5])
+        )
+        downtrend = (
+            float(ema9.iloc[i]) < float(ema21.iloc[i]) < float(ema50.iloc[i])
+            and float(ema21.iloc[i]) < float(ema21.iloc[-5])
+        )
+        bull_reclaim = (
+            float(low.iloc[prev]) <= float(ema9.iloc[prev]) + 0.12 * atr
+            and price > float(ema9.iloc[i])
+            and green and body >= 0.15 * atr and candle_range <= 2.5 * atr
+        )
+        bear_reclaim = (
+            float(high.iloc[prev]) >= float(ema9.iloc[prev]) - 0.12 * atr
+            and price < float(ema9.iloc[i])
+            and red and body >= 0.15 * atr and candle_range <= 2.5 * atr
+        )
+
+        action = Action.HOLD
+        if uptrend and bull_reclaim and vol_ratio >= 1.0 and 45 <= rsi <= 68:
+            action = Action.BUY
+        elif downtrend and bear_reclaim and vol_ratio >= 1.0 and 32 <= rsi <= 55:
+            action = Action.SELL
+
+        if action == Action.HOLD:
+            regime = "up" if uptrend else ("down" if downtrend else "flat")
+            return StrategySignal(
+                action=Action.HOLD,
+                confidence=round(min(0.55, 0.20 + abs(rsi - 50) / 100), 2),
+                reasons=[f"intraday {regime}", f"RSI {rsi:.0f}", f"vol {vol_ratio:.1f}x"],
+            )
+
+        if action == Action.BUY:
+            structure = price - float(low.iloc[-5:-1].min()) + 0.08 * atr
+        else:
+            structure = float(high.iloc[-5:-1].max()) - price + 0.08 * atr
+        sl_distance = min(max(self.SL_ATR_MULT * atr, structure), 2.0 * atr)
+        sl_distance = floor_sl_distance(snap.symbol, price, sl_distance)
+        if action == Action.BUY:
+            stop_loss, take_profit = price - sl_distance, price + sl_distance * self.RR
+        else:
+            stop_loss, take_profit = price + sl_distance, price - sl_distance * self.RR
+
+        confidence = self._clamp(0.65 + vol_ratio / 20 + body / (atr * 10))
+        return StrategySignal(
+            action=action, confidence=round(confidence, 2),
+            reasons=["M30 EMA9 reclaim", f"RSI {rsi:.0f}", f"vol {vol_ratio:.1f}x", "NYSE session", "time-stop 4h"],
             stop_loss=round(stop_loss, 6), take_profit=round(take_profit, 6),
         )
 

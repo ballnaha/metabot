@@ -25,6 +25,8 @@ import {
   DialogContent,
   DialogTitle,
   IconButton,
+  MenuItem,
+  Select,
   Stack,
   Table,
   TableBody,
@@ -40,6 +42,7 @@ import {
   Activity,
   Layers,
   Coins,
+  FlaskConical,
   TrendingUp,
   ArrowUp,
   ArrowDown,
@@ -54,6 +57,7 @@ import {
   Zap,
   Info,
 } from "lucide-react";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer } from "recharts";
 
 const STRATEGY_CONDITIONS: Record<string, {
   label: string;
@@ -292,12 +296,15 @@ const entryLabel = (entry?: string) =>
 
 const strategyLabel = (name: string) =>
   ({
-    adaptive_trend: "Adaptive Trend",
+    crypto_swing:    "Crypto H4 Swing",
+    crypto_scalp:    "Crypto Scalp (M15)",
+    adaptive_trend:  "Adaptive Trend",
     squeeze_breakout: "Squeeze Breakout",
-    ema_macd_rsi: "พื้นฐาน: แนวโน้ม + แรงส่ง + RSI",
-    trend: "ตามเทรนด์",
-    mean_reversion: "รอเด้งกลับ",
-    breakout: "ทะลุกรอบ",
+    supertrend_ema:  "SuperTrend + EMA",
+    ema_macd_rsi:    "EMA + MACD + RSI",
+    trend:           "Trend Follow",
+    mean_reversion:  "Mean Reversion",
+    breakout:        "Breakout",
   }[name] ?? name);
 
 function SectionTitle({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
@@ -317,6 +324,16 @@ export default function CryptoPage() {
   // Mobile collapse state — collapsed by default on mobile
   const [priceTableOpen, setPriceTableOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+
+  // Backtest
+  const [btOpen, setBtOpen] = useState(false);
+  const [btSymbol, setBtSymbol] = useState("");
+  const [btTimeframe, setBtTimeframe] = useState("H4");
+  const [btStrategy, setBtStrategy] = useState("");
+  const [btBars, setBtBars] = useState(1000);
+  const [btSpread, setBtSpread] = useState<string>("");
+  const [btLoading, setBtLoading] = useState(false);
+  const [btResult, setBtResult] = useState<any>(null);
 
   const [account, setAccount] = useState<Account | null>(null);
   const [connected, setConnected] = useState<boolean | null>(null);
@@ -638,6 +655,22 @@ export default function CryptoPage() {
   const manualOpenPl = cryptoPositions.filter((p) => !_cBotMagics.has(p.magic)).reduce((acc, p) => acc + p.profit, 0);
   const botRealizedPl = cryptoClosedHistory.filter((d) => _cBotMagics.has(d.magic)).reduce((acc, d) => acc + d.profit, 0);
   const manualRealizedPl = cryptoClosedHistory.filter((d) => !_cBotMagics.has(d.magic)).reduce((acc, d) => acc + d.profit, 0);
+
+  async function runBacktest() {
+    if (!btSymbol) return;
+    setBtLoading(true);
+    setBtResult(null);
+    try {
+      const body: any = { symbol: btSymbol, timeframe: btTimeframe, strategy: btStrategy || undefined, bars: btBars, include_details: true };
+      if (btSpread !== "") body.spread_points = parseFloat(btSpread);
+      const data = await api("backtest", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      setBtResult(data);
+    } catch (e: any) {
+      toastr.error(`Backtest ล้มเหลว: ${e.message}`);
+    } finally {
+      setBtLoading(false);
+    }
+  }
 
   // Coin screener: analyze every tradeable crypto symbol (read-only) and rank
   async function runScan() {
@@ -1303,6 +1336,16 @@ export default function CryptoPage() {
                         variant="outlined"
                         sx={{ fontSize: 10, height: 20, px: 0, borderColor: "rgba(59, 130, 246, 0.3)", color: "#60a5fa", bgcolor: "rgba(59, 130, 246, 0.04)", display: { xs: "none", sm: "inline-flex" } }}
                       />
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        startIcon={<FlaskConical size={14} />}
+                        disabled={cryptoSymbols.length === 0}
+                        onClick={() => { setBtSymbol(cryptoSymbols[0] || ""); setBtStrategy(settingsForm.crypto_strategy || ""); setBtTimeframe(settingsForm.crypto_timeframe || "H4"); setBtResult(null); setBtOpen(true); }}
+                        sx={{ borderColor: "rgba(129,140,248,0.4)", color: "#818cf8", fontSize: "0.72rem", "&:hover": { borderColor: "#818cf8", bgcolor: "rgba(129,140,248,0.06)" }, display: { xs: "none", sm: "inline-flex" } }}
+                      >
+                        Backtest
+                      </Button>
                     </Stack>
                   </Stack>
 
@@ -2104,6 +2147,133 @@ export default function CryptoPage() {
             startIcon={closingTicket ? <CircularProgress size={16} color="inherit" /> : undefined}
           >
             ปิด Position
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Crypto Backtest Dialog ────────────────────────────────── */}
+      <Dialog open={btOpen} onClose={() => { if (!btLoading) setBtOpen(false); }} maxWidth="md" fullWidth
+        slotProps={{ paper: { sx: { bgcolor: "#0d1321", border: "1px solid rgba(129,140,248,0.18)", backgroundImage: "none" } } }}>
+        <DialogTitle sx={{ pb: 1 }}>
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+            <FlaskConical size={18} color="#818cf8" />
+            <Typography sx={{ fontWeight: 800, color: "#f1f5f9" }}>Crypto Backtest</Typography>
+          </Stack>
+        </DialogTitle>
+        <DialogContent dividers sx={{ borderColor: "rgba(255,255,255,0.07)" }}>
+          <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr 1fr", sm: "2fr 1fr 2fr 1fr" }, gap: 1.5, mb: 2 }}>
+            <Box>
+              <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 600, display: "block", mb: 0.5 }}>Symbol</Typography>
+              <Select size="small" fullWidth value={btSymbol} onChange={(e) => setBtSymbol(e.target.value)}
+                sx={{ bgcolor: "rgba(255,255,255,0.02)", "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.1)" }, "& .MuiSelect-select": { color: "#fff" } }}>
+                {cryptoSymbols.map((s) => <MenuItem key={s} value={s}>{s}</MenuItem>)}
+              </Select>
+            </Box>
+            <Box>
+              <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 600, display: "block", mb: 0.5 }}>Timeframe</Typography>
+              <Select size="small" fullWidth value={btTimeframe} onChange={(e) => setBtTimeframe(e.target.value)}
+                sx={{ bgcolor: "rgba(255,255,255,0.02)", "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.1)" }, "& .MuiSelect-select": { color: "#fff" } }}>
+                {["M15","H1","H4","D1"].map((tf) => <MenuItem key={tf} value={tf}>{tf}</MenuItem>)}
+              </Select>
+            </Box>
+            <Box>
+              <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 600, display: "block", mb: 0.5 }}>Strategy</Typography>
+              <Select size="small" fullWidth value={btStrategy} onChange={(e) => setBtStrategy(e.target.value)}
+                sx={{ bgcolor: "rgba(255,255,255,0.02)", "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.1)" }, "& .MuiSelect-select": { color: "#fff" } }}>
+                {strategiesForGroup(strategies, "crypto").map((s) => <MenuItem key={s.name} value={s.name}>{strategyLabel(s.name)}</MenuItem>)}
+              </Select>
+            </Box>
+            <Box>
+              <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 600, display: "block", mb: 0.5 }}>Bars</Typography>
+              <Select size="small" fullWidth value={btBars} onChange={(e) => setBtBars(Number(e.target.value))}
+                sx={{ bgcolor: "rgba(255,255,255,0.02)", "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.1)" }, "& .MuiSelect-select": { color: "#fff" } }}>
+                {[500,1000,2000,3000].map((b) => <MenuItem key={b} value={b}>{b} แท่ง</MenuItem>)}
+              </Select>
+            </Box>
+          </Box>
+          {btLoading && <Box sx={{ py: 6, textAlign: "center" }}><CircularProgress sx={{ color: "#818cf8" }} /></Box>}
+          {btResult && !btLoading && (() => {
+            const r = btResult;
+            const edge = r.expectancy_r > 0;
+            const equityCurve = (r.details || []).reduce((acc: {i:number;r:number}[], t: any, idx: number) => {
+              acc.push({ i: idx + 1, r: Math.round((((acc[idx-1]?.r) ?? 0) + t.r) * 100) / 100 });
+              return acc;
+            }, []);
+            const statCards = [
+              { label: "Trades",   value: r.trades,   sub: `${r.wins}W / ${r.trades - r.wins}L` },
+              { label: "Win Rate", value: `${(r.win_rate*100).toFixed(1)}%`, tone: r.win_rate >= 0.5 ? "#10b981" : "#f59e0b" },
+              { label: "Expectancy", value: `${r.expectancy_r>0?"+":""}${r.expectancy_r}R`, tone: edge?"#10b981":"#ef4444", sub: "edge ต่อไม้" },
+              { label: "Net R",    value: `${r.net_r>0?"+":""}${r.net_r}R`, tone: r.net_r>0?"#10b981":"#ef4444" },
+              { label: "Profit Factor", value: r.profit_factor.toFixed(2), tone: r.profit_factor>=1.5?"#10b981":r.profit_factor>=1?"#f59e0b":"#ef4444" },
+              { label: "Max DD",   value: `-${r.max_drawdown_r}R`, tone: r.max_drawdown_r>5?"#ef4444":"#94a3b8" },
+              { label: "Sharpe",   value: r.sharpe.toFixed(2), sub: "per-trade" },
+              { label: "Max Loss Streak", value: r.max_consecutive_losses, tone: r.max_consecutive_losses>=5?"#f59e0b":"#94a3b8", sub: "ต่อเนื่อง" },
+            ];
+            return (
+              <Box>
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 1.5 }}>
+                  <Box sx={{ px: 1.25, py: 0.5, borderRadius: 1, bgcolor: edge?"rgba(16,185,129,0.1)":"rgba(239,68,68,0.1)", border: `1px solid ${edge?"rgba(16,185,129,0.3)":"rgba(239,68,68,0.3)"}` }}>
+                    <Typography sx={{ fontSize: "0.75rem", fontWeight: 800, color: edge?"#10b981":"#ef4444" }}>{edge?"✓ มี Edge":"✗ ไม่มี Edge"}</Typography>
+                  </Box>
+                  <Typography variant="caption" sx={{ color: "#475569" }}>{r.symbol} · {r.strategy} · {btTimeframe} · {btBars} แท่ง</Typography>
+                </Stack>
+                <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 1, mb: 2 }}>
+                  {statCards.map((c) => (
+                    <Box key={c.label} sx={{ p: 1.25, borderRadius: 1, bgcolor: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                      <Typography variant="caption" sx={{ color: "#475569", display: "block", fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase" }}>{c.label}</Typography>
+                      <Typography sx={{ fontFamily: "ui-monospace,monospace", fontWeight: 800, fontSize: "1.1rem", color: c.tone||"#e2e8f0", lineHeight: 1.3 }}>{c.value}</Typography>
+                      {c.sub && <Typography variant="caption" sx={{ color: "#334155", fontSize: "0.6rem" }}>{c.sub}</Typography>}
+                    </Box>
+                  ))}
+                </Box>
+                {equityCurve.length > 1 && (
+                  <Box sx={{ mb: 2 }}>
+                    <Typography variant="caption" sx={{ color: "#64748b", fontWeight: 700, display: "block", mb: 1 }}>Equity Curve (R)</Typography>
+                    <ResponsiveContainer width="100%" height={180}>
+                      <LineChart data={equityCurve} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                        <XAxis dataKey="i" tick={{ fill: "#475569", fontSize: 10 }} tickLine={false} axisLine={false} />
+                        <YAxis tick={{ fill: "#475569", fontSize: 10 }} tickLine={false} axisLine={false} />
+                        <Tooltip contentStyle={{ background: "#0d1321", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8 }} formatter={(v: any) => [`${v}R`, "Equity"]} labelFormatter={(l) => `Trade #${l}`} />
+                        <ReferenceLine y={0} stroke="rgba(255,255,255,0.1)" />
+                        <Line type="monotone" dataKey="r" stroke={r.net_r>=0?"#10b981":"#ef4444"} dot={false} strokeWidth={2} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </Box>
+                )}
+                {r.details?.length > 0 && (
+                  <Box>
+                    <Typography variant="caption" sx={{ color: "#64748b", fontWeight: 700, display: "block", mb: 1 }}>รายการเทรดล่าสุด 20 ไม้</Typography>
+                    <Box sx={{ overflowX: "auto" }}>
+                      <Table size="small">
+                        <TableHead>
+                          <TableRow sx={{ "& th": { bgcolor: "#0a0f1e", color: "#475569", fontSize: "0.68rem", fontWeight: 700, borderBottomColor: "rgba(255,255,255,0.06)" } }}>
+                            <TableCell>#</TableCell><TableCell>Side</TableCell><TableCell align="right">Result</TableCell><TableCell>Exit</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {r.details.slice(-20).reverse().map((t: any, idx: number) => (
+                            <TableRow key={idx} sx={{ "& td": { borderBottomColor: "rgba(255,255,255,0.04)", py: 0.5 } }}>
+                              <TableCell sx={{ color: "#475569", fontSize: "0.7rem" }}>{r.details.length - idx}</TableCell>
+                              <TableCell><Chip size="small" label={t.action} color={t.action==="BUY"?"success":"error"} sx={{ height: 18, fontSize: "0.62rem", fontWeight: 800, "& .MuiChip-label": { px: 0.75 } }} /></TableCell>
+                              <TableCell align="right" sx={{ fontFamily: "ui-monospace,monospace", fontWeight: 700, fontSize: "0.82rem", color: t.r>0?"#10b981":"#ef4444" }}>{t.r>0?"+":""}{t.r}R</TableCell>
+                              <TableCell sx={{ color: "#64748b", fontSize: "0.7rem" }}>{t.reason==="tp"?"TP ✓":t.reason==="sl"?"SL ✗":"Timeout"}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </Box>
+                  </Box>
+                )}
+              </Box>
+            );
+          })()}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 2, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+          <Button disabled={btLoading} onClick={() => setBtOpen(false)} sx={{ color: "#64748b" }}>ปิด</Button>
+          <Button variant="contained" disabled={btLoading || !btSymbol} onClick={runBacktest}
+            startIcon={btLoading ? <CircularProgress size={16} color="inherit" /> : <FlaskConical size={16} />}
+            sx={{ bgcolor: "#6366f1", "&:hover": { bgcolor: "#4f46e5" }, fontWeight: 700 }}>
+            {btLoading ? "กำลัง Backtest…" : "รัน Backtest"}
           </Button>
         </DialogActions>
       </Dialog>

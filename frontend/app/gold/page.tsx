@@ -8,6 +8,7 @@ import { isCryptoSymbol } from "../lib/symbols";
 import HistoryTable, { type HistoryDeal } from "../components/HistoryTable";
 import BotLog from "../crypto/components/BotLog";
 import PnLChart from "../crypto/components/PnLChart";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer } from "recharts";
 import {
   Alert,
   Autocomplete,
@@ -27,6 +28,7 @@ import {
   IconButton,
   InputLabel,
   LinearProgress,
+  ListSubheader,
   MenuItem,
   Select,
   Stack,
@@ -44,6 +46,7 @@ import {
   Award,
   Bot,
   Filter,
+  FlaskConical,
   Gauge,
   History,
   RefreshCw,
@@ -63,11 +66,12 @@ import {
   BellOff,
   ChevronDown,
   ChevronUp,
+  Search,
 } from "lucide-react";
 
 const GOLD_DEFAULTS = {
   gold_timeframe: "H4",
-  gold_strategy: "ema_macd_rsi",
+  gold_strategy: "gold_quality",
   atr_sl_mult: 1.5,
   default_rr: 2.0,
   max_gold_open_trades: 3,
@@ -211,11 +215,37 @@ const isSilverOrOtherMetal = (sym: string) => {
 
 const strategyLabel = (name: string) =>
   ({
-    ema_macd_rsi: "EMA + MACD + RSI",
-    trend: "Trend Follow",
+    gold_quality:   "Gold Quality — Breakout Retest H4",
+    gold_h4:        "Gold H4 Pullback",
+    gold_intraday:  "Gold H1 Intraday",
+    adaptive_trend: "Adaptive Trend",
+    squeeze_breakout: "Squeeze Breakout",
+    supertrend_ema: "SuperTrend + EMA",
     mean_reversion: "Mean Reversion",
-    breakout: "Breakout",
+    ema_macd_rsi:   "EMA + MACD + RSI",
+    trend:          "Trend Follow",
+    breakout:       "Breakout",
   }[name] ?? name);
+
+const GOLD_SHORT = ["gold_intraday"];
+const GOLD_LONG  = ["gold_quality", "gold_h4"];
+
+function PriceDirection({ value, direction }: { value: string; direction: "up" | "down" | "flat" }) {
+  const color = direction === "up" ? "#10b981" : direction === "down" ? "#ef4444" : "#cbd5e1";
+  const icon = direction === "up"
+    ? <ArrowUp size={13} strokeWidth={2.4} />
+    : direction === "down"
+    ? <ArrowDown size={13} strokeWidth={2.4} />
+    : null;
+  return (
+    <Stack component="span" direction="row" spacing={0.5} sx={{ ...MONO, alignItems: "center", justifyContent: "flex-end", color, fontWeight: 700, lineHeight: 1.2, minWidth: 96, transition: "color 0.2s ease-out" }}>
+      <Box component="span">{value}</Box>
+      <Box component="span" sx={{ width: 14, height: 14, display: "inline-flex", alignItems: "center", justifyContent: "center", color, opacity: icon ? 1 : 0.35 }}>
+        {icon}
+      </Box>
+    </Stack>
+  );
+}
 
 function StatCard({
   icon,
@@ -375,6 +405,7 @@ export default function GoldPage() {
   const [positions, setPositions] = useState<Position[]>([]);
   const [history, setHistory] = useState<HistoryDeal[]>([]);
   const [ticks, setTicks] = useState<Record<string, Tick>>({});
+  const [tickDirections, setTickDirections] = useState<Record<string, { bid: "up" | "down" | "flat"; ask: "up" | "down" | "flat"; lastUpdated: number }>>({});
   const [settings, setSettings] = useState<any>({
     symbols: "",
     gold_timeframe: "H4",
@@ -449,6 +480,16 @@ export default function GoldPage() {
   // Mobile collapse state — collapsed by default on mobile
   const [priceTableOpen, setPriceTableOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+
+  // Backtest
+  const [btOpen, setBtOpen] = useState(false);
+  const [btSymbol, setBtSymbol] = useState("");
+  const [btTimeframe, setBtTimeframe] = useState("H4");
+  const [btStrategy, setBtStrategy] = useState("");
+  const [btBars, setBtBars] = useState(1000);
+  const [btSpread, setBtSpread] = useState<string>("");
+  const [btLoading, setBtLoading] = useState(false);
+  const [btResult, setBtResult] = useState<any>(null);
 
   const goldSymbols = useMemo(() => {
     const fromConfig: string[] = (settings.symbols || "")
@@ -554,7 +595,26 @@ export default function GoldPage() {
     const loadTicks = async () => {
       try {
         const data = await api(`ticks?symbols=${encodeURIComponent(goldSymbols.join(","))}`);
-        if (active) setTicks(data || {});
+        if (!active) return;
+        const now = Date.now();
+        setTicks((prevTicks) => {
+          const nextDirs: Record<string, { bid: "up" | "down" | "flat"; ask: "up" | "down" | "flat"; lastUpdated: number }> = {};
+          for (const sym of goldSymbols) {
+            const nt = data[sym];
+            const pt = prevTicks[sym];
+            if (nt && !nt.error && pt && !pt.error) {
+              nextDirs[sym] = {
+                bid: nt.bid > pt.bid ? "up" : nt.bid < pt.bid ? "down" : "flat",
+                ask: nt.ask > pt.ask ? "up" : nt.ask < pt.ask ? "down" : "flat",
+                lastUpdated: now,
+              };
+            }
+          }
+          if (Object.keys(nextDirs).length > 0) {
+            setTickDirections((pd) => ({ ...pd, ...nextDirs }));
+          }
+          return data || {};
+        });
       } catch {
         if (active) setTicks({});
       }
@@ -566,6 +626,26 @@ export default function GoldPage() {
       clearInterval(id);
     };
   }, [goldSymbols]);
+
+  useEffect(() => {
+    const active = Object.entries(tickDirections).filter(([, d]) => d.bid !== "flat" || d.ask !== "flat");
+    if (active.length === 0) return;
+    const timer = setTimeout(() => {
+      const now = Date.now();
+      setTickDirections((prev) => {
+        const next = { ...prev };
+        let changed = false;
+        for (const [sym, d] of Object.entries(next)) {
+          if (now - d.lastUpdated >= 1000 && (d.bid !== "flat" || d.ask !== "flat")) {
+            next[sym] = { bid: "flat", ask: "flat", lastUpdated: d.lastUpdated };
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [tickDirections]);
 
   const runScan = useCallback(async (notify = true) => {
     if (!goldSymbols.length) return;
@@ -679,6 +759,32 @@ export default function GoldPage() {
       toastr.error(`ปิด position ไม่สำเร็จ: ${e.message}`);
     } finally {
       setClosingTicket(null);
+    }
+  }
+
+  async function runBacktest() {
+    if (!btSymbol) return;
+    setBtLoading(true);
+    setBtResult(null);
+    try {
+      const body: any = {
+        symbol: btSymbol,
+        timeframe: btTimeframe,
+        strategy: btStrategy || undefined,
+        bars: btBars,
+        include_details: true,
+      };
+      if (btSpread !== "") body.spread_points = parseFloat(btSpread);
+      const data = await api("backtest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      setBtResult(data);
+    } catch (e: any) {
+      toastr.error(`Backtest ล้มเหลว: ${e.message}`);
+    } finally {
+      setBtLoading(false);
     }
   }
 
@@ -971,11 +1077,11 @@ export default function GoldPage() {
             })()}
 
             <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", lg: "1.35fr 0.85fr" }, gap: 2 }}>
-              <Card>
+              <Card sx={{ bgcolor: "#0d1321", border: "1px solid rgba(255,255,255,0.03)" }}>
                 <CardContent sx={{ p: 0, "&:last-child": { pb: 0 } }}>
                   <Stack
-                    direction={{ xs: "column", md: "row" }}
-                    sx={{ alignItems: { xs: "stretch", md: "center" }, justifyContent: "space-between", gap: 1.5, p: 2, cursor: { xs: "pointer", md: "default" } }}
+                    direction="row"
+                    sx={{ justifyContent: "space-between", alignItems: "center", p: { xs: 1.25, md: 2 }, gap: 1, flexWrap: "wrap", cursor: { xs: "pointer", md: "default" } }}
                     onClick={(e) => {
                       const target = e.target as HTMLElement;
                       if (window.innerWidth < 900 && !target.closest("input, button")) {
@@ -984,34 +1090,30 @@ export default function GoldPage() {
                     }}
                   >
                     <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                      <Award size={18} color="#fbbf24" />
-                      <Box>
-                        <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                          <Typography sx={{ fontWeight: 800 }}>ราคาทองและสัญญาณบอท</Typography>
-                          <Box sx={{ display: { xs: "flex", md: "none" }, color: "#475569" }}>
-                            {priceTableOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                          </Box>
-                        </Stack>
-                        <Typography variant="caption" color="text.secondary">
-                          เลือก symbol แล้วให้บอทวิเคราะห์ก่อนส่งออเดอร์
+                      <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 2 }}>
+                        <Award size={18} color="#fbbf24" />
+                        <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 700, letterSpacing: 0 }}>
+                          <Box component="span" sx={{ display: { xs: "none", md: "inline" } }}>ราคาทองและสัญญาณบอท Real-time</Box>
+                          <Box component="span" sx={{ display: { xs: "inline", md: "none" } }}>ราคา Gold</Box>
                         </Typography>
+                      </Stack>
+                      <Box sx={{ display: { xs: "flex", md: "none" }, color: "#475569", mb: 2 }}>
+                        {priceTableOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                       </Box>
                     </Stack>
-                    <Stack direction="row" spacing={1} sx={{ display: { xs: priceTableOpen ? "flex" : "none", md: "flex" } }}>
-                      <TextField
-                        size="small"
-                        value={priceSearch}
-                        onChange={(e) => setPriceSearch(e.target.value)}
-                        placeholder="ค้นหา GOLD/XAU"
-                        sx={{ minWidth: 180 }}
-                      />
-                      <Button
-                        variant="contained"
-                        startIcon={scanLoading ? <CircularProgress size={16} color="inherit" /> : <Zap size={16} />}
-                        disabled={scanLoading || goldSymbols.length === 0}
-                        onClick={() => runScan(true)}
-                      >
-                        สแกน
+                    <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", flex: { xs: "1 1 100%", md: "0 0 auto" }, display: { xs: priceTableOpen ? "flex" : "none", md: "flex" } }}>
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, height: { xs: 34, md: 38 }, px: 1, flex: 1, minWidth: { xs: 0, md: 190 }, bgcolor: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 1, transition: "border-color 0.2s", "&:focus-within": { borderColor: "rgba(251,191,36,0.5)" } }}>
+                        <Search size={13} color="#475569" />
+                        <input value={priceSearch} onChange={(e) => setPriceSearch(e.target.value)} placeholder="ค้นหา GOLD/XAU..." style={{ background: "transparent", border: "none", outline: "none", color: "#e2e8f0", fontSize: "0.82rem", width: "100%", fontFamily: "inherit" }} />
+                        {priceSearch && <Box onClick={() => setPriceSearch("")} sx={{ cursor: "pointer", color: "#475569", display: "flex", "&:hover": { color: "#94a3b8" } }}><X size={12} /></Box>}
+                      </Box>
+                      <IconButton size="small" onClick={() => runScan(true)} disabled={scanLoading || goldSymbols.length === 0} sx={{ width: { xs: 34, md: "auto" }, height: { xs: 34, md: 38 }, borderRadius: 1, px: { xs: 0, md: 1.5 }, bgcolor: "#fbbf24", color: "#000", "&:hover": { bgcolor: "#f59e0b" }, "&.Mui-disabled": { bgcolor: "rgba(251,191,36,0.3)", color: "rgba(0,0,0,0.4)" } }}>
+                        {scanLoading ? <CircularProgress size={14} color="inherit" /> : <RefreshCw size={16} />}
+                      </IconButton>
+                      <Chip size="small" label="5s" color="success" variant="outlined" sx={{ fontSize: 10, height: 20, px: 0, borderColor: "rgba(16,185,129,0.3)", color: "#10b981", bgcolor: "rgba(16,185,129,0.04)", display: { xs: "none", sm: "inline-flex" } }} />
+                      <Chip size="small" label={`${goldScanMins}m`} variant="outlined" sx={{ fontSize: 10, height: 20, px: 0, borderColor: "rgba(251,191,36,0.3)", color: "#fbbf24", bgcolor: "rgba(251,191,36,0.04)", display: { xs: "none", sm: "inline-flex" } }} />
+                      <Button variant="outlined" size="small" startIcon={<FlaskConical size={14} />} disabled={goldSymbols.length === 0} onClick={() => { setBtSymbol(selectedSymbol || goldSymbols[0] || ""); setBtStrategy(settings.gold_strategy || ""); setBtTimeframe(settings.gold_timeframe || "H4"); setBtResult(null); setBtOpen(true); }} sx={{ borderColor: "rgba(251,191,36,0.4)", color: "#fbbf24", fontSize: "0.72rem", "&:hover": { borderColor: "#fbbf24", bgcolor: "rgba(251,191,36,0.06)" }, display: { xs: "none", sm: "inline-flex" } }}>
+                        Backtest
                       </Button>
                     </Stack>
                   </Stack>
@@ -1065,26 +1167,32 @@ export default function GoldPage() {
                                       <Typography sx={{ ...MONO, fontWeight: 800 }}>{sym}</Typography>
                                     </Stack>
                                   </TableCell>
-                                  <TableCell align="right" sx={MONO}>{tick?.error ? "" : fmt(tick?.bid, 2)}</TableCell>
-                                  <TableCell align="right" sx={MONO}>{tick?.error ? "" : fmt(tick?.ask, 2)}</TableCell>
-                                  <TableCell align="right" sx={MONO}>{rowSpread === null ? "" : fmt(rowSpread, 2)}</TableCell>
-                                  <TableCell align="center">
+                                  <TableCell align="right" sx={{ py: 1.25 }}>
+                                    <PriceDirection value={tick?.error ? "—" : fmt(tick?.bid, 2)} direction={tickDirections[sym]?.bid ?? "flat"} />
+                                  </TableCell>
+                                  <TableCell align="right" sx={{ py: 1.25 }}>
+                                    <PriceDirection value={tick?.error ? "—" : fmt(tick?.ask, 2)} direction={tickDirections[sym]?.ask ?? "flat"} />
+                                  </TableCell>
+                                  <TableCell align="right" sx={{ py: 1.25, ...MONO, fontWeight: 650, color: "#cbd5e1" }}>{rowSpread === null ? "—" : fmt(rowSpread, 2)}</TableCell>
+                                  <TableCell align="center" sx={{ py: 1.25 }}>
                                     <Chip
                                       size="small"
                                       color={scanColor(scan)}
-                                      label={scan ? scanLabel(scan) : "รอสแกน"}
+                                      label={scan ? scanLabel(scan) : scanLoading ? "Scanning" : "รอสแกน"}
                                       variant={scan ? "filled" : "outlined"}
+                                      sx={{ height: 24, borderRadius: 1, fontWeight: 800, "& .MuiChip-label": { px: 0.9 } }}
                                     />
                                   </TableCell>
-                                  <TableCell align="right">
+                                  <TableCell align="right" sx={{ py: 1.25, pr: 2 }}>
                                     <Button
                                       size="small"
                                       variant="outlined"
                                       disabled={tradeStagingSymbol === sym}
                                       onClick={(e) => { e.stopPropagation(); stageTrade(sym); }}
-                                      startIcon={tradeStagingSymbol === sym ? <CircularProgress size={14} color="inherit" /> : <Bot size={14} />}
+                                      startIcon={tradeStagingSymbol === sym ? <CircularProgress size={14} color="inherit" /> : <Zap size={14} />}
+                                      sx={{ height: 32, borderRadius: 1, fontWeight: 700, fontSize: "0.82rem", textTransform: "none" }}
                                     >
-                                      วิเคราะห์ & เทรด
+                                      {tradeStagingSymbol === sym ? "กำลังวิเคราะห์..." : "วิเคราะห์ & เทรด"}
                                     </Button>
                                   </TableCell>
                                 </TableRow>
@@ -1144,9 +1252,7 @@ export default function GoldPage() {
 
                               {/* Bid + Ask */}
                               <Box sx={{ flex: 1, textAlign: "right", minWidth: 0 }}>
-                                <Typography sx={{ ...MONO, fontSize: "0.88rem", fontWeight: 700, color: hasPrice ? "#cbd5e1" : "#475569", lineHeight: 1.2 }}>
-                                  {hasPrice ? fmtP(tick!.bid) : ""}
-                                </Typography>
+                                <PriceDirection value={hasPrice ? fmtP(tick!.bid) : "—"} direction={tickDirections[sym]?.bid ?? "flat"} />
                                 <Typography sx={{ ...MONO, fontSize: "0.58rem", color: "#475569", mt: 0.1 }}>
                                   {hasPrice ? `ask ${fmtP(tick!.ask)}` : ""}
                                 </Typography>
@@ -1819,11 +1925,19 @@ export default function GoldPage() {
                   >
                     {(() => {
                       const goldStrats = strategiesForGroup(strategies, "gold");
-                      return (goldStrats.length ? goldStrats : [{ name: "ema_macd_rsi", description: "" }]).map((s) => (
-                        <MenuItem key={s.name} value={s.name}>
-                          {strategyLabel(s.name)}
-                        </MenuItem>
-                      ));
+                      const list = goldStrats.length ? goldStrats : [{ name: "gold_quality", description: "", groups: ["gold"] }];
+                      const subSx = { bgcolor: "transparent", color: "#fbbf24", fontSize: "0.60rem", fontWeight: 800, textTransform: "uppercase" as const, letterSpacing: "0.10em", pt: 1, pb: 0.25 };
+                      const short   = list.filter((s) => GOLD_SHORT.includes(s.name));
+                      const long_   = list.filter((s) => GOLD_LONG.includes(s.name));
+                      const general = list.filter((s) => !GOLD_SHORT.includes(s.name) && !GOLD_LONG.includes(s.name));
+                      return [
+                        ...(short.length > 0 ? [<ListSubheader key="hdr-short" sx={subSx}>⚡ เทรดสั้น (H1)</ListSubheader>] : []),
+                        ...short.map((s) => <MenuItem key={s.name} value={s.name}>{strategyLabel(s.name)}</MenuItem>),
+                        ...(long_.length > 0 ? [<ListSubheader key="hdr-long" sx={subSx}>📈 เทรดยาว (H4)</ListSubheader>] : []),
+                        ...long_.map((s) => <MenuItem key={s.name} value={s.name}>{strategyLabel(s.name)}</MenuItem>),
+                        ...(general.length > 0 && (short.length > 0 || long_.length > 0) ? [<ListSubheader key="hdr-general" sx={subSx}>── ทั่วไป ──</ListSubheader>] : []),
+                        ...general.map((s) => <MenuItem key={s.name} value={s.name}>{strategyLabel(s.name)}</MenuItem>),
+                      ];
                     })()}
                   </Select>
                 </Box>
@@ -2172,6 +2286,172 @@ export default function GoldPage() {
             startIcon={tradeExecuting ? <CircularProgress size={16} color="inherit" /> : undefined}
           >
             Confirm
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Backtest Dialog */}
+      <Dialog
+        open={btOpen}
+        onClose={() => { if (!btLoading) setBtOpen(false); }}
+        maxWidth="md"
+        fullWidth
+        slotProps={{ paper: { sx: { bgcolor: "#0d1321", border: "1px solid rgba(251,191,36,0.18)", backgroundImage: "none" } } }}
+      >
+        <DialogTitle sx={{ pb: 1 }}>
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+            <FlaskConical size={18} color="#fbbf24" />
+            <Typography sx={{ fontWeight: 800, color: "#f1f5f9" }}>Gold Backtest</Typography>
+          </Stack>
+        </DialogTitle>
+        <DialogContent dividers sx={{ borderColor: "rgba(255,255,255,0.07)" }}>
+          {/* Controls */}
+          <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr 1fr", sm: "2fr 1fr 2fr 1fr" }, gap: 1.5, mb: 2 }}>
+            <Box>
+              <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 600, display: "block", mb: 0.5 }}>Symbol</Typography>
+              <Select size="small" fullWidth value={btSymbol} onChange={(e) => setBtSymbol(e.target.value)}
+                sx={{ bgcolor: "rgba(255,255,255,0.02)", "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.1)" }, "& .MuiSelect-select": { color: "#fff" } }}>
+                {goldSymbols.map((s) => <MenuItem key={s} value={s}>{s}</MenuItem>)}
+              </Select>
+            </Box>
+            <Box>
+              <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 600, display: "block", mb: 0.5 }}>Timeframe</Typography>
+              <Select size="small" fullWidth value={btTimeframe} onChange={(e) => setBtTimeframe(e.target.value)}
+                sx={{ bgcolor: "rgba(255,255,255,0.02)", "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.1)" }, "& .MuiSelect-select": { color: "#fff" } }}>
+                {["M15","M30","H1","H4","D1"].map((tf) => <MenuItem key={tf} value={tf}>{tf}</MenuItem>)}
+              </Select>
+            </Box>
+            <Box>
+              <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 600, display: "block", mb: 0.5 }}>Strategy</Typography>
+              <Select size="small" fullWidth value={btStrategy} onChange={(e) => setBtStrategy(e.target.value)}
+                sx={{ bgcolor: "rgba(255,255,255,0.02)", "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.1)" }, "& .MuiSelect-select": { color: "#fff" } }}>
+                {strategiesForGroup(strategies, "gold").map((s) => <MenuItem key={s.name} value={s.name}>{strategyLabel(s.name)}</MenuItem>)}
+              </Select>
+            </Box>
+            <Box>
+              <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 600, display: "block", mb: 0.5 }}>Bars</Typography>
+              <Select size="small" fullWidth value={btBars} onChange={(e) => setBtBars(Number(e.target.value))}
+                sx={{ bgcolor: "rgba(255,255,255,0.02)", "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.1)" }, "& .MuiSelect-select": { color: "#fff" } }}>
+                {[500,1000,2000,3000].map((b) => <MenuItem key={b} value={b}>{b} แท่ง</MenuItem>)}
+              </Select>
+            </Box>
+          </Box>
+
+          {/* Results */}
+          {btLoading && <Box sx={{ py: 6, textAlign: "center" }}><CircularProgress sx={{ color: "#fbbf24" }} /></Box>}
+
+          {btResult && !btLoading && (() => {
+            const r = btResult;
+            const edge = r.expectancy_r > 0;
+            const equityCurve = (r.details || []).reduce((acc: {i: number; r: number}[], t: any, idx: number) => {
+              const prev = acc[idx - 1]?.r ?? 0;
+              acc.push({ i: idx + 1, r: Math.round((prev + t.r) * 100) / 100 });
+              return acc;
+            }, []);
+
+            const statCards = [
+              { label: "Trades", value: r.trades, sub: `${r.wins}W / ${r.trades - r.wins}L` },
+              { label: "Win Rate", value: `${(r.win_rate * 100).toFixed(1)}%`, tone: r.win_rate >= 0.5 ? "#10b981" : "#f59e0b" },
+              { label: "Expectancy", value: `${r.expectancy_r > 0 ? "+" : ""}${r.expectancy_r}R`, tone: edge ? "#10b981" : "#ef4444", sub: "edge ต่อไม้" },
+              { label: "Net R", value: `${r.net_r > 0 ? "+" : ""}${r.net_r}R`, tone: r.net_r > 0 ? "#10b981" : "#ef4444" },
+              { label: "Profit Factor", value: r.profit_factor.toFixed(2), tone: r.profit_factor >= 1.5 ? "#10b981" : r.profit_factor >= 1 ? "#f59e0b" : "#ef4444" },
+              { label: "Max DD", value: `-${r.max_drawdown_r}R`, tone: r.max_drawdown_r > 5 ? "#ef4444" : "#94a3b8" },
+              { label: "Sharpe", value: r.sharpe.toFixed(2), sub: "per-trade" },
+              { label: "Max Loss Streak", value: r.max_consecutive_losses, tone: r.max_consecutive_losses >= 5 ? "#f59e0b" : "#94a3b8", sub: "ต่อเนื่อง" },
+            ];
+
+            return (
+              <Box>
+                {/* summary header */}
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 1.5 }}>
+                  <Box sx={{ px: 1.25, py: 0.5, borderRadius: 1, bgcolor: edge ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)", border: `1px solid ${edge ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)"}` }}>
+                    <Typography sx={{ fontSize: "0.75rem", fontWeight: 800, color: edge ? "#10b981" : "#ef4444" }}>
+                      {edge ? "✓ มี Edge" : "✗ ไม่มี Edge"}
+                    </Typography>
+                  </Box>
+                  <Typography variant="caption" sx={{ color: "#475569" }}>
+                    {r.symbol} · {r.strategy} · {btTimeframe} · {btBars} แท่ง
+                  </Typography>
+                </Stack>
+
+                {/* metric cards */}
+                <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 1, mb: 2 }}>
+                  {statCards.map((c) => (
+                    <Box key={c.label} sx={{ p: 1.25, borderRadius: 1, bgcolor: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                      <Typography variant="caption" sx={{ color: "#475569", display: "block", fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase" }}>{c.label}</Typography>
+                      <Typography sx={{ fontFamily: "ui-monospace,monospace", fontWeight: 800, fontSize: "1.1rem", color: c.tone || "#e2e8f0", lineHeight: 1.3 }}>{c.value}</Typography>
+                      {c.sub && <Typography variant="caption" sx={{ color: "#334155", fontSize: "0.6rem" }}>{c.sub}</Typography>}
+                    </Box>
+                  ))}
+                </Box>
+
+                {/* equity curve */}
+                {equityCurve.length > 1 && (
+                  <Box sx={{ mb: 2 }}>
+                    <Typography variant="caption" sx={{ color: "#64748b", fontWeight: 700, display: "block", mb: 1 }}>Equity Curve (R)</Typography>
+                    <ResponsiveContainer width="100%" height={180}>
+                      <LineChart data={equityCurve} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                        <XAxis dataKey="i" tick={{ fill: "#475569", fontSize: 10 }} tickLine={false} axisLine={false} />
+                        <YAxis tick={{ fill: "#475569", fontSize: 10 }} tickLine={false} axisLine={false} />
+                        <Tooltip
+                          contentStyle={{ background: "#0d1321", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8 }}
+                          formatter={(v: any) => [`${v}R`, "Equity"]}
+                          labelFormatter={(l) => `Trade #${l}`}
+                        />
+                        <ReferenceLine y={0} stroke="rgba(255,255,255,0.1)" />
+                        <Line type="monotone" dataKey="r" stroke={r.net_r >= 0 ? "#10b981" : "#ef4444"} dot={false} strokeWidth={2} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </Box>
+                )}
+
+                {/* trade details */}
+                {r.details?.length > 0 && (
+                  <Box>
+                    <Typography variant="caption" sx={{ color: "#64748b", fontWeight: 700, display: "block", mb: 1 }}>รายการเทรดล่าสุด 20 ไม้</Typography>
+                    <Box sx={{ overflowX: "auto" }}>
+                      <Table size="small">
+                        <TableHead>
+                          <TableRow sx={{ "& th": { bgcolor: "#0a0f1e", color: "#475569", fontSize: "0.68rem", fontWeight: 700, borderBottomColor: "rgba(255,255,255,0.06)" } }}>
+                            <TableCell>#</TableCell>
+                            <TableCell>Side</TableCell>
+                            <TableCell align="right">Result</TableCell>
+                            <TableCell>Exit</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {r.details.slice(-20).reverse().map((t: any, idx: number) => (
+                            <TableRow key={idx} sx={{ "& td": { borderBottomColor: "rgba(255,255,255,0.04)", py: 0.5 } }}>
+                              <TableCell sx={{ color: "#475569", fontSize: "0.7rem" }}>{r.details.length - idx}</TableCell>
+                              <TableCell>
+                                <Chip size="small" label={t.action} color={t.action === "BUY" ? "success" : "error"}
+                                  sx={{ height: 18, fontSize: "0.62rem", fontWeight: 800, "& .MuiChip-label": { px: 0.75 } }} />
+                              </TableCell>
+                              <TableCell align="right" sx={{ fontFamily: "ui-monospace,monospace", fontWeight: 700, fontSize: "0.82rem", color: t.r > 0 ? "#10b981" : "#ef4444" }}>
+                                {t.r > 0 ? "+" : ""}{t.r}R
+                              </TableCell>
+                              <TableCell sx={{ color: "#64748b", fontSize: "0.7rem" }}>{t.reason === "tp" ? "TP ✓" : t.reason === "sl" ? "SL ✗" : "Timeout"}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </Box>
+                  </Box>
+                )}
+              </Box>
+            );
+          })()}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 2, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+          <Button disabled={btLoading} onClick={() => setBtOpen(false)} sx={{ color: "#64748b" }}>ปิด</Button>
+          <Button
+            variant="contained"
+            disabled={btLoading || !btSymbol}
+            onClick={runBacktest}
+            startIcon={btLoading ? <CircularProgress size={16} color="inherit" /> : <FlaskConical size={16} />}
+            sx={{ bgcolor: "#fbbf24", color: "#111827", "&:hover": { bgcolor: "#f59e0b" }, fontWeight: 700 }}
+          >
+            {btLoading ? "กำลัง Backtest…" : "รัน Backtest"}
           </Button>
         </DialogActions>
       </Dialog>

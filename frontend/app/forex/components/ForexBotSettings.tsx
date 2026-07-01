@@ -10,6 +10,7 @@ import {
   Drawer,
   FormControl,
   InputLabel,
+  ListSubheader,
   MenuItem,
   Select,
   Stack,
@@ -31,9 +32,12 @@ import {
   X,
 } from "lucide-react";
 
+const FOREX_SHORT = ["forex_intraday"];
+const FOREX_LONG  = ["forex_trend_pullback"];
+
 const FOREX_DEFAULTS: Partial<ForexSettings> = {
   forex_timeframe: "H1",
-  forex_strategy: "ema_macd_rsi",
+  forex_strategy: "forex_trend_pullback",
   forex_atr_sl_mult: 1.5,
   forex_rr: 2.0,
   forex_risk_per_trade: 0.01,
@@ -566,10 +570,21 @@ export default function ForexBotSettings({
                 onChange={(e) => patch({ forex_strategy: e.target.value })}
                 sx={{ bgcolor: "rgba(255,255,255,0.01)", "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.08)" } }}
               >
-                <MenuItem value="" disabled>กำลังโหลดกลยุทธ์...</MenuItem>
-                {strategies.map((s) => (
-                  <MenuItem key={s.name} value={s.name}>{strategyLabel(s.name)}</MenuItem>
-                ))}
+                {strategies.length === 0 && <MenuItem value="" disabled>กำลังโหลดกลยุทธ์...</MenuItem>}
+                {(() => {
+                  const subSx = { bgcolor: "transparent", color: "#22d3ee", fontSize: "0.60rem", fontWeight: 800, textTransform: "uppercase" as const, letterSpacing: "0.10em", pt: 1, pb: 0.25 };
+                  const short_   = strategies.filter((s) => FOREX_SHORT.includes(s.name));
+                  const long_    = strategies.filter((s) => FOREX_LONG.includes(s.name));
+                  const general  = strategies.filter((s) => !FOREX_SHORT.includes(s.name) && !FOREX_LONG.includes(s.name));
+                  return [
+                    ...(short_.length > 0 ? [<ListSubheader key="hdr-short" sx={subSx}>⚡ เทรดสั้น (M15)</ListSubheader>] : []),
+                    ...short_.map((s) => <MenuItem key={s.name} value={s.name}>{strategyLabel(s.name)}</MenuItem>),
+                    ...(long_.length > 0 ? [<ListSubheader key="hdr-long" sx={subSx}>📈 เทรดยาว (H1)</ListSubheader>] : []),
+                    ...long_.map((s) => <MenuItem key={s.name} value={s.name}>{strategyLabel(s.name)}</MenuItem>),
+                    ...(general.length > 0 && (short_.length > 0 || long_.length > 0) ? [<ListSubheader key="hdr-general" sx={subSx}>── ทั่วไป ──</ListSubheader>] : []),
+                    ...general.map((s) => <MenuItem key={s.name} value={s.name}>{strategyLabel(s.name)}</MenuItem>),
+                  ];
+                })()}
               </Select>
             </FormControl>
 

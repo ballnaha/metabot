@@ -8,6 +8,7 @@ import {
   Chip,
   CircularProgress,
   Drawer,
+  ListSubheader,
   MenuItem,
   Select,
   Stack,
@@ -29,9 +30,12 @@ import {
   Zap,
 } from "lucide-react";
 
+const CRYPTO_SHORT = ["crypto_scalp"];
+const CRYPTO_LONG  = ["crypto_swing"];
+
 const CRYPTO_DEFAULTS = {
   crypto_timeframe: "H4",
-  crypto_strategy: "adaptive_trend",
+  crypto_strategy: "crypto_swing",
   crypto_atr_sl_mult: 1.8,
   crypto_rr: 2.5,
   crypto_min_sl_pct: 0.0,
@@ -698,14 +702,21 @@ export default function CryptoBotSettings({
                     "& .MuiSelect-select": { color: "#fff" }
                   }}
                 >
-                  <MenuItem value="" disabled>
-                    กำลังโหลดกลยุทธ์...
-                  </MenuItem>
-                  {strategies.map((s) => (
-                    <MenuItem key={s.name} value={s.name}>
-                      {strategyLabel(s.name)}
-                    </MenuItem>
-                  ))}
+                  {strategies.length === 0 && <MenuItem value="" disabled>กำลังโหลดกลยุทธ์...</MenuItem>}
+                  {(() => {
+                    const subSx = { bgcolor: "transparent", color: "#818cf8", fontSize: "0.60rem", fontWeight: 800, textTransform: "uppercase" as const, letterSpacing: "0.10em", pt: 1, pb: 0.25 };
+                    const short_   = strategies.filter((s) => CRYPTO_SHORT.includes(s.name));
+                    const long_    = strategies.filter((s) => CRYPTO_LONG.includes(s.name));
+                    const general  = strategies.filter((s) => !CRYPTO_SHORT.includes(s.name) && !CRYPTO_LONG.includes(s.name));
+                    return [
+                      ...(short_.length > 0 ? [<ListSubheader key="hdr-short" sx={subSx}>⚡ เทรดสั้น (M15)</ListSubheader>] : []),
+                      ...short_.map((s) => <MenuItem key={s.name} value={s.name}>{strategyLabel(s.name)}</MenuItem>),
+                      ...(long_.length > 0 ? [<ListSubheader key="hdr-long" sx={subSx}>📈 เทรดยาว (H4)</ListSubheader>] : []),
+                      ...long_.map((s) => <MenuItem key={s.name} value={s.name}>{strategyLabel(s.name)}</MenuItem>),
+                      ...(general.length > 0 && (short_.length > 0 || long_.length > 0) ? [<ListSubheader key="hdr-general" sx={subSx}>── ทั่วไป ──</ListSubheader>] : []),
+                      ...general.map((s) => <MenuItem key={s.name} value={s.name}>{strategyLabel(s.name)}</MenuItem>),
+                    ];
+                  })()}
                 </Select>
               </Box>
 
