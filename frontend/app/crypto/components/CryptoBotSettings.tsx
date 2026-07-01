@@ -8,8 +8,6 @@ import {
   Chip,
   CircularProgress,
   Drawer,
-  FormControl,
-  InputLabel,
   MenuItem,
   Select,
   Stack,
@@ -22,6 +20,7 @@ import {
   BellRing,
   Filter,
   Layers,
+  RotateCcw,
   Save,
   Settings as SettingsIcon,
   ShieldAlert,
@@ -30,14 +29,24 @@ import {
   Zap,
 } from "lucide-react";
 
+const CRYPTO_DEFAULTS = {
+  crypto_timeframe: "H4",
+  crypto_strategy: "adaptive_trend",
+  crypto_atr_sl_mult: 1.8,
+  crypto_rr: 2.5,
+  crypto_min_sl_pct: 0.0,
+  max_crypto_open_trades: 5,
+  bot_enabled: true,
+  use_ai: false,
+  telegram_enabled: true,
+};
+
 type StrategyInfo = {
   name: string;
   description: string;
 };
 
 type BotSettingsForm = {
-  position_sizing_mode: string;
-  stake_amount: number;
   max_open_trades: number;
   max_crypto_open_trades?: number;
   magic: number;
@@ -295,14 +304,29 @@ export default function CryptoBotSettings({
               </Typography>
             </Box>
           </Stack>
-          <Button
-            variant="text"
-            color="inherit"
-            onClick={onClose}
-            sx={{ minWidth: 38, width: 38, height: 38, p: 0, borderRadius: 2 }}
-          >
-            <X size={18} />
-          </Button>
+          <Stack direction="row" spacing={0.75}>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => patchSettings(CRYPTO_DEFAULTS as any)}
+              startIcon={<RotateCcw size={14} />}
+              sx={{
+                height: 34, fontSize: "0.72rem", fontWeight: 700, px: 1.5,
+                borderColor: "rgba(59,130,246,0.3)", color: "#60a5fa",
+                "&:hover": { borderColor: "#3b82f6", bgcolor: "rgba(59,130,246,0.08)" },
+              }}
+            >
+              ค่า Default
+            </Button>
+            <Button
+              variant="text"
+              color="inherit"
+              onClick={onClose}
+              sx={{ minWidth: 38, width: 38, height: 38, p: 0, borderRadius: 2 }}
+            >
+              <X size={18} />
+            </Button>
+          </Stack>
         </Stack>
 
         <Box sx={{ flex: 1, overflowY: "auto", px: 3, py: 3 }}>
@@ -453,6 +477,26 @@ export default function CryptoBotSettings({
                   >
                     {validatingSymbols ? <CircularProgress size={16} color="inherit" /> : "กรองเหรียญ"}
                   </Button>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={() => setCryptoInput("")}
+                    disabled={!cryptoInput}
+                    sx={{
+                      height: 40,
+                      borderColor: "rgba(239,68,68,0.25)",
+                      color: "#f87171",
+                      fontWeight: 600,
+                      px: 2,
+                      minWidth: "fit-content",
+                      bgcolor: "rgba(239,68,68,0.04)",
+                      "&:hover": { borderColor: "#ef4444", bgcolor: "rgba(239,68,68,0.08)" },
+                      "&.Mui-disabled": { color: "rgba(255,255,255,0.1)", borderColor: "rgba(255,255,255,0.05)" },
+                      borderRadius: 1,
+                    }}
+                  >
+                    ล้างทั้งหมด
+                  </Button>
                 </Stack>
 
                 {/* Render current tags (chips) */}
@@ -491,32 +535,28 @@ export default function CryptoBotSettings({
               </Stack>
             </Box>
 
-            <FormControl size="small" fullWidth>
-              <InputLabel sx={{ color: "#94a3b8" }}>โหมดคำนวณขนาดไม้</InputLabel>
-              <Select
-                label="โหมดคำนวณขนาดไม้"
-                value={settingsForm.position_sizing_mode}
-                onChange={(e) => patchSettings({ position_sizing_mode: e.target.value })}
-                sx={{ bgcolor: "rgba(255,255,255,0.01)", "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.08)" } }}
-              >
-                <MenuItem value="risk_pct">คำนวณจากความเสี่ยงจุดตัดขาดทุน</MenuItem>
-                <MenuItem value="equal_slots">แบ่งทุนเท่ากันทุกช่อง</MenuItem>
-              </Select>
-            </FormControl>
-
-            {/* วงเงินต่อไม้ใช้เฉพาะโหมดแบ่งทุนเท่ากัน — โหมดคิดจากจุดตัดขาดทุน
-                คำนวณ lot จาก Equity × ความเสี่ยง ÷ ระยะ SL จึงไม่ใช้ค่านี้ */}
-            {settingsForm.position_sizing_mode === "equal_slots" && (
-              <QuickNumberInput
-                label="วงเงินต่อไม้"
-                value={settingsForm.stake_amount}
-                onChange={(val) => patchSettings({ stake_amount: val })}
-                step={50}
-                min={0}
-                precision={2}
-                helperText="ใส่ 0 เพื่อให้ระบบแบ่งทุนอัตโนมัติจาก Equity / จำนวนช่อง"
-              />
-            )}
+            <Box
+              component="a"
+              href="/settings"
+              sx={{
+                display: "flex", alignItems: "center", gap: 1,
+                px: 1.5, py: 1.25, borderRadius: 1.5,
+                bgcolor: "rgba(59,130,246,0.06)", border: "1px solid rgba(59,130,246,0.18)",
+                color: "#60a5fa", textDecoration: "none",
+                "&:hover": { bgcolor: "rgba(59,130,246,0.1)", borderColor: "rgba(59,130,246,0.35)" },
+                transition: "all 0.15s",
+              }}
+            >
+              <Box sx={{ fontSize: "1rem", lineHeight: 1, flexShrink: 0 }}>⚙️</Box>
+              <Box>
+                <Typography sx={{ fontSize: "0.78rem", fontWeight: 700, color: "#60a5fa", lineHeight: 1.3 }}>
+                  โหมดคำนวณขนาดไม้ / วงเงินต่อ slot / Min Lot Guard
+                </Typography>
+                <Typography sx={{ fontSize: "0.65rem", color: "#475569", lineHeight: 1.4 }}>
+                  ตั้งค่าใน Global Settings — ใช้กับทุก asset group
+                </Typography>
+              </Box>
+            </Box>
 
             <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
               <QuickNumberInput

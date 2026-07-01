@@ -43,14 +43,13 @@ _lock = threading.RLock()
 
 
 def _mt5_server_timestamp_to_utc(timestamp: int | float) -> float:
-    """MT5 deal/position times are broker server wall-clock seconds.
+    """Return MT5's Unix timestamp unchanged.
 
-    Many brokers run MT5 on UTC+3. Treat the raw timestamp as server-local
-    wall time first, then convert it back to a real UTC timestamp.
+    MetaTrader's Python API returns tick, position and deal timestamps in UTC.
+    Applying the broker chart/server offset a second time shifts history and
+    daily risk checks into the wrong day.
     """
-    server_tz = timezone(timedelta(hours=settings.mt5_server_utc_offset))
-    server_time = datetime.fromtimestamp(timestamp, tz=timezone.utc).replace(tzinfo=server_tz)
-    return server_time.timestamp()
+    return float(timestamp)
 
 
 def _mt5_server_time_to_bangkok(timestamp: int | float) -> str:
@@ -112,10 +111,21 @@ def account_info() -> Dict[str, Any]:
         info = mt5.account_info()
     if info is None:
         raise MT5Error("No account info — is the terminal logged in?")
+    currency = str(info.currency or "").upper()
+    cent_currency_map = {
+        "USC": "USD", "EUC": "EUR", "GBC": "GBP",
+        "CHC": "CHF", "AUC": "AUD", "CAC": "CAD",
+    }
+    is_cent = currency in cent_currency_map
+    major_divisor = 100.0 if is_cent else 1.0
     return {
         "login": info.login,
         "server": info.server,
-        "currency": info.currency,
+        "currency": currency,
+        "is_cent_account": is_cent,
+        "display_currency": cent_currency_map.get(currency, currency),
+        "balance_major": info.balance / major_divisor,
+        "equity_major": info.equity / major_divisor,
         "balance": info.balance,
         "equity": info.equity,
         "margin": info.margin,
@@ -192,7 +202,11 @@ def resolve_symbol(symbol: str) -> str:
     variants, then a full scan by base ticker.
     """
     if symbol in _symbol_resolution:
-        return _symbol_resolution[symbol]
+        cached = _symbol_resolution[symbol]
+        if mt5.symbol_select(cached, True):
+            return cached
+        # Account/server may have changed (e.g. Standard "m" -> Cent "c").
+        _symbol_resolution.pop(symbol, None)
 
     import re
 
@@ -212,13 +226,14 @@ def resolve_symbol(symbol: str) -> str:
 
     # 3. Try alias bases + common broker variants. Aliases (GOLD->XAUUSD) are
     #    tried first so spot gold resolves regardless of broker; each base is
-    #    also tried with the Exness "m" suffix.
+    #    also tried with common Exness account suffixes, including Standard
+    #    "m" and Standard Cent "c".
     base = symbol.upper().lstrip("#@").split(".")[0]
     bases = _SYMBOL_ALIASES.get(base, (base,))
     candidates: list[str] = []
     for b in bases:
         candidates += [f"{b}.OQ", f"{b}.N", f"{b}.NY", f"{b}.US",
-                       b, f"{b}m", f"#{b}"]
+                       b, f"{b}m", f"{b}c", f"{b}r", f"{b}z", f"#{b}"]
     for cand in candidates:
         if mt5.symbol_select(cand, True):
             _symbol_resolution[symbol] = cand
@@ -227,7 +242,8 @@ def resolve_symbol(symbol: str) -> str:
     # 4. Scan every symbol for one whose base ticker matches.
     for s in all_syms:
         s_base = re.sub(r'^[#@]|\..*$', '', s.name, flags=re.IGNORECASE).upper()
-        if s_base == base and mt5.symbol_select(s.name, True):
+        common_suffix_match = any(s_base == f"{base}{suffix}" for suffix in ("M", "C", "R", "Z"))
+        if (s_base == base or common_suffix_match) and mt5.symbol_select(s.name, True):
             _symbol_resolution[symbol] = s.name
             return s.name
 
@@ -259,6 +275,12 @@ def positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         except Exception:
             contract_size = 1.0
 
+        try:
+            order_type = mt5.ORDER_TYPE_BUY if p.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_SELL
+            margin = mt5.order_calc_margin(order_type, p.symbol, p.volume, p.price_open)
+        except Exception:
+            margin = None
+
         out.append(
             {
                 "ticket": p.ticket,
@@ -273,6 +295,7 @@ def positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
                 "magic": p.magic,
                 "comment": p.comment,
                 "contract_size": contract_size,
+                "margin": margin,
                 "time": _mt5_server_time_to_bangkok(p.time),
                 # Real UTC epoch of the open, for computing how long it's held.
                 "time_utc": _mt5_server_timestamp_to_utc(p.time),
@@ -283,9 +306,8 @@ def positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
 
 def history_deals(days: int = 30) -> List[Dict[str, Any]]:
     _require_mt5()
-    from datetime import datetime, timedelta
-    from_date = datetime.now() - timedelta(days=days)
-    to_date = datetime.now() + timedelta(days=1)
+    from_date = datetime.now(timezone.utc) - timedelta(days=days)
+    to_date = datetime.now(timezone.utc) + timedelta(days=1)
     
     with _lock:
         deals = mt5.history_deals_get(from_date, to_date)
@@ -348,12 +370,15 @@ def history_deals(days: int = 30) -> List[Dict[str, Any]]:
 
 
 def normalize_lot(symbol: str, lot: float) -> float:
+    import math
+
     s = symbol_info(symbol)
     step = s["volume_step"] or 0.01
     lot = max(s["volume_min"], min(lot, s["volume_max"]))
     # round down to the nearest step
-    steps = round(lot / step)
-    return round(steps * step, 2)
+    steps = math.floor((lot + step * 1e-9) / step)
+    decimals = max(0, len(f"{step:.10f}".rstrip("0").split(".")[-1]))
+    return round(steps * step, decimals)
 
 
 def modify_position_sl(ticket: int, sl: float, tp: Optional[float] = None) -> Dict[str, Any]:

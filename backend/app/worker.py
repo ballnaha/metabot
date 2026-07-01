@@ -95,6 +95,15 @@ def _symbol_use_ai(symbol: str) -> bool:
     return settings.use_ai
 
 
+def _group_scan_interval(group: str) -> int:
+    """Return the configured polling interval for an asset group."""
+    if group == "stock":
+        return max(10, settings.stock_auto_trade_interval)
+    if group == "forex":
+        return max(10, settings.forex_auto_trade_interval)
+    return max(10, settings.auto_trade_interval)
+
+
 def format_trade_executed(rec: Recommendation, lot: float, status: str) -> str:
     emoji = {"BUY": "🟢", "SELL": "🔴"}.get(rec.action.value, "⚪")
     header = "⚡ *Trade Executed*" if status == "executed" else "❌ *Execution Failed*"
@@ -283,6 +292,29 @@ async def position_monitor_loop() -> None:
                         except Exception as e:  # noqa: BLE001
                             log.error("Time-stop failed %s #%s: %s", pos["symbol"], ticket, e)
 
+            # ---- Forex intraday time-stop --------------------------------------
+            if settings.forex_max_hold_hours > 0 and current:
+                import time as _time
+                now_utc = _time.time()
+                max_secs = settings.forex_max_hold_hours * 3600.0
+                for ticket, pos in list(current.items()):
+                    if not _is_bot_position(pos) or market_group(pos["symbol"]) != "forex":
+                        continue
+                    opened = pos.get("time_utc") or 0
+                    if opened and (now_utc - opened) >= max_secs:
+                        try:
+                            res = await _to_thread(mt5_client.close_position, ticket)
+                            if res.get("ok"):
+                                held_hr = (now_utc - opened) / 3600.0
+                                msg = f"Forex time-stop: closed {pos['symbol']} #{ticket} after {held_hr:.1f}h"
+                                log.info(msg)
+                                log_store.push("info", "time_stop", msg, {
+                                    "symbol": pos["symbol"], "ticket": ticket,
+                                    "held_hours": round(held_hr, 1),
+                                })
+                        except Exception as e:  # noqa: BLE001
+                            log.error("Forex time-stop failed %s #%s: %s", pos["symbol"], ticket, e)
+
             # ---- Breakeven SL management ----------------------------------------
             if settings.breakeven_r > 0 and current:
                 for ticket, pos in current.items():
@@ -413,7 +445,10 @@ async def auto_trade_loop() -> None:
     unavailable_symbols: set[str] = set()
     _last_summary_time = 0.0
     _last_cb_notify_time = 0.0  # circuit breaker notification cooldown
+    _last_group_scan: dict[str, float] = {}
     _scan_count = 0
+    _autotrade_disabled_until = 0.0  # paused when MT5 returns retcode 10027
+    _last_at_notify = 0.0
 
     while True:
         try:
@@ -460,13 +495,19 @@ async def auto_trade_loop() -> None:
 
                     if not _skip_cycle and settings.max_consecutive_losses > 0:
                         _n = settings.max_consecutive_losses
-                        _closed_all = [d for d in _deals if d.get("entry") == "OUT" and d.get("magic", 0) in _bot_magics]
+                        _today = datetime.now(TZ_TH).strftime("%Y-%m-%d")
+                        _closed_all = [
+                            d for d in _deals
+                            if d.get("entry") == "OUT"
+                            and d["time"].startswith(_today)
+                            and d.get("magic", 0) in _bot_magics
+                        ]
                         _recent = _closed_all[:_n]
                         if len(_recent) == _n and all(
                             d.get("profit", 0) + d.get("commission", 0) + d.get("swap", 0) < 0
                             for d in _recent
                         ):
-                            _cb_msg = f"Last {_n} consecutive trades all losses — trading paused"
+                            _cb_msg = f"Last {_n} consecutive trades today all losses — trading paused until tomorrow"
                             _skip_cycle = True
 
                 except Exception as _e:
@@ -478,6 +519,13 @@ async def auto_trade_loop() -> None:
                 if now_mono - _last_cb_notify_time > 1800:
                     await _to_thread(send_telegram_notification, f"⛔ *Circuit Breaker*\n{_cb_msg}")
                     _last_cb_notify_time = now_mono
+                await asyncio.sleep(max(10, settings.auto_trade_interval))
+                continue
+
+            # ---- AutoTrading disabled (retcode 10027) ---------------------------
+            if now_mono < _autotrade_disabled_until:
+                remaining = int(_autotrade_disabled_until - now_mono)
+                log.warning("MT5 AutoTrading ถูกปิด — หยุด scan ชั่วคราว (อีก %ds)", remaining)
                 await asyncio.sleep(max(10, settings.auto_trade_interval))
                 continue
             # ---- End circuit breakers -------------------------------------------
@@ -511,6 +559,11 @@ async def auto_trade_loop() -> None:
                      ", ".join(f"{g}={len(s)}" for g, s in grouped_symbols.items()))
 
             for group, symbols_in_group in grouped_symbols.items():
+                interval = _group_scan_interval(group)
+                if now_mono - _last_group_scan.get(group, -interval) < interval:
+                    continue
+                _last_group_scan[group] = now_mono
+
                 # 1. Check open slots for this group
                 used_slots, max_slots = get_group_slot_status(group)
                 available_slots = max_slots - used_slots
@@ -632,6 +685,20 @@ async def auto_trade_loop() -> None:
                                      "strategy": rec.indicators.strategy_name},
                                 )
                                 await _to_thread(send_telegram_notification, format_trade_executed(rec, pending.lot, pending.status))
+                                if pending.status == "failed" and (pending.result or {}).get("retcode") == 10027:
+                                    _autotrade_disabled_until = now_mono + 300  # หยุด 5 นาที แล้วลองใหม่
+                                    if now_mono - _last_at_notify > 600:
+                                        _last_at_notify = now_mono
+                                        _at_msg = (
+                                            "⛔ *AutoTrading ถูกปิดใน MT5* (retcode 10027)\n"
+                                            "บอทหยุดส่ง order ชั่วคราว 5 นาที\n\n"
+                                            "วิธีแก้ไข:\n"
+                                            "1. กดปุ่ม *Algo Trading* ใน MT5 ให้เป็นสีเขียว\n"
+                                            "2. ตรวจสอบ Tools → Options → Expert Advisors → ✅ Allow automated trading"
+                                        )
+                                        await _to_thread(send_telegram_notification, _at_msg)
+                                        log_store.push("error", "autotrading_disabled",
+                                                       "MT5 AutoTrading ถูกปิด (retcode 10027) — กรุณาเปิด Algo Trading ใน MT5")
                                 if failure_reason:
                                     log.info("Signal %s %s (status: %s, reason: %s)", symbol, rec.action.value, pending.status, failure_reason)
                                 else:
@@ -684,9 +751,14 @@ async def auto_trade_loop() -> None:
                 _last_summary_time = now_mono
                 try:
                     slot_parts = []
-                    for grp in ("crypto", "gold", "stock"):
+                    for grp in ("crypto", "gold", "stock", "forex"):
                         used, mx = get_group_slot_status(grp)
-                        bot_on = {"crypto": settings.bot_enabled, "gold": settings.gold_bot_enabled, "stock": settings.stock_bot_enabled}.get(grp, False)
+                        bot_on = {
+                            "crypto": settings.bot_enabled,
+                            "gold": settings.gold_bot_enabled,
+                            "stock": settings.stock_bot_enabled,
+                            "forex": settings.forex_bot_enabled,
+                        }.get(grp, False)
                         status = f"{used}/{mx}" if bot_on else "OFF"
                         slot_parts.append(f"{grp}={status}")
                     log_store.push(

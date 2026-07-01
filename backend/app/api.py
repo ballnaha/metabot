@@ -179,6 +179,10 @@ async def scan(req: ScanRequest):
                 "symbol": sym,
                 "action": rec.action.value,
                 "confidence": rec.confidence,
+                "technical_action": rec.indicators.rule_bias.value,
+                "technical_confidence": rec.indicators.strategy_confidence,
+                "risk_blocked": rec.risk_blocked,
+                "risk_reason": rec.risk_reason,
                 "price": rec.price,
                 "summary": rec.summary,
             }
@@ -308,6 +312,7 @@ class SettingsUpdateRequest(BaseModel):
     forex_rr: float | None = None
     forex_use_ai: bool | None = None
     forex_auto_trade_interval: int | None = None
+    forex_max_hold_hours: float | None = None
     max_spread_points: int | None = None
     max_spread_to_sl: float | None = None
     crypto_max_spread_to_sl: float | None = None
@@ -316,6 +321,8 @@ class SettingsUpdateRequest(BaseModel):
     max_consecutive_losses: int | None = None
     breakeven_r: float | None = None
     trailing_stop_r: float | None = None
+    min_lot_stake_multiple: float | None = None
+    max_notional_to_equity: float | None = None
 
 
 @app.get("/api/settings", dependencies=[Depends(require_key)])
@@ -382,6 +389,7 @@ def get_settings_endpoint():
         "forex_rr": settings.forex_rr,
         "forex_use_ai": settings.forex_use_ai,
         "forex_auto_trade_interval": settings.forex_auto_trade_interval,
+        "forex_max_hold_hours": settings.forex_max_hold_hours,
         "max_spread_points": settings.max_spread_points,
         "max_spread_to_sl": settings.max_spread_to_sl,
         "crypto_max_spread_to_sl": settings.crypto_max_spread_to_sl,
@@ -390,6 +398,8 @@ def get_settings_endpoint():
         "max_consecutive_losses": settings.max_consecutive_losses,
         "breakeven_r": settings.breakeven_r,
         "trailing_stop_r": settings.trailing_stop_r,
+        "min_lot_stake_multiple": settings.min_lot_stake_multiple,
+        "max_notional_to_equity": settings.max_notional_to_equity,
     }
 
 
@@ -489,7 +499,7 @@ def detect_crypto_symbols():
             
         detected = []
         for s in raw_symbols:
-            if is_crypto(s) and getattr(s, 'trade_mode', 0) > 0:
+            if is_crypto(s) and getattr(s, 'trade_mode', 0) == mt5.SYMBOL_TRADE_MODE_FULL:
                 name_upper = s.name.upper()
                 # Exclude fiat cross rates (like BTCEUR, ETHGBP, BTCJPY) unless quoted in USD/USDT
                 if "EUR" in name_upper or "GBP" in name_upper or "JPY" in name_upper:

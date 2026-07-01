@@ -1,17 +1,18 @@
 # 🤖 MetaBot — MT5 Advisory & Auto-Trading Bot
 
-A bot that **analyses the market, gives AI-backed advice, and (after you confirm)
-places trades on MetaTrader 5**. Control it from **Telegram** or a **Next.js web
-dashboard**.
+A bot that **analyses the market, optionally applies an AI filter, and can place
+trades automatically on MetaTrader 5**. Control it from **Telegram** or a
+**Next.js web dashboard**.
 
 - **Backend:** Python — `MetaTrader5` + technical indicators + AI advisors (Deepseek & Gemini) + FastAPI + Telegram
 - **Frontend:** Next.js 16 (Turbopack) + React 19 + MUI 9 + lucide icons dashboard
-- **Default mode:** advise first, you confirm, then it trades (`REQUIRE_CONFIRM=true`)
+- **Execution mode:** actionable `/api/analyze` and Telegram `/analyze` requests
+  execute immediately unless sent as API preview; the worker trades only groups
+  whose `*_BOT_ENABLED` setting is enabled.
 
 > ⚠️ **Trading risk.** This software can place real orders with real money.
-> Start on a **demo account**. Auto-trade mode (`REQUIRE_CONFIRM=false`) executes
-> without asking — use it only after you trust the strategy. Nothing here is
-> financial advice.
+> Start on a **demo account**. Enabled bots and non-preview analysis execute
+> without asking. Nothing here is financial advice.
 
 ---
 
@@ -23,13 +24,14 @@ dashboard**.
                  │   TradeManager│ ───────►│   advisor.py  │
   Web dashboard ►│   (trader.py) │         └──────────────┘
    (Next.js)     │              │
-                 │   confirm?    │ ───────► indicators.py  (RSI/MACD/EMA/ATR/BB)
+                 │ strategy/risk │ ───────► indicators.py  (RSI/MACD/EMA/ATR/BB)
                  │              │
                  │   mt5_client  │ ───────► MetaTrader 5 terminal (orders/data)
                  └──────────────┘
 ```
 
-The flow: **analyze → Recommendation → (your confirm) → order sent to MT5.**
+The flow: **analyze → Recommendation → risk checks → order sent to MT5.** Use
+the API's `preview=true` option when analysis must be read-only.
 
 ---
 
@@ -86,7 +88,17 @@ Fill in `.env`:
 - Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` (your own id so only you can
   control the bot).
 - Set `API_KEY` to a random secret (the dashboard must use the same value).
-- Tune `RISK_PER_TRADE`, `MAX_LOT`, `SYMBOLS`, `REQUIRE_CONFIRM`.
+- Tune `RISK_PER_TRADE`, group-specific risk/lot settings, circuit breakers,
+  `SYMBOLS`, and the corresponding `*_BOT_ENABLED` flags.
+
+### Exness Standard Cent
+
+Standard Cent accounts are supported. MetaBot resolves unsuffixed symbols to
+the broker's `c` suffix (for example `XAUUSD` → `XAUUSDc`), keeps all sizing
+math in the native cent currency (`USC`, `EUC`, etc.), and exposes equivalent
+major-currency balance/equity metadata through `/api/account`. After switching
+accounts, re-detect symbols and re-run backtests because spreads and history
+differ from Standard/Raw accounts.
 
 ### Run the API server
 
@@ -112,7 +124,7 @@ Telegram commands:
 
 | Command | What it does |
 |---|---|
-| `/analyze EURUSD M15` | analyse a symbol; shows ✅ Confirm / ❌ Cancel buttons |
+| `/analyze EURUSD M15` | analyse a symbol and immediately execute an actionable signal |
 | `/account` | balance, equity, open P/L |
 | `/positions` | open positions |
 | `/pending` | trades awaiting confirmation |
@@ -294,12 +306,12 @@ A single-symbol run prints a full metrics panel; `--all` /
 
 ---
 
-## Switching to full auto-trade
+## Automatic trading
 
-Set `REQUIRE_CONFIRM=false` in `backend/.env`. Now `/analyze` (and the API) will
-execute actionable signals immediately instead of asking. **Test on a demo
-account first.** To run analysis on a schedule, wrap `manager.analyze_and_stage()`
-in a loop or cron — see `app/trader.py`.
+There is no `REQUIRE_CONFIRM` setting. Enable only the required group with
+`BOT_ENABLED`, `GOLD_BOT_ENABLED`, `FOREX_BOT_ENABLED`, or
+`STOCK_BOT_ENABLED`. The background worker scans once per confirmed candle and
+executes actionable signals automatically. **Test on a demo account first.**
 
 ---
 
@@ -315,7 +327,7 @@ metabot/
 │  │  ├─ indicators.py    # RSI/MACD/EMA/ATR/Bollinger
 │  │  ├─ strategy.py      # pluggable strategies (registry + built-ins)
 │  │  ├─ advisor.py       # Deepseek + Gemini advisors and merge logic
-│  │  ├─ trader.py        # analysis → confirm-gated trade execution + risk sizing
+│  │  ├─ trader.py        # analysis → risk checks → trade execution
 │  │  ├─ api.py           # FastAPI endpoints
 │  │  └─ telegram_bot.py  # Telegram interface
 │  ├─ run_api.py

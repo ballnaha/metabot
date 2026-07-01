@@ -111,6 +111,9 @@ def backtest_strategy(
     i = max(50, warmup_bars)
 
     bar_hours = _TIMEFRAME_HOURS.get(timeframe.upper(), 1.0)
+    strategy_hold_bars = getattr(strategy.get_strategy(strategy_name), "max_hold_bars", None)
+    if strategy_hold_bars:
+        max_hold_bars = int(strategy_hold_bars)
     # Costs only apply when we can value a tick; otherwise they stay at 0 R.
     costs_enabled = tick_size > 0 and tick_value > 0
 

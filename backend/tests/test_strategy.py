@@ -10,6 +10,8 @@ from app.strategy import (
     CryptoScalpStrategy,
     EmaMacdRsiStrategy,
     TrendFollowStrategy,
+    ForexTrendPullbackStrategy,
+    ForexIntradayStrategy,
 )
 
 
@@ -151,6 +153,100 @@ class CryptoSlFloorTests(unittest.TestCase):
         sl, _tp = EmaMacdRsiStrategy().atr_levels(snap, Action.BUY)
         # Raw = 1.5×0.0001 = 0.00015; floor = 1.0×0.0015 = 0.0015 → SL 0.9985.
         self.assertAlmostEqual(sl, 0.9985)
+
+
+class ForexTrendPullbackTests(unittest.TestCase):
+    def _frame(self):
+        rows = 240
+        close = pd.Series([1.05 + i * 0.0005 for i in range(rows)])
+        df = pd.DataFrame({
+            "open": close - 0.0001,
+            "high": close + 0.0002,
+            "low": close - 0.0002,
+            "close": close,
+            "tick_volume": [100] * rows,
+        })
+        # -3 pulls below EMA20, -2 closes above the prior high with a green body.
+        ema20 = df["close"].ewm(span=20, adjust=False).mean()
+        df.loc[rows - 3, ["open", "high", "low", "close"]] = [
+            ema20.iloc[-3] + 0.0001, ema20.iloc[-3] + 0.0002,
+            ema20.iloc[-3] - 0.0002, ema20.iloc[-3],
+        ]
+        df.loc[rows - 2, ["open", "high", "low", "close"]] = [
+            ema20.iloc[-2], ema20.iloc[-2] + 0.0007,
+            ema20.iloc[-2] - 0.0001, ema20.iloc[-2] + 0.0006,
+        ]
+        return df
+
+    @patch.object(ForexTrendPullbackStrategy, "_dmi")
+    def test_buys_confirmed_pullback_in_established_uptrend(self, dmi):
+        df = self._frame()
+        dmi.return_value = (
+            pd.Series([25.0] * len(df)),
+            pd.Series([30.0] * len(df)),
+            pd.Series([12.0] * len(df)),
+        )
+        snap = IndicatorSnapshot(
+            symbol="EURUSD", timeframe="H1", price=float(df["close"].iloc[-2]),
+            atr=0.002, rsi=55.0,
+        )
+        sig = ForexTrendPullbackStrategy().evaluate(df, snap)
+        self.assertEqual(sig.action, Action.BUY)
+        self.assertLess(sig.stop_loss, snap.price)
+        self.assertGreater(sig.take_profit, snap.price)
+
+    def test_rejects_short_history(self):
+        df = self._frame().iloc[:100]
+        snap = IndicatorSnapshot(symbol="EURUSD", timeframe="H1", price=1.1, atr=0.001, rsi=50)
+        self.assertEqual(ForexTrendPullbackStrategy().evaluate(df, snap).action, Action.HOLD)
+
+
+class ForexIntradayTests(unittest.TestCase):
+    @patch.object(ForexTrendPullbackStrategy, "_dmi")
+    def test_m15_reclaim_buys_during_liquid_session(self, dmi):
+        rows = 120
+        close = pd.Series([1.08 + i * 0.0002 for i in range(rows)])
+        times = pd.date_range("2026-01-01 14:00", periods=rows, freq="15min")
+        df = pd.DataFrame({
+            "time": times, "open": close - 0.00005,
+            "high": close + 0.00012, "low": close - 0.00012,
+            "close": close, "tick_volume": [100] * rows,
+        })
+        ema9 = df["close"].ewm(span=9, adjust=False).mean()
+        anchor = float(ema9.iloc[-3])
+        df.loc[rows - 3, ["open", "high", "low", "close"]] = [
+            anchor + 0.00005, anchor + 0.00010, anchor - 0.00010, anchor,
+        ]
+        df.loc[rows - 2, ["open", "high", "low", "close"]] = [
+            anchor, anchor + 0.00035, anchor - 0.00005, anchor + 0.00030,
+        ]
+        # Force evaluated candle into the liquid-session window.
+        df.loc[rows - 2, "time"] = pd.Timestamp("2026-01-02 15:00")
+        dmi.return_value = (
+            pd.Series([22.0] * rows), pd.Series([28.0] * rows), pd.Series([12.0] * rows),
+        )
+        snap = IndicatorSnapshot(
+            symbol="EURUSD", timeframe="M15", price=float(df["close"].iloc[-2]),
+            atr=0.001, rsi=56.0,
+        )
+        sig = ForexIntradayStrategy().evaluate(df, snap)
+        self.assertEqual(sig.action, Action.BUY)
+        self.assertLess(sig.stop_loss, snap.price)
+        self.assertGreater(sig.take_profit, snap.price)
+
+    def test_skips_thin_session(self):
+        rows = 120
+        df = pd.DataFrame({
+            "time": pd.date_range("2026-01-01 00:00", periods=rows, freq="15min"),
+            "open": [1.1] * rows, "high": [1.101] * rows,
+            "low": [1.099] * rows, "close": [1.1] * rows,
+            "tick_volume": [100] * rows,
+        })
+        df.loc[rows - 2, "time"] = pd.Timestamp("2026-01-02 04:00")
+        snap = IndicatorSnapshot(symbol="EURUSD", timeframe="M15", price=1.1, atr=0.001, rsi=50)
+        sig = ForexIntradayStrategy().evaluate(df, snap)
+        self.assertEqual(sig.action, Action.HOLD)
+        self.assertIn("outside liquid session", sig.reasons)
 
 
 class CryptoScalpTests(unittest.TestCase):

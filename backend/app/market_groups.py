@@ -19,8 +19,11 @@ FOREX_PREFIXES = ("EUR", "GBP", "AUD", "NZD", "CAD", "CHF", "HKD", "SGD", "ZAR",
 
 
 def is_gold_symbol(symbol: str) -> bool:
+    # Also covers silver (XAG/SILVER): same precious-metals settings group
+    # (GOLD_STRATEGY, GOLD_MAGIC, 24/5-ish hours) fit it far better than the
+    # "stock" fallback it would otherwise hit.
     s = symbol.upper()
-    return "GOLD" in s or s.startswith("XAU")
+    return "GOLD" in s or "SILVER" in s or s.startswith("XAU") or s.startswith("XAG")
 
 
 def is_crypto_symbol(symbol: str) -> bool:

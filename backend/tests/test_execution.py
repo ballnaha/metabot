@@ -236,6 +236,38 @@ class NotionalCapTests(unittest.TestCase):
 
         self.assertEqual(lot, 1.40)  # full risk-based lot, uncapped
 
+    @patch("app.trader.settings")
+    @patch("app.trader.mt5_client.account_info", return_value={"equity": 100})
+    @patch("app.trader.mt5_client.symbol_info")
+    def test_rechecks_cap_after_broker_rounds_up_to_min_lot(
+        self, info, _acct, settings_mock
+    ):
+        info.return_value = self.BTC_INFO
+        settings_mock.position_sizing_mode = "risk_pct"
+        settings_mock.risk_per_trade = 0.01
+        settings_mock.max_lot = 100.0
+        settings_mock.min_lot_stake_multiple = 3.0
+        settings_mock.max_notional_to_equity = 2.0  # $200 cap; min lot is $600
+        rec = self._rec()
+        rec.stop_loss = 60_500.0  # desired 0.002 lot, broker rounds to 0.01
+
+        with patch("app.trader.mt5_client.normalize_lot", side_effect=self._normalize):
+            lot = self.manager.risk_lot("BTCUSD", rec)
+
+        self.assertEqual(lot, 0.0)
+
+
+class RiskBlockedStatusTests(unittest.TestCase):
+    def test_preserves_technical_signal_as_explicit_risk_skip(self):
+        rec = recommendation(Action.BUY)
+
+        TradeManager._mark_risk_blocked(rec)
+
+        self.assertEqual(rec.action, Action.HOLD)
+        self.assertTrue(rec.risk_blocked)
+        self.assertIn("lot ขั้นต่ำ", rec.risk_reason)
+        self.assertIn("SKIP (Risk)", rec.summary)
+
 
 if __name__ == "__main__":
     unittest.main()

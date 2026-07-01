@@ -189,8 +189,15 @@ npm run dev
 | `STRATEGY` | `ema_macd_rsi` | Strategy เริ่มต้น |
 | `RISK_PER_TRADE` | `0.01` | ความเสี่ยงต่อออเดอร์ (0.01 = 1%) |
 | `MAX_LOT` | `1.0` | Lot สูงสุดต่อออเดอร์ |
-| `REQUIRE_CONFIRM` | `true` | `true` = ถามก่อนเปิดออเดอร์ / `false` = auto |
+| `GOLD_BOT_ENABLED` | `false` | เปิด Auto Trade สำหรับทองเมื่อทดสอบบนบัญชีแล้ว |
+| `FOREX_BOT_ENABLED` | `false` | เปิด Auto Trade สำหรับ Forex เมื่อทดสอบบนบัญชีแล้ว |
+| `MAX_DAILY_LOSS_PCT` | `0.03` | หยุดเทรดทั้งวันเมื่อขาดทุนถึง 3% |
+| `MAX_CONSECUTIVE_LOSSES` | `3` | หยุดเทรดถึงวันถัดไปเมื่อแพ้ติดกัน 3 ไม้ |
 | `API_KEY` | `change-me-please` | Secret key สำหรับ API (เปลี่ยนเป็นค่าสุ่ม) |
+
+> บัญชี Exness Standard Cent รองรับ suffix `c` เช่น `XAUUSDc` และ `USDJPYc`
+> โดยระบบคำนวณ lot/risk ด้วยหน่วย USC/EUC ของ MT5 โดยตรง หลังเปลี่ยนบัญชีให้
+> สแกน symbol และ backtest ใหม่เสมอ
 
 ### `frontend\.env.local`
 

@@ -1,77 +1,34 @@
-# Backtest Findings
+# Backtest Findings — Exness Standard Demo
 
-Research notes from backtesting the built-in strategies against this account's
-MT5 history (XM Standard — $0 commission, costs via spread + swap). All figures
-are in **R** (risk units); expectancy = R per trade. Re-run `run_backtest.py`
-to refresh — markets change.
+These notes were refreshed against the connected Exness Standard Demo account
+on 2026-06-30. Exness uses the `m` suffix on this account; MetaBot resolves the
+uppercase values stored in `.env` to the broker's case-sensitive names.
 
-> These are **research findings to guide configuration**, not a promise of live
-> returns. Always confirm on a demo account before trading real money.
+> Backtests are research, not a promise of live returns. Re-run them after a
+> broker/account change and validate on demo before enabling additional assets.
 
-## Summary by asset group
+## Current safe baseline
 
-| Group | Verdict | Best setup found |
-|---|---|---|
-| **Gold** | ✅ Tradeable | `crypto_regime` / `crypto_early_stage` on H4 |
-| **Forex** | ✅ Tradeable (selective) | `crypto_early_stage` on **H4** — specific pairs only |
-| **Crypto** | ❌ Avoid | No strategy clears costs (see below) |
-| **Stocks** | ❌ Avoid | No strategy profitable across the basket |
+| Group | Enabled | Symbols | Strategy / timeframe | Evidence |
+|---|---:|---|---|---|
+| Gold | Yes | `XAUUSDm` | `squeeze_breakout` / M30 | +0.182R expectancy, 37 trades |
+| Forex | Yes | `USDJPYm` | `squeeze_breakout` / H1 | +0.216R expectancy, 37 trades |
+| Crypto | No | — | — | BTCUSD `trend` / H1: -0.494R, costs 62.85R |
+| Stocks | No | — | — | AAPL was positive but only 24 trades; sample too small |
 
-## Gold (H4)
+The two enabled results use 3,000 broker-history bars and the Exness live
+spread/swap snapshot. Keep the symbol list narrow until each additional symbol
+has at least 30 trades and positive net expectancy after costs.
 
-Every XAU pair is profitable; `GOLD` itself is strongest. On more history
-(10,000 bars) expectancy compresses (e.g. `crypto_regime` +0.69R at 3k bars →
-+0.14R at 10k) — the larger sample is the more honest number, still positive.
-`crypto_early_stage` edged ahead on 5,000 bars. Re-optimise with `--optimize`.
+## Reproduce and expand
 
-## Forex (H4) — strategy + pair both matter
+```powershell
+cd backend
+.venv\Scripts\python.exe run_backtest.py USDJPYm -t H1 --compare-strategies -b 3000
+.venv\Scripts\python.exe run_backtest.py XAUUSDm -t M30 --compare-strategies -b 3000
+.venv\Scripts\python.exe run_backtest.py --all --optimize -b 10000 --min-trades 30
+```
 
-The shipped default (`ema_macd_rsi` on **H1**) loses on every pair. The edge
-appears with `crypto_early_stage` on **H4**, and only on a subset of pairs —
-JPY crosses and USD/commodity pairs work; EUR/GBP crosses don't.
-
-Per pair, `crypto_early_stage` H4 (5,000 bars):
-
-| Pair | Expectancy | Net R | Trades | Verdict |
-|---|---|---|---|---|
-| USDJPY | +0.59R | +22R | 37 | ✅ |
-| USDCAD | +0.39R | +19R | 48 | ✅ |
-| GBPJPY | +0.20R | +9R | 44 | ✅ |
-| EURJPY | +0.17R | +9R | 50 | ✅ |
-| EURUSD | +0.07R | +5R | 76 | ✅ (thin) |
-| AUDUSD / USDCHF / GBPUSD / NZDUSD / EURGBP | negative | — | — | ❌ |
-
-## Crypto — costs are the wall
-
-Crypto CFDs on XM charge ~**4.2%/night** swap. Held over several H4 bars a
-trend trade pays 100R+ in swap and loses heavily even when the entry (gross R)
-is positive.
-
-The `crypto_scalp` strategy + `CRYPTO_MAX_HOLD_HOURS` time-stop **solve the
-swap problem** — they cut holding to minutes and swap to near-zero:
-
-| BTCUSD M15 | Hold | Swap cost | Net R | Gross R |
-|---|---|---|---|---|
-| `trend` | 18.9h | 96.7R | −89R | +7.4R |
-| `crypto_scalp` | 0.3h | 13.7R | −36R | −22R |
-
-But the scalp's **entry has no edge** (gross still negative), so crypto remains
-unprofitable. Conclusion: don't trade crypto here until an entry with positive
-gross expectancy exists. The scalp + time-stop code is kept (off by default) for
-future work.
-
-## Stocks (H4 & D1)
-
-Tested every strategy across the basket on H4 and D1 — none is profitable
-(0–2 of 12 sample stocks win on any strategy). The handful that show a positive
-number have too few trades (5–16) to trust. Wide CFD spreads (75–388 points)
-and short-term strategies fighting a long-term uptrend are the likely causes.
-
-## How to act on this
-
-1. Trade **Gold**; for **Forex** trade only the ✅ pairs above with
-   `crypto_early_stage` on H4.
-2. Keep **Crypto** and **Stocks** disabled.
-3. Let `run_backtest.py --optimize --bars 10000` pick per-symbol strategies and
-   point the bot at `backtest_best.json` (`SYMBOL_STRATEGIES_FILE`).
-4. Trust results with **30+ trades**; re-check periodically.
+Only set `SYMBOL_STRATEGIES_FILE=backtest_best.json` after reviewing the
+generated mapping. A positive result on one symbol must not be generalized to
+every Forex, metal, stock, or crypto instrument.

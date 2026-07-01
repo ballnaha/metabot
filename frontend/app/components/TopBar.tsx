@@ -32,6 +32,7 @@ const strategyShort: Record<string, string> = {
   trend: "Trend",
   mean_reversion: "MeanRev",
   breakout: "Breakout",
+  forex_trend_pullback: "TrendPullback",
 };
 
 const STRATEGIES: { name: string; label: string; desc: string }[] = [
@@ -43,6 +44,7 @@ const STRATEGIES: { name: string; label: string; desc: string }[] = [
   { name: "trend",              label: "Trend Follow",        desc: "ตามทิศทาง EMA50 + MACD" },
   { name: "mean_reversion",     label: "Mean Reversion",      desc: "สวนกลับเข้าหาค่าเฉลี่ย BB + RSI" },
   { name: "breakout",           label: "Breakout",            desc: "ทะลุ Donchian 20 แท่ง + MACD" },
+  { name: "forex_trend_pullback", label: "Forex Trend Pullback", desc: "Forex H1 คัดจังหวะ — EMA20/50/200 + ADX/DMI + ย่อแล้วรีเคลม EMA20" },
 ];
 
 // 5-star strategies per asset type (from the strategy suitability guide)
@@ -65,6 +67,7 @@ const STRATEGY_GROUPS: Record<string, string[]> = {
   trend:              ["crypto", "gold", "stock", "forex"],
   mean_reversion:     ["crypto", "gold", "stock", "forex"],
   breakout:           ["crypto", "gold", "stock", "forex"],
+  forex_trend_pullback: ["forex"],
 };
 
 export default function TopBar({

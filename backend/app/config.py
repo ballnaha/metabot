@@ -21,7 +21,9 @@ class Settings(BaseSettings):
     mt5_password: str | None = None
     mt5_server: str | None = None
     mt5_path: str | None = None
-    mt5_server_utc_offset: int = 3
+    # Retained for backward-compatible .env loading only. MT5 Python timestamps
+    # are UTC epochs and must not be shifted by the broker's chart timezone.
+    mt5_server_utc_offset: int = 0
 
     @field_validator("mt5_login", mode="before")
     @classmethod
@@ -131,6 +133,7 @@ class Settings(BaseSettings):
     forex_rr: float = 2.0                  # R:R 1:2 มาตรฐาน
     forex_use_ai: bool = False
     forex_auto_trade_interval: int = 300   # 5 นาที — Forex สแกนบ่อยกว่าหุ้น
+    forex_max_hold_hours: float = 4.0      # intraday time-stop; 0 = disabled
 
     # API
     api_host: str = "127.0.0.1"

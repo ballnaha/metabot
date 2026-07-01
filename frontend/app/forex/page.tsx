@@ -100,6 +100,7 @@ type Position = {
   profit: number;
   magic: number;
   contract_size?: number;
+  margin?: number;
 };
 
 
@@ -127,6 +128,10 @@ type ScanResult = {
   symbol: string;
   action: string;
   confidence: number;
+  technical_action?: string;
+  technical_confidence?: number;
+  risk_blocked?: boolean;
+  risk_reason?: string;
   price: number;
   summary: string;
 };
@@ -169,6 +174,12 @@ const actionColor = (action?: string): "success" | "error" | "default" =>
 
 const actionLabel = (action?: string) =>
   action === "BUY" ? "Long" : action === "SELL" ? "Short" : action || "รอ";
+
+const scanLabel = (scan: ScanResult) => scan.risk_blocked
+  ? `SKIP Risk (${actionLabel(scan.technical_action)} ${Math.round((scan.technical_confidence ?? scan.confidence) * 100)}%)`
+  : `${actionLabel(scan.action)} ${Math.round(scan.confidence * 100)}%`;
+const scanColor = (scan?: ScanResult): "success" | "error" | "warning" | "default" =>
+  scan?.risk_blocked ? "warning" : actionColor(scan?.action);
 
 
 const getForexDecimals = (sym: string) => sym.toUpperCase().includes("JPY") ? 3 : 5;
@@ -520,7 +531,7 @@ export default function ForexPage() {
     } finally {
       setScanLoading(false);
     }
-  }, [forexSymbols, settings.default_timeframe, settings.strategy, toastr]);
+  }, [forexSymbols, settings.forex_timeframe, settings.default_timeframe, settings.forex_strategy, settings.strategy, toastr]);
 
   useEffect(() => {
     if (!forexSymbols.length) {
@@ -1021,8 +1032,8 @@ export default function ForexPage() {
                                   <TableCell align="center">
                                     <Chip
                                       size="small"
-                                      color={actionColor(scan?.action)}
-                                      label={scan ? `${actionLabel(scan.action)} ${Math.round(scan.confidence * 100)}%` : "รอสแกน"}
+                                      color={scanColor(scan)}
+                                      label={scan ? scanLabel(scan) : "รอสแกน"}
                                       variant={scan ? "filled" : "outlined"}
                                     />
                                   </TableCell>
@@ -1069,7 +1080,6 @@ export default function ForexPage() {
                           const dec = getForexDecimals(sym);
                           const rowSpread = hasPrice ? Math.abs((tick.ask || 0) - (tick.bid || 0)) : null;
                           const selected = selectedSymbol === sym;
-                          const scanScore = scan ? Math.round(scan.confidence * 100) : null;
                           return (
                             <Box
                               key={sym}
@@ -1114,9 +1124,9 @@ export default function ForexPage() {
                               <Stack spacing={0.5} sx={{ alignItems: "flex-end", flex: "0 0 auto" }}>
                                 <Chip
                                   size="small"
-                                  color={actionColor(scan?.action)}
-                                  label={scanScore !== null ? `${actionLabel(scan?.action)} ${scanScore}%` : scanLoading ? "..." : "—"}
-                                  variant={scanScore !== null ? "filled" : "outlined"}
+                                  color={scanColor(scan)}
+                                  label={scan ? scanLabel(scan) : scanLoading ? "..." : "—"}
+                                  variant={scan ? "filled" : "outlined"}
                                   sx={{ height: 20, borderRadius: 0.75, fontWeight: 800, fontSize: "0.65rem", "& .MuiChip-label": { px: 0.6 } }}
                                 />
                                 <Box
@@ -1197,7 +1207,8 @@ export default function ForexPage() {
                                 : ((p.price_open - p.price_current) / p.price_open) * 100)
                             : 0;
                           const isProfit = p.profit >= 0;
-                          const invested = p.volume * p.price_open * (p.contract_size ?? 100000);
+                          const marginVal = (p.margin != null && p.margin > 0) ? p.margin : null;
+                          const notionalVal = p.volume * p.price_open * (p.contract_size ?? 100000);
                           const isBot = _fBotMagics.has(p.magic);
                           const dec = getForexDecimals(p.symbol);
                           const slPct = p.sl > 0 ? ((p.sl - p.price_open) / p.price_open) * 100 : null;
@@ -1344,7 +1355,7 @@ export default function ForexPage() {
                                     { label: "Lot",      value: fmt(p.volume, 2) },
                                     { label: "ราคาเข้า", value: fmt(p.price_open, dec) },
                                     { label: "ปัจจุบัน", value: fmt(p.price_current, dec) },
-                                    { label: "Notional", value: fmt(invested, 0) },
+                                    { label: marginVal != null ? "Margin" : "Notional", value: fmt(marginVal ?? notionalVal, 2) },
                                   ].map((cell) => (
                                     <Box key={cell.label} sx={{ minWidth: 0 }}>
                                       <Typography variant="caption" sx={{ display: "block", color: "#64748b", lineHeight: 1.2 }}>{cell.label}</Typography>

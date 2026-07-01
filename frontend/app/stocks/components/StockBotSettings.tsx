@@ -22,12 +22,26 @@ import {
   BellRing,
   Filter,
   Layers,
+  RotateCcw,
   Save,
   Settings as SettingsIcon,
   ShieldAlert,
   ShieldCheck,
   X,
 } from "lucide-react";
+
+const STOCK_DEFAULTS: Partial<StockSettings> = {
+  stock_timeframe: "H4",
+  stock_strategy: "trend",
+  stock_atr_sl_mult: 2.0,
+  stock_rr: 3.0,
+  stock_risk_per_trade: 0.005,
+  stock_max_lot: 5.0,
+  max_stock_open_trades: 4,
+  stock_use_ai: false,
+  stock_bot_enabled: false,
+  telegram_enabled: true,
+};
 
 type StrategyInfo = { name: string; description: string };
 
@@ -230,12 +244,27 @@ export default function StockBotSettings({
               </Typography>
             </Box>
           </Stack>
-          <Button
-            variant="text" color="inherit" onClick={onClose}
-            sx={{ minWidth: 38, width: 38, height: 38, p: 0, borderRadius: 2 }}
-          >
-            <X size={18} />
-          </Button>
+          <Stack direction="row" spacing={0.75}>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => patch(STOCK_DEFAULTS)}
+              startIcon={<RotateCcw size={14} />}
+              sx={{
+                height: 34, fontSize: "0.72rem", fontWeight: 700, px: 1.5,
+                borderColor: "rgba(59,130,246,0.3)", color: "#60a5fa",
+                "&:hover": { borderColor: "#3b82f6", bgcolor: "rgba(59,130,246,0.08)" },
+              }}
+            >
+              ค่า Default
+            </Button>
+            <Button
+              variant="text" color="inherit" onClick={onClose}
+              sx={{ minWidth: 38, width: 38, height: 38, p: 0, borderRadius: 2 }}
+            >
+              <X size={18} />
+            </Button>
+          </Stack>
         </Stack>
 
         {/* Body */}
@@ -608,6 +637,29 @@ export default function StockBotSettings({
               <Switch checked={settings.telegram_enabled ?? true} onChange={(e) => patch({ telegram_enabled: e.target.checked })} color="primary" />
             </Box>
 
+            {/* Global Settings link */}
+            <Box
+              component="a"
+              href="/settings"
+              sx={{
+                display: "flex", alignItems: "center", gap: 1,
+                px: 1.5, py: 1.25, borderRadius: 1.5,
+                bgcolor: "rgba(59,130,246,0.06)", border: "1px solid rgba(59,130,246,0.18)",
+                color: "#60a5fa", textDecoration: "none",
+                "&:hover": { bgcolor: "rgba(59,130,246,0.1)", borderColor: "rgba(59,130,246,0.35)" },
+                transition: "all 0.15s",
+              }}
+            >
+              <Box sx={{ fontSize: "1rem", lineHeight: 1, flexShrink: 0 }}>⚙️</Box>
+              <Box>
+                <Typography sx={{ fontSize: "0.78rem", fontWeight: 700, color: "#60a5fa", lineHeight: 1.3 }}>
+                  Position Sizing / Min Lot Guard / Notional Cap
+                </Typography>
+                <Typography sx={{ fontSize: "0.65rem", color: "#475569", lineHeight: 1.4 }}>
+                  ตั้งค่าใน Global Settings — ใช้กับทุก asset group
+                </Typography>
+              </Box>
+            </Box>
           </Stack>
         </Box>
 

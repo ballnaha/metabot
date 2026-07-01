@@ -41,6 +41,16 @@ def max_slots_for_symbol(symbol: str) -> int:
     return max(1, settings.max_open_trades)
 
 
+def risk_limits_for_symbol(symbol: str) -> tuple[float, float]:
+    """Return (risk fraction, max lot) for the symbol's asset group."""
+    group = market_group(symbol)
+    if group == "stock":
+        return settings.stock_risk_per_trade, settings.stock_max_lot
+    if group == "forex":
+        return settings.forex_risk_per_trade, settings.forex_max_lot
+    return settings.risk_per_trade, settings.max_lot
+
+
 def get_group_slot_status(group: str) -> tuple[int, int]:
     """Return (used_slots, max_slots) for a given market group."""
     try:
@@ -152,13 +162,23 @@ class TradeManager:
         # same pending trade can't be executed twice by concurrent callers.
         self._lock = threading.RLock()
 
+    @staticmethod
+    def _mark_risk_blocked(rec: Recommendation) -> None:
+        rec.risk_blocked = True
+        rec.risk_reason = "lot ขั้นต่ำทำให้ความเสี่ยงหรือมูลค่าสัญญาเกินงบที่ตั้งไว้"
+        rec.action = Action.HOLD
+        rec.summary = (rec.summary or "") + f" | SKIP (Risk): {rec.risk_reason}"
+
     def evaluate_technical_signal(
         self,
         symbol: str,
         timeframe: str,
         strategy_name: Optional[str] = None,
     ) -> tuple[IndicatorSnapshot, StrategySignal]:
-        df = mt5_client.get_rates(symbol, timeframe, 200)
+        # 220, not 200: forex_trend_pullback needs len(df) >= 220 and silently
+        # HOLDs (confidence 0.0) on a shorter frame. Extra history is a no-op
+        # for every other strategy, which all index from the tail.
+        df = mt5_client.get_rates(symbol, timeframe, 220)
         snap = indicators.compute(df, symbol, timeframe)
         sig = strategy.apply(df, snap, strategy_name)
         return snap, sig
@@ -200,10 +220,7 @@ class TradeManager:
         # account beyond the configured limit — skip rather than over-trade.
         if not rec.suggested_lot:
             release_trade_slot(symbol)
-            rec.action = Action.HOLD
-            rec.summary = (
-                rec.summary or ""
-            ) + " | ข้าม: lot ขั้นต่ำทำให้มูลค่าเกินงบที่ตั้งไว้"
+            self._mark_risk_blocked(rec)
             return rec, None
 
         # Capture the live mid-price now — this is the moment the signal becomes
@@ -252,11 +269,7 @@ class TradeManager:
         # account beyond MIN_LOT_STAKE_MULTIPLE. Surface that as a non-actionable
         # signal so manual preview/staging paths don't offer an empty trade.
         if rec.action != Action.HOLD and not rec.suggested_lot:
-            rec.action = Action.HOLD
-            rec.summary = (
-                (rec.summary or "")
-                + " | ข้าม: lot ขั้นต่ำทำให้มูลค่าเกินงบที่ตั้งไว้"
-            )
+            self._mark_risk_blocked(rec)
         return rec
 
     async def analyze_and_stage(
@@ -303,6 +316,20 @@ class TradeManager:
     # ------------------------------------------------------------------ #
     # Risk sizing
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _notional_per_lot(info: dict, entry_price: float) -> float:
+        """Estimate gross notional per lot in the account currency.
+
+        MT5 reports tick value in the account currency. Using it avoids mixing
+        quote-currency notionals (for example JPY on USDJPY) with USD equity.
+        """
+        tick_size = float(info.get("trade_tick_size") or 0.0)
+        tick_value = float(info.get("trade_tick_value") or 0.0)
+        if entry_price > 0 and tick_size > 0 and tick_value > 0:
+            return entry_price * tick_value / tick_size
+        contract_size = float(info.get("trade_contract_size") or 1.0)
+        return entry_price * contract_size
+
     def _guard_min_lot_exposure(
         self,
         symbol: str,
@@ -320,8 +347,7 @@ class TradeManager:
         We always log it; if it exceeds ``min_lot_stake_multiple`` we return 0.0
         so the caller skips the trade rather than silently over-exposing.
         """
-        contract_size = info.get("trade_contract_size", 1.0) or 1.0
-        notional = lot * entry_price * contract_size
+        notional = lot * self._notional_per_lot(info, entry_price)
         if target_budget <= 0 or notional <= 0:
             return lot
 
@@ -356,8 +382,7 @@ class TradeManager:
         Returns the (possibly reduced) lot; never raises it.
         """
         cap_mult = settings.max_notional_to_equity
-        contract_size = info.get("trade_contract_size", 1.0) or 1.0
-        denom = entry_price * contract_size
+        denom = self._notional_per_lot(info, entry_price)
         if not cap_mult or cap_mult <= 0 or equity <= 0 or denom <= 0:
             return lot
 
@@ -366,6 +391,12 @@ class TradeManager:
         if lot <= max_lot_by_notional:
             return lot
 
+        if max_lot_by_notional < float(info.get("volume_min") or 0.0):
+            log.warning(
+                "Skip %s: broker minimum lot exceeds %.1f× equity notional cap.",
+                symbol, cap_mult,
+            )
+            return 0.0
         capped = mt5_client.normalize_lot(symbol, max_lot_by_notional)
         log.warning(
             "%s lot %.2f (notional %.2f) exceeds %.1f× equity cap (%.2f) — "
@@ -385,9 +416,7 @@ class TradeManager:
         # Expose contract size so clients can show the position's notional value.
         rec.contract_size = info.get("trade_contract_size", 1.0) or 1.0
 
-        is_stock  = market_group(symbol) == "stock"
-        max_lot   = settings.stock_max_lot      if is_stock else settings.max_lot
-        risk_pct  = settings.stock_risk_per_trade if is_stock else settings.risk_per_trade
+        risk_pct, max_lot = risk_limits_for_symbol(symbol)
 
         # Freqtrade-style equal slots division sizing
         if settings.position_sizing_mode == "equal_slots":
@@ -398,15 +427,16 @@ class TradeManager:
                 stake_amount = acct["equity"] / max_slots
 
             entry_price   = rec.price
-            contract_size = info.get("trade_contract_size", 1.0) or 1.0
+            notional_per_lot = self._notional_per_lot(info, entry_price)
 
-            if entry_price <= 0 or contract_size <= 0:
+            if entry_price <= 0 or notional_per_lot <= 0:
                 return mt5_client.normalize_lot(symbol, info["volume_min"])
 
-            lot = stake_amount / (entry_price * contract_size)
-            lot = min(lot, max_lot)
+            lot = stake_amount / notional_per_lot
+            lot = mt5_client.normalize_lot(symbol, min(lot, max_lot))
             lot = self._cap_notional_to_equity(symbol, info, lot, entry_price, acct["equity"])
-            lot = mt5_client.normalize_lot(symbol, lot)
+            if lot <= 0:
+                return 0.0
             return self._guard_min_lot_exposure(
                 symbol, info, lot, entry_price, stake_amount, "stake"
             )
@@ -424,14 +454,16 @@ class TradeManager:
 
         loss_per_lot = (sl_dist / tick_size) * tick_value
         lot = risk_amount / loss_per_lot if loss_per_lot > 0 else info["volume_min"]
-        lot = min(lot, max_lot)
+        lot = mt5_client.normalize_lot(symbol, min(lot, max_lot))
         lot = self._cap_notional_to_equity(symbol, info, lot, rec.price, acct["equity"])
-        lot = mt5_client.normalize_lot(symbol, lot)
+        if lot <= 0:
+            return 0.0
         # Budget here is the notional the risk amount was meant to control: a min
         # lot that risks far more than risk_amount also over-exposes notionally.
-        target_notional = (risk_amount / loss_per_lot) * rec.price * (
-            info.get("trade_contract_size", 1.0) or 1.0
-        ) if loss_per_lot > 0 else 0.0
+        target_notional = (
+            (risk_amount / loss_per_lot) * self._notional_per_lot(info, rec.price)
+            if loss_per_lot > 0 else 0.0
+        )
         return self._guard_min_lot_exposure(
             symbol, info, lot, rec.price, target_notional, "risk-implied notional"
         )

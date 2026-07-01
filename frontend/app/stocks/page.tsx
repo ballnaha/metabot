@@ -101,6 +101,7 @@ type Position = {
   profit: number;
   magic: number;
   contract_size?: number;
+  margin?: number;
 };
 
 type StrategyInfo = {
@@ -127,6 +128,10 @@ type ScanResult = {
   symbol: string;
   action: string;
   confidence: number;
+  technical_action?: string;
+  technical_confidence?: number;
+  risk_blocked?: boolean;
+  risk_reason?: string;
   price: number;
   summary: string;
 };
@@ -169,6 +174,12 @@ const actionColor = (action?: string): "success" | "error" | "default" =>
 
 const actionLabel = (action?: string) =>
   action === "BUY" ? "Long" : action === "SELL" ? "Short" : action || "รอ";
+
+const scanLabel = (scan: ScanResult) => scan.risk_blocked
+  ? `SKIP Risk (${actionLabel(scan.technical_action)} ${Math.round((scan.technical_confidence ?? scan.confidence) * 100)}%)`
+  : `${actionLabel(scan.action)} ${Math.round(scan.confidence * 100)}%`;
+const scanColor = (scan?: ScanResult): "success" | "error" | "warning" | "default" =>
+  scan?.risk_blocked ? "warning" : actionColor(scan?.action);
 
 const strategyLabel = (name: string) =>
   ({
@@ -522,7 +533,7 @@ export default function StocksPage() {
     } finally {
       setScanLoading(false);
     }
-  }, [stockSymbols, settings.default_timeframe, settings.strategy, toastr]);
+  }, [stockSymbols, settings.stock_timeframe, settings.default_timeframe, settings.stock_strategy, settings.strategy, toastr]);
 
   useEffect(() => {
     if (!stockSymbols.length) {
@@ -1014,8 +1025,8 @@ export default function StocksPage() {
                                 <TableCell align="center">
                                   <Chip
                                     size="small"
-                                    color={actionColor(scan?.action)}
-                                    label={scan ? `${actionLabel(scan.action)} ${Math.round(scan.confidence * 100)}%` : "รอสแกน"}
+                                    color={scanColor(scan)}
+                                    label={scan ? scanLabel(scan) : "รอสแกน"}
                                     variant={scan ? "filled" : "outlined"}
                                   />
                                 </TableCell>
@@ -1060,7 +1071,6 @@ export default function StocksPage() {
                           const hasPrice = tick && !tick.error && (tick.bid > 0 || tick.ask > 0);
                           const rowSpread = hasPrice ? Math.abs((tick.ask || 0) - (tick.bid || 0)) : null;
                           const selected = selectedSymbol === sym;
-                          const scanScore = scan ? Math.round(scan.confidence * 100) : null;
                           return (
                             <Box
                               key={sym}
@@ -1105,9 +1115,9 @@ export default function StocksPage() {
                               <Stack spacing={0.5} sx={{ alignItems: "flex-end", flex: "0 0 auto" }}>
                                 <Chip
                                   size="small"
-                                  color={actionColor(scan?.action)}
-                                  label={scanScore !== null ? `${actionLabel(scan?.action)} ${scanScore}%` : scanLoading ? "..." : "—"}
-                                  variant={scanScore !== null ? "filled" : "outlined"}
+                                  color={scanColor(scan)}
+                                  label={scan ? scanLabel(scan) : scanLoading ? "..." : "—"}
+                                  variant={scan ? "filled" : "outlined"}
                                   sx={{ height: 20, borderRadius: 0.75, fontWeight: 800, fontSize: "0.65rem", "& .MuiChip-label": { px: 0.6 } }}
                                 />
                                 <Box
@@ -1188,7 +1198,8 @@ export default function StocksPage() {
                                 : ((p.price_open - p.price_current) / p.price_open) * 100)
                             : 0;
                           const isProfit = p.profit >= 0;
-                          const invested = p.volume * p.price_open * (p.contract_size ?? 1.0);
+                          const marginVal = (p.margin != null && p.margin > 0) ? p.margin : null;
+                          const notionalVal = p.volume * p.price_open * (p.contract_size ?? 1.0);
                           const isBot = _sBotMagics.has(p.magic);
                           const slPct = p.sl > 0 ? ((p.sl - p.price_open) / p.price_open) * 100 : null;
                           const tpPct = p.tp > 0 ? ((p.tp - p.price_open) / p.price_open) * 100 : null;
@@ -1334,7 +1345,7 @@ export default function StocksPage() {
                                     { label: "Lot",      value: fmt(p.volume, 2) },
                                     { label: "ราคาเข้า", value: fmt(p.price_open, 2) },
                                     { label: "ปัจจุบัน", value: fmt(p.price_current, 2) },
-                                    { label: "เงินทุน",  value: fmt(invested, 2) },
+                                    { label: marginVal != null ? "Margin" : "Notional", value: fmt(marginVal ?? notionalVal, 2) },
                                   ].map((cell) => (
                                     <Box key={cell.label} sx={{ minWidth: 0 }}>
                                       <Typography variant="caption" sx={{ display: "block", color: "#64748b", lineHeight: 1.2 }}>{cell.label}</Typography>

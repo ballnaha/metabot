@@ -243,6 +243,10 @@ export default function SettingsPage() {
     telegram_enabled: true,
     max_daily_loss_pct: 0,
     max_consecutive_losses: 0,
+    position_sizing_mode: "risk_pct",
+    stake_amount: 0,
+    min_lot_stake_multiple: 0,
+    max_notional_to_equity: 0,
   });
 
   // Account profiles (editable, stored in localStorage)
@@ -689,6 +693,83 @@ export default function SettingsPage() {
                 </CardContent>
               </Card>
             </Box>
+
+            {/* Position Sizing — Global */}
+            <Card>
+              <CardContent sx={{ display: "flex", flexDirection: "column", gap: 2.5 }}>
+                <SectionHeader icon={<Sliders size={16} />} title="Position Sizing (Global — ใช้กับทุก asset group)" subtitle="ตั้งค่าวิธีคำนวณขนาด Lot และ guard สำหรับ Forex, Gold, Stock, Crypto" />
+
+                {/* Mode toggle */}
+                <Box>
+                  <Typography variant="caption" sx={{ color: "#94a3b8", fontWeight: 600, display: "block", mb: 1 }}>
+                    วิธีคำนวณขนาด Lot
+                  </Typography>
+                  <Stack direction="row" spacing={1}>
+                    {[
+                      { value: "risk_pct",    label: "% Risk",      desc: "คิดจาก % ของ equity" },
+                      { value: "equal_slots", label: "Fixed Stake", desc: "กำหนดเงินต่อ slot" },
+                    ].map((opt) => {
+                      const active = (form.position_sizing_mode || "risk_pct") === opt.value;
+                      return (
+                        <Box
+                          key={opt.value}
+                          onClick={() => setForm({ ...form, position_sizing_mode: opt.value })}
+                          sx={{
+                            flex: 1, p: 1.25, borderRadius: 1.5, cursor: "pointer", textAlign: "center",
+                            border: active ? "1px solid rgba(59,130,246,0.5)" : "1px solid rgba(255,255,255,0.07)",
+                            bgcolor: active ? "rgba(59,130,246,0.08)" : "rgba(255,255,255,0.01)",
+                            transition: "all 0.15s",
+                            "&:hover": { borderColor: "rgba(59,130,246,0.3)" },
+                          }}
+                        >
+                          <Typography sx={{ fontWeight: 800, fontSize: "0.82rem", color: active ? "#60a5fa" : "#64748b" }}>{opt.label}</Typography>
+                          <Typography sx={{ fontSize: "0.68rem", color: "#475569", mt: 0.25 }}>{opt.desc}</Typography>
+                        </Box>
+                      );
+                    })}
+                  </Stack>
+                </Box>
+
+                {/* Stake amount — only for equal_slots */}
+                {(form.position_sizing_mode || "risk_pct") === "equal_slots" && (
+                  <QuickNumberInput
+                    label="เงินทุนต่อ slot (USD)"
+                    value={form.stake_amount ?? 0}
+                    onChange={(val) => setForm({ ...form, stake_amount: Math.max(0, val) })}
+                    step={1}
+                    min={0}
+                    precision={2}
+                    helperText="0 = แบ่ง equity ÷ จำนวน slot อัตโนมัติ"
+                  />
+                )}
+
+                <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
+                  {[
+                    {
+                      key: "min_lot_stake_multiple",
+                      label: "Min Lot Guard (×)",
+                      helperText: "SKIP trade ถ้า min lot มี notional เกินกี่เท่าของงบ (0 = ปิด)",
+                    },
+                    {
+                      key: "max_notional_to_equity",
+                      label: "Notional Cap (× equity)",
+                      helperText: "SKIP trade ถ้า notional เกินกี่เท่าของ equity (0 = ปิด)",
+                    },
+                  ].map(({ key, label, helperText }) => (
+                    <QuickNumberInput
+                      key={key}
+                      label={label}
+                      value={(form[key] ?? 0) as number}
+                      onChange={(val) => setForm({ ...form, [key]: Math.max(0, val) })}
+                      step={1}
+                      min={0}
+                      precision={0}
+                      helperText={helperText}
+                    />
+                  ))}
+                </Box>
+              </CardContent>
+            </Card>
 
             {/* Save bar */}
             <Box sx={{ display: "flex", justifyContent: "flex-end", pb: 2 }}>

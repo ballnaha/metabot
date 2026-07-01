@@ -47,6 +47,7 @@ import {
   Gauge,
   History,
   RefreshCw,
+  RotateCcw,
   ScrollText,
   Save,
   Settings as SettingsIcon,
@@ -63,6 +64,18 @@ import {
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
+
+const GOLD_DEFAULTS = {
+  gold_timeframe: "H4",
+  gold_strategy: "ema_macd_rsi",
+  atr_sl_mult: 1.5,
+  default_rr: 2.0,
+  max_gold_open_trades: 3,
+  max_lot: 1.0,
+  gold_bot_enabled: true,
+  use_ai: false,
+  telegram_enabled: true,
+};
 
 const STRATEGY_CONDITIONS: Record<string, { label: string; buy: string[]; sell: string[]; note?: string }> = {
   ema_macd_rsi: { label: "EMA + MACD + RSI",
@@ -105,6 +118,7 @@ type Position = {
   profit: number;
   magic: number;
   contract_size?: number;
+  margin?: number;
 };
 
 
@@ -132,6 +146,10 @@ type ScanResult = {
   symbol: string;
   action: string;
   confidence: number;
+  technical_action?: string;
+  technical_confidence?: number;
+  risk_blocked?: boolean;
+  risk_reason?: string;
   price: number;
   summary: string;
 };
@@ -174,6 +192,12 @@ const actionColor = (action?: string): "success" | "error" | "default" =>
 
 const actionLabel = (action?: string) =>
   action === "BUY" ? "Long" : action === "SELL" ? "Short" : action || "รอ";
+
+const scanLabel = (scan: ScanResult) => scan.risk_blocked
+  ? `SKIP Risk (${actionLabel(scan.technical_action)} ${Math.round((scan.technical_confidence ?? scan.confidence) * 100)}%)`
+  : `${actionLabel(scan.action)} ${Math.round(scan.confidence * 100)}%`;
+const scanColor = (scan?: ScanResult): "success" | "error" | "warning" | "default" =>
+  scan?.risk_blocked ? "warning" : actionColor(scan?.action);
 
 const isGoldSymbol = (sym: string) => {
   const s = sym.toUpperCase();
@@ -709,7 +733,6 @@ export default function GoldPage() {
         gold_timeframe: settings.gold_timeframe,
         gold_strategy: settings.gold_strategy,
         auto_trade_interval: settings.auto_trade_interval,
-        risk_per_trade: settings.risk_per_trade,
         max_lot: settings.max_lot,
         gold_magic: settings.gold_magic,
         max_gold_open_trades: settings.max_gold_open_trades,
@@ -1048,8 +1071,8 @@ export default function GoldPage() {
                                   <TableCell align="center">
                                     <Chip
                                       size="small"
-                                      color={actionColor(scan?.action)}
-                                      label={scan ? `${actionLabel(scan.action)} ${Math.round(scan.confidence * 100)}%` : "รอสแกน"}
+                                      color={scanColor(scan)}
+                                      label={scan ? scanLabel(scan) : "รอสแกน"}
                                       variant={scan ? "filled" : "outlined"}
                                     />
                                   </TableCell>
@@ -1089,7 +1112,6 @@ export default function GoldPage() {
                           const hasPrice = tick && !tick.error && (tick.bid > 0 || tick.ask > 0);
                           const rowSpread = hasPrice ? Math.abs((tick!.ask || 0) - (tick!.bid || 0)) : null;
                           const selected = selectedSymbol === sym;
-                          const scanScore = scan ? Math.round(scan.confidence * 100) : null;
                           return (
                             <Box
                               key={sym}
@@ -1134,9 +1156,9 @@ export default function GoldPage() {
                               <Stack spacing={0.5} sx={{ alignItems: "flex-end", flex: "0 0 auto" }}>
                                 <Chip
                                   size="small"
-                                  color={actionColor(scan?.action)}
-                                  label={scanScore !== null ? `${actionLabel(scan?.action)} ${scanScore}%` : scanLoading ? "..." : "—"}
-                                  variant={scanScore !== null ? "filled" : "outlined"}
+                                  color={scanColor(scan)}
+                                  label={scan ? scanLabel(scan) : scanLoading ? "..." : "—"}
+                                  variant={scan ? "filled" : "outlined"}
                                   sx={{ height: 20, borderRadius: 0.75, fontWeight: 800, fontSize: "0.65rem", "& .MuiChip-label": { px: 0.6 } }}
                                 />
                                 <Box
@@ -1198,7 +1220,8 @@ export default function GoldPage() {
                                 : ((p.price_open - p.price_current) / p.price_open) * 100)
                             : 0;
                           const isProfit = p.profit >= 0;
-                          const invested = p.volume * p.price_open * (p.contract_size ?? 1.0);
+                          const marginVal = (p.margin != null && p.margin > 0) ? p.margin : null;
+                          const notionalVal = p.volume * p.price_open * (p.contract_size ?? 1.0);
                           const isBot = _gBotMagics.has(p.magic);
                           const slPct = p.sl > 0 ? ((p.sl - p.price_open) / p.price_open) * 100 : null;
                           const tpPct = p.tp > 0 ? ((p.tp - p.price_open) / p.price_open) * 100 : null;
@@ -1344,7 +1367,7 @@ export default function GoldPage() {
                                     { label: "Lot",      value: fmt(p.volume, 2) },
                                     { label: "ราคาเข้า", value: fmt(p.price_open, 2) },
                                     { label: "ปัจจุบัน", value: fmt(p.price_current, 2) },
-                                    { label: "เงินทุน",  value: fmt(invested, 2) },
+                                    { label: marginVal != null ? "Margin" : "Notional", value: fmt(marginVal ?? notionalVal, 2) },
                                   ].map((cell) => (
                                     <Box key={cell.label} sx={{ minWidth: 0 }}>
                                       <Typography variant="caption" sx={{ display: "block", color: "#64748b", lineHeight: 1.2 }}>{cell.label}</Typography>
@@ -1465,14 +1488,29 @@ export default function GoldPage() {
                 </Typography>
               </Box>
             </Stack>
-            <Button
-              variant="text"
-              color="inherit"
-              onClick={() => setSettingsOpen(false)}
-              sx={{ minWidth: 38, width: 38, height: 38, p: 0, borderRadius: 2 }}
-            >
-              <X size={18} />
-            </Button>
+            <Stack direction="row" spacing={0.75}>
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => patchSettings(GOLD_DEFAULTS)}
+                startIcon={<RotateCcw size={14} />}
+                sx={{
+                  height: 34, fontSize: "0.72rem", fontWeight: 700, px: 1.5,
+                  borderColor: "rgba(251,191,36,0.3)", color: "#fbbf24",
+                  "&:hover": { borderColor: "#fbbf24", bgcolor: "rgba(251,191,36,0.08)" },
+                }}
+              >
+                ค่า Default
+              </Button>
+              <Button
+                variant="text"
+                color="inherit"
+                onClick={() => setSettingsOpen(false)}
+                sx={{ minWidth: 38, width: 38, height: 38, p: 0, borderRadius: 2 }}
+              >
+                <X size={18} />
+              </Button>
+            </Stack>
           </Stack>
 
           {/* Body */}
@@ -1758,26 +1796,6 @@ export default function GoldPage() {
                 </Box>
               </Box>
 
-              {/* Risk + RR */}
-              <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
-                <QuickNumberInput
-                  label="ความเสี่ยงต่อไม้ (% Risk)"
-                  value={Math.round((settings.risk_per_trade || 0.01) * 10000) / 100}
-                  onChange={(val) => patchSettings({ risk_per_trade: Math.max(0, val) / 100 })}
-                  step={0.1}
-                  min={0}
-                  precision={2}
-                />
-                <QuickNumberInput
-                  label="R:R เป้ากำไร (เท่า)"
-                  value={settings.default_rr || 2}
-                  onChange={(val) => patchSettings({ default_rr: val })}
-                  step={0.1}
-                  min={0.1}
-                  precision={1}
-                />
-              </Box>
-
               {/* Strategy + Lot */}
               <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
                 <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5, width: "100%" }}>
@@ -1816,6 +1834,47 @@ export default function GoldPage() {
                   step={0.01}
                   min={0.01}
                   precision={2}
+                />
+              </Box>
+
+              {/* Strategy description */}
+              {(() => {
+                const goldStrats = strategiesForGroup(strategies, "gold");
+                const active = goldStrats.find((s) => s.name === (settings.gold_strategy || "ema_macd_rsi"));
+                if (!active?.description) return null;
+                return (
+                  <Box sx={{ p: 1.5, bgcolor: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.16)", borderRadius: 1 }}>
+                    <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 0.75 }}>
+                      <TrendingUp size={14} color="#fbbf24" />
+                      <Typography variant="caption" sx={{ color: "#fde68a", fontWeight: 650 }}>
+                        {strategyLabel(active.name)}
+                      </Typography>
+                    </Stack>
+                    <Typography variant="caption" sx={{ display: "block", color: "#94a3b8", lineHeight: 1.55 }}>
+                      {active.description}
+                    </Typography>
+                  </Box>
+                );
+              })()}
+
+              {/* ATR SL + R:R */}
+              <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
+                <QuickNumberInput
+                  label="ระยะตัดขาดทุน (ATR ×)"
+                  value={settings.atr_sl_mult || 1.5}
+                  onChange={(val) => patchSettings({ atr_sl_mult: val })}
+                  step={0.1}
+                  min={0.5}
+                  precision={1}
+                  helperText="ทองแนะนำ 1.5–3×"
+                />
+                <QuickNumberInput
+                  label="R:R เป้ากำไร (เท่า)"
+                  value={settings.default_rr || 2}
+                  onChange={(val) => patchSettings({ default_rr: val })}
+                  step={0.1}
+                  min={0.1}
+                  precision={1}
                 />
               </Box>
 
@@ -1938,6 +1997,30 @@ export default function GoldPage() {
                   onChange={(e) => patchSettings({ telegram_enabled: e.target.checked })}
                   color="primary"
                 />
+              </Box>
+
+              {/* Global Settings link */}
+              <Box
+                component="a"
+                href="/settings"
+                sx={{
+                  display: "flex", alignItems: "center", gap: 1,
+                  px: 1.5, py: 1.25, borderRadius: 1.5,
+                  bgcolor: "rgba(59,130,246,0.06)", border: "1px solid rgba(59,130,246,0.18)",
+                  color: "#60a5fa", textDecoration: "none",
+                  "&:hover": { bgcolor: "rgba(59,130,246,0.1)", borderColor: "rgba(59,130,246,0.35)" },
+                  transition: "all 0.15s",
+                }}
+              >
+                <Box sx={{ fontSize: "1rem", lineHeight: 1, flexShrink: 0 }}>⚙️</Box>
+                <Box>
+                  <Typography sx={{ fontSize: "0.78rem", fontWeight: 700, color: "#60a5fa", lineHeight: 1.3 }}>
+                    Position Sizing / Min Lot Guard / Notional Cap
+                  </Typography>
+                  <Typography sx={{ fontSize: "0.65rem", color: "#475569", lineHeight: 1.4 }}>
+                    ตั้งค่าใน Global Settings — ใช้กับทุก asset group
+                  </Typography>
+                </Box>
               </Box>
             </Stack>
           </Box>

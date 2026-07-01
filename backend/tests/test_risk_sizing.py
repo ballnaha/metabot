@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 from app import mt5_client
 from app.models import Action, IndicatorSnapshot, Recommendation
-from app.trader import TradeManager
+from app.trader import TradeManager, risk_limits_for_symbol
 
 
 def _rec(symbol="BTCUSD", price=100.0, action=Action.BUY, stop_loss=98.0):
@@ -123,6 +123,34 @@ class RiskPctSizingTests(unittest.TestCase):
             lot = self.manager.risk_lot("BTCUSD", _rec(price=100.0, stop_loss=100.0))
 
         self.assertEqual(lot, 0.01)
+
+
+class GroupRiskSettingsTests(unittest.TestCase):
+    def setUp(self):
+        self.manager = TradeManager()
+
+    @patch("app.trader.settings")
+    def test_forex_uses_its_own_risk_and_max_lot(self, settings_mock):
+        settings_mock.forex_risk_per_trade = 0.0075
+        settings_mock.forex_max_lot = 0.25
+
+        risk, max_lot = risk_limits_for_symbol("USDJPYm")
+
+        self.assertEqual(risk, 0.0075)
+        self.assertEqual(max_lot, 0.25)
+
+    def test_tick_value_converts_usdjpy_notional_to_account_currency(self):
+        # At USDJPY 150, a 0.001 tick worth ~$0.6667 per lot implies roughly
+        # $100,000 notional per standard lot, not JPY 15,000,000.
+        info = {
+            "trade_tick_size": 0.001,
+            "trade_tick_value": 0.6666666667,
+            "trade_contract_size": 100_000,
+        }
+
+        notional = TradeManager._notional_per_lot(info, 150.0)
+
+        self.assertAlmostEqual(notional, 100_000.0, places=2)
 
     @patch("app.trader.mt5_client.account_info", side_effect=RuntimeError("no terminal"))
     def test_returns_safe_min_when_account_unavailable(self, _acct):

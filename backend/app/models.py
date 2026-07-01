@@ -80,6 +80,9 @@ class Recommendation(BaseModel):
     # decision->fill drift, instead of the much older closed-candle price.
     signal_ref_price: Optional[float] = None
     suggested_lot: Optional[float] = None
+    # Distinguish a technical HOLD from an actionable signal vetoed by sizing.
+    risk_blocked: bool = False
+    risk_reason: str = ""
     # Broker contract size for the symbol, so clients can show the position's
     # notional value (lot × price × contract_size) before confirming.
     contract_size: Optional[float] = None
