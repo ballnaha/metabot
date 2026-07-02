@@ -91,7 +91,14 @@ def _prune_slot_reservations(now: float | None = None) -> None:
 
 def _bot_magic_numbers() -> set[int]:
     """Return the set of magic numbers the bot currently uses."""
-    return {settings.magic, settings.gold_magic, settings.stock_magic, settings.forex_magic}
+    # MT5 reserves magic=0 for manual trades. Some optional groups use 0 until
+    # configured, so including it would accidentally classify every manual
+    # position as a bot position.
+    return {
+        value for value in (
+            settings.magic, settings.gold_magic, settings.stock_magic, settings.forex_magic
+        ) if int(value or 0) != 0
+    }
 
 
 def _is_bot_position(pos: dict) -> bool:

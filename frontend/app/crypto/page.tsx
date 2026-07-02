@@ -9,6 +9,7 @@ import PnLChart from "./components/PnLChart";
 import BotLog from "./components/BotLog";
 import { isCryptoSymbol, isMetalSymbol } from "../lib/symbols";
 import HistoryTable, { type HistoryDeal } from "../components/HistoryTable";
+import TradingSessionStatus from "../components/TradingSessionStatus";
 import {
   Alert,
   Autocomplete,
@@ -378,6 +379,11 @@ export default function CryptoPage() {
     crypto_timeframe: "H4",
     magic: 556677,
     telegram_enabled: true,
+    crypto_partial_close_r: 1.5,
+    crypto_partial_close_pct: 30,
+    crypto_breakeven_r: 1.5,
+    crypto_trailing_stop_r: 2.0,
+    crypto_manage_manual_positions: true,
   });
   const [savingSettings, setSavingSettings] = useState(false);
   const TF_SCAN_DEFAULTS: Record<string, number> = { M15: 3, M30: 5, H1: 15, H4: 30, D1: 60 };
@@ -470,6 +476,11 @@ export default function CryptoPage() {
           crypto_timeframe: data.crypto_timeframe || "H4",
           magic: data.magic ?? 556677,
           telegram_enabled: data.telegram_enabled ?? true,
+          crypto_partial_close_r: data.crypto_partial_close_r ?? 1.5,
+          crypto_partial_close_pct: data.crypto_partial_close_pct ?? 30,
+          crypto_breakeven_r: data.crypto_breakeven_r ?? 1.5,
+          crypto_trailing_stop_r: data.crypto_trailing_stop_r ?? 2.0,
+          crypto_manage_manual_positions: data.crypto_manage_manual_positions ?? true,
         });
       })
       .catch(() => {});
@@ -1141,6 +1152,8 @@ export default function CryptoPage() {
                   </Box>
                 </Stack>
 
+                <TradingSessionStatus market="crypto" strategy={strat} />
+
                 {/* conditions button */}
                 {cond && (
                   <Button
@@ -1341,7 +1354,7 @@ export default function CryptoPage() {
                         size="small"
                         startIcon={<FlaskConical size={14} />}
                         disabled={cryptoSymbols.length === 0}
-                        onClick={() => { setBtSymbol(cryptoSymbols[0] || ""); setBtStrategy(settingsForm.crypto_strategy || ""); setBtTimeframe(settingsForm.crypto_timeframe || "H4"); setBtResult(null); setBtOpen(true); }}
+                        onClick={() => { setBtSymbol(cryptoSymbol || cryptoSymbols[0] || ""); setBtStrategy(settingsForm.crypto_strategy || ""); setBtTimeframe(settingsForm.crypto_timeframe || "H4"); setBtResult(null); setBtOpen(true); }}
                         sx={{ borderColor: "rgba(129,140,248,0.4)", color: "#818cf8", fontSize: "0.72rem", "&:hover": { borderColor: "#818cf8", bgcolor: "rgba(129,140,248,0.06)" }, display: { xs: "none", sm: "inline-flex" } }}
                       >
                         Backtest

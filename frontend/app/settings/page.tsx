@@ -243,6 +243,7 @@ export default function SettingsPage() {
     telegram_enabled: true,
     max_daily_loss_pct: 0,
     max_consecutive_losses: 0,
+    trend_cooldown_bars: 2,
     position_sizing_mode: "risk_pct",
     stake_amount: 0,
     min_lot_stake_multiple: 0,

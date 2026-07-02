@@ -387,7 +387,7 @@ export default function Dashboard() {
           currency={ccy}
           openPl={pl}
           botEnabled={settingsForm.bot_enabled ?? false}
-          strategy={settingsForm.strategy ?? ""}
+          strategy=""
           aiEnabled={settingsForm.use_ai}
         />
 

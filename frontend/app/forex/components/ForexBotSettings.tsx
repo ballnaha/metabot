@@ -46,6 +46,12 @@ const FOREX_DEFAULTS: Partial<ForexSettings> = {
   forex_use_ai: false,
   forex_bot_enabled: false,
   telegram_enabled: true,
+  forex_breakeven_r: 1.0,
+  forex_trailing_stop_r: 1.5,
+  forex_partial_close_r: 1.0,
+  forex_partial_close_pct: 50,
+  forex_manage_manual_positions: true,
+  trend_cooldown_bars: 2,
 };
 
 type StrategyInfo = { name: string; description: string };
@@ -63,6 +69,12 @@ type ForexSettings = {
   forex_use_ai: boolean;
   forex_bot_enabled: boolean;
   telegram_enabled?: boolean;
+  forex_breakeven_r: number;
+  forex_trailing_stop_r: number;
+  forex_partial_close_r: number;
+  forex_partial_close_pct: number;
+  forex_manage_manual_positions: boolean;
+  trend_cooldown_bars: number;
 };
 
 type ForexBotSettingsProps = {
@@ -559,6 +571,31 @@ export default function ForexBotSettings({
                 onChange={(val) => patch({ forex_rr: val })}
                 step={0.1} min={0.5} precision={1}
               />
+            </Box>
+
+            {/* Automatic position management */}
+            <Box sx={{ p: 2, bgcolor: "rgba(16,185,129,0.035)", border: "1px solid rgba(16,185,129,0.14)", borderRadius: 1 }}>
+              <Typography variant="caption" sx={{ color: "#6ee7b7", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", mb: 1.5 }}>
+                จัดการกำไรอัตโนมัติ
+              </Typography>
+              <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
+                <QuickNumberInput label="ปิดบางส่วนเมื่อถึง (R)" value={settings.forex_partial_close_r} onChange={(val) => patch({ forex_partial_close_r: val })} step={0.1} min={0} precision={1} helperText="Forex default: 1R" />
+                <QuickNumberInput label="สัดส่วนที่ปิด (%)" value={settings.forex_partial_close_pct} onChange={(val) => patch({ forex_partial_close_pct: val })} step={5} min={1} max={99} precision={0} helperText="Forex default: 50%" />
+                <QuickNumberInput label="เลื่อน SL ไปทุนเมื่อถึง (R)" value={settings.forex_breakeven_r} onChange={(val) => patch({ forex_breakeven_r: val })} step={0.1} min={0} precision={1} helperText="Forex default: 1R" />
+                <QuickNumberInput label="เริ่ม Trailing Stop เมื่อถึง (R)" value={settings.forex_trailing_stop_r} onChange={(val) => patch({ forex_trailing_stop_r: val })} step={0.1} min={0} precision={1} helperText="Forex default: 1.5R" />
+              </Box>
+              <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mt: 2, px: 1.25, py: 1, bgcolor: "rgba(255,255,255,0.015)", borderRadius: 1 }}>
+                <Box>
+                  <Typography variant="body2" sx={{ fontWeight: 650 }}>รวมออเดอร์ Manual</Typography>
+                  <Typography variant="caption" color="text.secondary">จัดการออเดอร์ที่เปิดมือใน MT5 (Magic Number = 0)</Typography>
+                </Box>
+                <Switch checked={settings.forex_manage_manual_positions ?? true} onChange={(e) => patch({ forex_manage_manual_positions: e.target.checked })} color="success" />
+              </Box>
+              {settings.forex_strategy === "trend" && (
+                <Box sx={{ mt: 2 }}>
+                  <QuickNumberInput label="Trend Follow Cooldown (แท่ง)" value={settings.trend_cooldown_bars ?? 2} onChange={(val) => patch({ trend_cooldown_bars: val })} step={1} min={0} max={20} precision={0} helperText="Default 2 แท่ง · 0 = ปิด" />
+                </Box>
+              )}
             </Box>
 
             {/* Strategy */}

@@ -8,6 +8,7 @@ import BotLog from "../crypto/components/BotLog";
 import PnLChart from "../crypto/components/PnLChart";
 import { isCryptoSymbol, isMetalSymbol, isForexSymbol } from "../lib/symbols";
 import HistoryTable, { type HistoryDeal } from "../components/HistoryTable";
+import TradingSessionStatus from "../components/TradingSessionStatus";
 import ForexBotSettings from "./components/ForexBotSettings";
 import {
   Alert,
@@ -784,6 +785,12 @@ export default function ForexPage() {
         forex_use_ai: settings.forex_use_ai,
         forex_auto_trade_interval: settings.forex_auto_trade_interval,
         telegram_enabled: settings.telegram_enabled,
+        forex_breakeven_r: settings.forex_breakeven_r,
+        forex_trailing_stop_r: settings.forex_trailing_stop_r,
+        forex_partial_close_r: settings.forex_partial_close_r,
+        forex_partial_close_pct: settings.forex_partial_close_pct,
+        forex_manage_manual_positions: settings.forex_manage_manual_positions,
+        trend_cooldown_bars: settings.trend_cooldown_bars,
       };
       await api("settings", {
         method: "POST",
@@ -949,6 +956,7 @@ export default function ForexPage() {
                       <Typography sx={{ fontSize: "0.72rem", fontWeight: 700, color: "#10b981", whiteSpace: "nowrap" }}>ซื้อขายได้ทุก {tradeMins >= 60 ? `${tradeMins / 60} ชม.` : `${tradeMins} นาที`} ({tf})</Typography>
                     </Box>
                   </Stack>
+                  <TradingSessionStatus market="forex" strategy={stratKey} />
                   {cond && (
                     <Button size="small" variant="text" startIcon={<Info size={13} />} onClick={() => setConditionsOpen(true)}
                       sx={{ fontSize: "0.72rem", color: "#475569", px: 1, py: 0.4, minWidth: 0, "&:hover": { color: "#94a3b8", bgcolor: "rgba(255,255,255,0.04)" } }}>
@@ -1052,7 +1060,7 @@ export default function ForexPage() {
                       </IconButton>
                       <Chip size="small" label="5s" color="success" variant="outlined" sx={{ fontSize: 10, height: 20, px: 0, borderColor: "rgba(16,185,129,0.3)", color: "#10b981", bgcolor: "rgba(16,185,129,0.04)", display: { xs: "none", sm: "inline-flex" } }} />
                       <Chip size="small" label={`${forexScanMins}m`} variant="outlined" sx={{ fontSize: 10, height: 20, px: 0, borderColor: "rgba(6,182,212,0.3)", color: "#22d3ee", bgcolor: "rgba(6,182,212,0.04)", display: { xs: "none", sm: "inline-flex" } }} />
-                      <Button variant="outlined" size="small" startIcon={<FlaskConical size={14} />} disabled={forexSymbols.length === 0} onClick={() => { setBtSymbol(forexSymbols[0] || ""); setBtStrategy(settings.forex_strategy || ""); setBtTimeframe(settings.forex_timeframe || "H1"); setBtResult(null); setBtOpen(true); }} sx={{ borderColor: "rgba(34,211,238,0.4)", color: "#22d3ee", fontSize: "0.72rem", "&:hover": { borderColor: "#22d3ee", bgcolor: "rgba(34,211,238,0.06)" }, display: { xs: "none", sm: "inline-flex" } }}>
+                      <Button variant="outlined" size="small" startIcon={<FlaskConical size={14} />} disabled={forexSymbols.length === 0} onClick={() => { setBtSymbol(selectedSymbol || forexSymbols[0] || ""); setBtStrategy(settings.forex_strategy || ""); setBtTimeframe(settings.forex_timeframe || "H1"); setBtResult(null); setBtOpen(true); }} sx={{ borderColor: "rgba(34,211,238,0.4)", color: "#22d3ee", fontSize: "0.72rem", "&:hover": { borderColor: "#22d3ee", bgcolor: "rgba(34,211,238,0.06)" }, display: { xs: "none", sm: "inline-flex" } }}>
                         Backtest
                       </Button>
                     </Stack>

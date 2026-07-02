@@ -9,6 +9,7 @@ import PnLChart from "../crypto/components/PnLChart";
 import StockBotSettings from "./components/StockBotSettings";
 import { isCryptoSymbol, isMetalSymbol, isForexSymbol, isStockSymbol } from "../lib/symbols";
 import HistoryTable, { type HistoryDeal } from "../components/HistoryTable";
+import TradingSessionStatus from "../components/TradingSessionStatus";
 import {
   Alert,
   Box,
@@ -781,6 +782,11 @@ export default function StocksPage() {
         stock_use_ai: settings.stock_use_ai,
         stock_auto_trade_interval: settings.stock_auto_trade_interval,
         telegram_enabled: settings.telegram_enabled,
+        stock_partial_close_r: settings.stock_partial_close_r,
+        stock_partial_close_pct: settings.stock_partial_close_pct,
+        stock_breakeven_r: settings.stock_breakeven_r,
+        stock_trailing_stop_r: settings.stock_trailing_stop_r,
+        stock_manage_manual_positions: settings.stock_manage_manual_positions,
       };
       await api("settings", {
         method: "POST",
@@ -946,6 +952,7 @@ export default function StocksPage() {
                       <Typography sx={{ fontSize: "0.72rem", fontWeight: 700, color: "#10b981", whiteSpace: "nowrap" }}>ซื้อขายได้ทุก {tradeMins >= 60 ? `${tradeMins / 60} ชม.` : `${tradeMins} นาที`} ({tf})</Typography>
                     </Box>
                   </Stack>
+                  <TradingSessionStatus market="stock" strategy={stratKey} />
                   {cond && (
                     <Button size="small" variant="text" startIcon={<Info size={13} />} onClick={() => setConditionsOpen(true)}
                       sx={{ fontSize: "0.72rem", color: "#475569", px: 1, py: 0.4, minWidth: 0, "&:hover": { color: "#94a3b8", bgcolor: "rgba(255,255,255,0.04)" } }}>
@@ -1049,7 +1056,7 @@ export default function StocksPage() {
                       </IconButton>
                       <Chip size="small" label="5s" color="success" variant="outlined" sx={{ fontSize: 10, height: 20, px: 0, borderColor: "rgba(16,185,129,0.3)", color: "#10b981", bgcolor: "rgba(16,185,129,0.04)", display: { xs: "none", sm: "inline-flex" } }} />
                       <Chip size="small" label={`${stockScanMins}m`} variant="outlined" sx={{ fontSize: 10, height: 20, px: 0, borderColor: "rgba(59,130,246,0.3)", color: "#60a5fa", bgcolor: "rgba(59,130,246,0.04)", display: { xs: "none", sm: "inline-flex" } }} />
-                      <Button variant="outlined" size="small" startIcon={<FlaskConical size={14} />} disabled={stockSymbols.length === 0} onClick={() => { setBtSymbol(stockSymbols[0] || ""); setBtStrategy(settings.stock_strategy || ""); setBtTimeframe(settings.stock_timeframe || "H4"); setBtResult(null); setBtOpen(true); }} sx={{ borderColor: "rgba(59,130,246,0.4)", color: "#3b82f6", fontSize: "0.72rem", "&:hover": { borderColor: "#3b82f6", bgcolor: "rgba(59,130,246,0.06)" }, display: { xs: "none", sm: "inline-flex" } }}>
+                      <Button variant="outlined" size="small" startIcon={<FlaskConical size={14} />} disabled={stockSymbols.length === 0} onClick={() => { setBtSymbol(selectedSymbol || stockSymbols[0] || ""); setBtStrategy(settings.stock_strategy || ""); setBtTimeframe(settings.stock_timeframe || "H4"); setBtResult(null); setBtOpen(true); }} sx={{ borderColor: "rgba(59,130,246,0.4)", color: "#3b82f6", fontSize: "0.72rem", "&:hover": { borderColor: "#3b82f6", bgcolor: "rgba(59,130,246,0.06)" }, display: { xs: "none", sm: "inline-flex" } }}>
                         Backtest
                       </Button>
                     </Stack>

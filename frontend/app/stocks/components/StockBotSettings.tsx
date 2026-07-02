@@ -45,6 +45,11 @@ const STOCK_DEFAULTS: Partial<StockSettings> = {
   stock_use_ai: false,
   stock_bot_enabled: false,
   telegram_enabled: true,
+  stock_partial_close_r: 1.0,
+  stock_partial_close_pct: 30,
+  stock_breakeven_r: 1.0,
+  stock_trailing_stop_r: 2.0,
+  stock_manage_manual_positions: true,
 };
 
 type StrategyInfo = { name: string; description: string };
@@ -62,6 +67,11 @@ type StockSettings = {
   stock_use_ai: boolean;
   stock_bot_enabled: boolean;
   telegram_enabled?: boolean;
+  stock_partial_close_r: number;
+  stock_partial_close_pct: number;
+  stock_breakeven_r: number;
+  stock_trailing_stop_r: number;
+  stock_manage_manual_positions: boolean;
 };
 
 type StockBotSettingsProps = {
@@ -560,6 +570,25 @@ export default function StockBotSettings({
                 onChange={(val) => patch({ stock_rr: val })}
                 step={0.1} min={0.5} precision={1}
               />
+            </Box>
+
+            <Box sx={{ p: 2, bgcolor: "rgba(59,130,246,0.035)", border: "1px solid rgba(59,130,246,0.14)", borderRadius: 1 }}>
+              <Typography variant="caption" sx={{ color: "#93c5fd", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", mb: 1.5 }}>
+                จัดการกำไร Stock อัตโนมัติ
+              </Typography>
+              <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
+                <QuickNumberInput label="ปิดบางส่วนเมื่อถึง (R)" value={settings.stock_partial_close_r ?? 1} onChange={(val) => patch({ stock_partial_close_r: val })} step={0.1} min={0} precision={1} helperText="Stock default: 1R" />
+                <QuickNumberInput label="สัดส่วนที่ปิด (%)" value={settings.stock_partial_close_pct ?? 30} onChange={(val) => patch({ stock_partial_close_pct: val })} step={5} min={1} max={99} precision={0} helperText="Stock default: 30%" />
+                <QuickNumberInput label="เลื่อน SL ไปทุนเมื่อถึง (R)" value={settings.stock_breakeven_r ?? 1} onChange={(val) => patch({ stock_breakeven_r: val })} step={0.1} min={0} precision={1} />
+                <QuickNumberInput label="เริ่ม Trailing Stop เมื่อถึง (R)" value={settings.stock_trailing_stop_r ?? 2} onChange={(val) => patch({ stock_trailing_stop_r: val })} step={0.1} min={0} precision={1} />
+              </Box>
+              <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mt: 2, px: 1.25, py: 1, bgcolor: "rgba(255,255,255,0.015)", borderRadius: 1 }}>
+                <Box>
+                  <Typography variant="body2" sx={{ fontWeight: 650 }}>รวมออเดอร์ Manual</Typography>
+                  <Typography variant="caption" color="text.secondary">จัดการเฉพาะออเดอร์ Stock ที่ Magic Number = 0</Typography>
+                </Box>
+                <Switch checked={settings.stock_manage_manual_positions ?? true} onChange={(e) => patch({ stock_manage_manual_positions: e.target.checked })} color="primary" />
+              </Box>
             </Box>
 
             {/* Strategy */}

@@ -6,6 +6,7 @@ import Sidebar, { SIDEBAR_W } from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import { isCryptoSymbol } from "../lib/symbols";
 import HistoryTable, { type HistoryDeal } from "../components/HistoryTable";
+import TradingSessionStatus from "../components/TradingSessionStatus";
 import BotLog from "../crypto/components/BotLog";
 import PnLChart from "../crypto/components/PnLChart";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer } from "recharts";
@@ -79,6 +80,12 @@ const GOLD_DEFAULTS = {
   gold_bot_enabled: true,
   use_ai: false,
   telegram_enabled: true,
+  gold_partial_close_r: 1.0,
+  gold_partial_close_pct: 40,
+  gold_breakeven_r: 1.0,
+  gold_trailing_stop_r: 1.5,
+  gold_manage_manual_positions: true,
+  trend_cooldown_bars: 2,
 };
 
 const STRATEGY_CONDITIONS: Record<string, { label: string; buy: string[]; sell: string[]; note?: string }> = {
@@ -846,6 +853,12 @@ export default function GoldPage() {
         gold_bot_enabled: settings.gold_bot_enabled,
         use_ai: settings.use_ai,
         telegram_enabled: settings.telegram_enabled,
+        gold_partial_close_r: settings.gold_partial_close_r,
+        gold_partial_close_pct: settings.gold_partial_close_pct,
+        gold_breakeven_r: settings.gold_breakeven_r,
+        gold_trailing_stop_r: settings.gold_trailing_stop_r,
+        gold_manage_manual_positions: settings.gold_manage_manual_positions,
+        trend_cooldown_bars: settings.trend_cooldown_bars,
       };
       await api("settings", {
         method: "POST",
@@ -872,9 +885,11 @@ export default function GoldPage() {
 
   const handleDirectChangeStrategy = async (newStrat: string) => {
     try {
+      const recommendedTimeframe = newStrat === "gold_intraday" ? "H1" : settings.gold_timeframe;
       const next = {
         ...settings,
-        gold_strategy: newStrat
+        gold_strategy: newStrat,
+        gold_timeframe: recommendedTimeframe,
       };
       await api("settings", {
         method: "POST",
@@ -882,6 +897,9 @@ export default function GoldPage() {
         body: JSON.stringify(next),
       });
       setSettings(next);
+      if (newStrat === "gold_intraday") {
+        setGoldScanMins(GOLD_TF_DEFAULTS.H1 ?? 30);
+      }
       toastr.success("เปลี่ยนกลยุทธ์สำเร็จ");
     } catch (e: any) {
       toastr.error(`เปลี่ยนกลยุทธ์ไม่สำเร็จ: ${e.message}`);
@@ -1010,6 +1028,7 @@ export default function GoldPage() {
                       <Typography sx={{ fontSize: "0.72rem", fontWeight: 700, color: "#10b981", whiteSpace: "nowrap" }}>ซื้อขายได้ทุก {tradeMins >= 60 ? `${tradeMins / 60} ชม.` : `${tradeMins} นาที`} ({tf})</Typography>
                     </Box>
                   </Stack>
+                  <TradingSessionStatus market="gold" strategy={settings.gold_strategy} />
                   {cond && (
                     <Button size="small" variant="text" startIcon={<Info size={13} />} onClick={() => setConditionsOpen(true)}
                       sx={{ fontSize: "0.72rem", color: "#475569", px: 1, py: 0.4, minWidth: 0, "&:hover": { color: "#94a3b8", bgcolor: "rgba(255,255,255,0.04)" } }}>
@@ -1902,6 +1921,31 @@ export default function GoldPage() {
                 </Box>
               </Box>
 
+              {/* Gold automatic position management */}
+              <Box sx={{ p: 2, bgcolor: "rgba(251,191,36,0.035)", border: "1px solid rgba(251,191,36,0.14)", borderRadius: 1 }}>
+                <Typography variant="caption" sx={{ color: "#fbbf24", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", mb: 1.5 }}>
+                  จัดการกำไร Gold อัตโนมัติ
+                </Typography>
+                <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
+                  <QuickNumberInput label="ปิดบางส่วนเมื่อถึง (R)" value={settings.gold_partial_close_r ?? 1} onChange={(val) => patchSettings({ gold_partial_close_r: val })} step={0.1} min={0} precision={1} helperText="Gold default: 1R" />
+                  <QuickNumberInput label="สัดส่วนที่ปิด (%)" value={settings.gold_partial_close_pct ?? 40} onChange={(val) => patchSettings({ gold_partial_close_pct: val })} step={5} min={1} max={99} precision={0} helperText="Gold default: 40% — ปล่อยส่วนใหญ่ตามเทรนด์" />
+                  <QuickNumberInput label="เลื่อน SL ไปทุนเมื่อถึง (R)" value={settings.gold_breakeven_r ?? 1} onChange={(val) => patchSettings({ gold_breakeven_r: val })} step={0.1} min={0} precision={1} helperText="Gold default: 1R" />
+                  <QuickNumberInput label="เริ่ม Trailing Stop เมื่อถึง (R)" value={settings.gold_trailing_stop_r ?? 1.5} onChange={(val) => patchSettings({ gold_trailing_stop_r: val })} step={0.1} min={0} precision={1} helperText="Gold default: 1.5R" />
+                </Box>
+                <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mt: 2, px: 1.25, py: 1, bgcolor: "rgba(255,255,255,0.015)", borderRadius: 1 }}>
+                  <Box>
+                    <Typography variant="body2" sx={{ fontWeight: 650 }}>รวมออเดอร์ Manual</Typography>
+                    <Typography variant="caption" color="text.secondary">จัดการออเดอร์เปิดมือใน MT5 ที่ Magic Number = 0</Typography>
+                  </Box>
+                  <Switch checked={settings.gold_manage_manual_positions ?? true} onChange={(e) => patchSettings({ gold_manage_manual_positions: e.target.checked })} color="warning" />
+                </Box>
+                {settings.gold_strategy === "trend" && (
+                  <Box sx={{ mt: 2 }}>
+                    <QuickNumberInput label="Trend Follow Cooldown (แท่ง)" value={settings.trend_cooldown_bars ?? 2} onChange={(val) => patchSettings({ trend_cooldown_bars: val })} step={1} min={0} max={20} precision={0} helperText="Default 2 แท่ง · M15 = 30 นาที, H1 = 2 ชั่วโมง" />
+                  </Box>
+                )}
+              </Box>
+
               {/* Strategy + Lot */}
               <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
                 <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5, width: "100%" }}>
@@ -1912,7 +1956,15 @@ export default function GoldPage() {
                     size="small"
                     fullWidth
                     value={settings.gold_strategy || "ema_macd_rsi"}
-                    onChange={(e) => patchSettings({ gold_strategy: e.target.value })}
+                    onChange={(e) => {
+                      const newStrategy = e.target.value;
+                      if (newStrategy === "gold_intraday") {
+                        patchSettings({ gold_strategy: newStrategy, gold_timeframe: "H1" });
+                        setGoldScanMins(GOLD_TF_DEFAULTS.H1 ?? 30);
+                      } else {
+                        patchSettings({ gold_strategy: newStrategy });
+                      }
+                    }}
                     sx={{
                       height: 40,
                       borderRadius: 2,

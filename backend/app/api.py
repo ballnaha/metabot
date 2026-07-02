@@ -319,8 +319,32 @@ class SettingsUpdateRequest(BaseModel):
     max_entry_drift_to_sl: float | None = None
     max_daily_loss_pct: float | None = None
     max_consecutive_losses: int | None = None
+    trend_cooldown_bars: int | None = None
     breakeven_r: float | None = None
     trailing_stop_r: float | None = None
+    partial_close_r: float | None = None
+    partial_close_pct: float | None = None
+    manage_manual_positions: bool | None = None
+    forex_partial_close_r: float | None = None
+    forex_partial_close_pct: float | None = None
+    forex_breakeven_r: float | None = None
+    forex_trailing_stop_r: float | None = None
+    gold_partial_close_r: float | None = None
+    gold_partial_close_pct: float | None = None
+    gold_breakeven_r: float | None = None
+    gold_trailing_stop_r: float | None = None
+    crypto_partial_close_r: float | None = None
+    crypto_partial_close_pct: float | None = None
+    crypto_breakeven_r: float | None = None
+    crypto_trailing_stop_r: float | None = None
+    crypto_manage_manual_positions: bool | None = None
+    stock_partial_close_r: float | None = None
+    stock_partial_close_pct: float | None = None
+    stock_breakeven_r: float | None = None
+    stock_trailing_stop_r: float | None = None
+    stock_manage_manual_positions: bool | None = None
+    forex_manage_manual_positions: bool | None = None
+    gold_manage_manual_positions: bool | None = None
     min_lot_stake_multiple: float | None = None
     max_notional_to_equity: float | None = None
 
@@ -396,8 +420,32 @@ def get_settings_endpoint():
         "max_entry_drift_to_sl": settings.max_entry_drift_to_sl,
         "max_daily_loss_pct": settings.max_daily_loss_pct,
         "max_consecutive_losses": settings.max_consecutive_losses,
+        "trend_cooldown_bars": settings.trend_cooldown_bars,
         "breakeven_r": settings.breakeven_r,
         "trailing_stop_r": settings.trailing_stop_r,
+        "partial_close_r": settings.partial_close_r,
+        "partial_close_pct": settings.partial_close_pct,
+        "manage_manual_positions": settings.manage_manual_positions,
+        "forex_partial_close_r": settings.forex_partial_close_r,
+        "forex_partial_close_pct": settings.forex_partial_close_pct,
+        "forex_breakeven_r": settings.forex_breakeven_r,
+        "forex_trailing_stop_r": settings.forex_trailing_stop_r,
+        "gold_partial_close_r": settings.gold_partial_close_r,
+        "gold_partial_close_pct": settings.gold_partial_close_pct,
+        "gold_breakeven_r": settings.gold_breakeven_r,
+        "gold_trailing_stop_r": settings.gold_trailing_stop_r,
+        "crypto_partial_close_r": settings.crypto_partial_close_r,
+        "crypto_partial_close_pct": settings.crypto_partial_close_pct,
+        "crypto_breakeven_r": settings.crypto_breakeven_r,
+        "crypto_trailing_stop_r": settings.crypto_trailing_stop_r,
+        "crypto_manage_manual_positions": settings.crypto_manage_manual_positions,
+        "stock_partial_close_r": settings.stock_partial_close_r,
+        "stock_partial_close_pct": settings.stock_partial_close_pct,
+        "stock_breakeven_r": settings.stock_breakeven_r,
+        "stock_trailing_stop_r": settings.stock_trailing_stop_r,
+        "stock_manage_manual_positions": settings.stock_manage_manual_positions,
+        "forex_manage_manual_positions": settings.forex_manage_manual_positions,
+        "gold_manage_manual_positions": settings.gold_manage_manual_positions,
         "min_lot_stake_multiple": settings.min_lot_stake_multiple,
         "max_notional_to_equity": settings.max_notional_to_equity,
     }

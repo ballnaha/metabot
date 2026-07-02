@@ -48,10 +48,10 @@ type NavItem = { label: string; icon: React.ReactNode; path: string };
 
 const NAV_ITEMS: NavItem[] = [
   { label: "แดชบอร์ด", icon: <TrendingUp size={18} />, path: "/" },
-  { label: "คริปโต",   icon: <Coins size={18} />,      path: "/crypto" },
   { label: "ทอง",      icon: <Award size={18} />,       path: "/gold" },
-  { label: "หุ้น",     icon: <Globe size={18} />,       path: "/stocks" },
   { label: "Forex",    icon: <BarChart2 size={18} />,   path: "/forex" },
+  { label: "คริปโต",   icon: <Coins size={18} />,      path: "/crypto" },
+  { label: "หุ้น",     icon: <Globe size={18} />,       path: "/stocks" },
 ];
 
 function SideBtn({

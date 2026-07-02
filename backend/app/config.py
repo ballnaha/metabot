@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     # swap (~4%/night on XM) eats the trade. 0 = disabled. Pairs with the
     # crypto_scalp strategy to keep holds intraday.
     crypto_max_hold_hours: float = 0.0
+    crypto_partial_close_r: float = 1.5
+    crypto_partial_close_pct: float = 30.0
+    crypto_breakeven_r: float = 1.5
+    crypto_trailing_stop_r: float = 2.0
+    crypto_manage_manual_positions: bool = True
     # Gold reacts to news intraday; H4 cuts that chop while keeping the trend.
     gold_timeframe: str = "H4"
     gold_strategy: str = "ema_macd_rsi"
@@ -88,8 +93,12 @@ class Settings(BaseSettings):
     max_entry_drift_to_sl: float = 0.75  # reject stale signals after price moves >0.75R from candle close
     max_daily_loss_pct: float = 0.0      # 0 = disabled; 0.05 = pause when daily loss ≥ 5%
     max_consecutive_losses: int = 0      # 0 = disabled; e.g. 3 = pause after 3 losses in a row
+    trend_cooldown_bars: int = 2          # wait N timeframe bars after a trend trade closes; 0 = off
     breakeven_r: float = 1.0             # move SL to entry after 1×SL-dist profit; 0 = off
     trailing_stop_r: float = 0.0         # start trailing after N×SL-dist profit; 0 = off (e.g. 1.5)
+    partial_close_r: float = 1.0          # partially close after N× initial SL distance; 0 = off
+    partial_close_pct: float = 50.0       # percentage of the original position to close
+    manage_manual_positions: bool = True # also manage MT5 manual positions (magic=0)
     position_sizing_mode: str = "risk_pct"
     max_open_trades: int = 5
     max_crypto_open_trades: int = 5
@@ -134,6 +143,28 @@ class Settings(BaseSettings):
     forex_use_ai: bool = False
     forex_auto_trade_interval: int = 300   # 5 นาที — Forex สแกนบ่อยกว่าหุ้น
     forex_max_hold_hours: float = 4.0      # intraday time-stop; 0 = disabled
+    # Forex profit management (R is the original entry-to-SL distance).
+    forex_partial_close_r: float = 1.0
+    forex_partial_close_pct: float = 50.0
+    forex_breakeven_r: float = 1.0
+    forex_trailing_stop_r: float = 1.5
+    forex_manage_manual_positions: bool = True
+
+    # Gold is noisier and trends further: secure a smaller portion at 1R and
+    # leave 60% to reach the 2R target/trailing stop.
+    gold_partial_close_r: float = 1.0
+    gold_partial_close_pct: float = 40.0
+    gold_breakeven_r: float = 1.0
+    gold_trailing_stop_r: float = 1.5
+    gold_manage_manual_positions: bool = True
+
+    # Stock CFDs can gap between sessions, so secure a small portion and leave
+    # most of the position for the larger 3R trend target.
+    stock_partial_close_r: float = 1.0
+    stock_partial_close_pct: float = 30.0
+    stock_breakeven_r: float = 1.0
+    stock_trailing_stop_r: float = 2.0
+    stock_manage_manual_positions: bool = True
 
     # API
     api_host: str = "127.0.0.1"

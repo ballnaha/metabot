@@ -6,6 +6,8 @@ import logging
 import urllib.request
 import json
 import traceback
+import time
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
 from .config import settings
@@ -28,6 +30,100 @@ async def _to_thread(fn, *args, **kwargs):
 
 _worker_task = None
 _monitor_task = None
+_POSITION_STATE_PATH = Path(__file__).resolve().parent.parent / ".position_management_state.json"
+_TREND_COOLDOWN_PATH = Path(__file__).resolve().parent.parent / ".trend_cooldowns.json"
+
+
+def _load_trend_cooldowns() -> dict[str, float]:
+    try:
+        data = json.loads(_TREND_COOLDOWN_PATH.read_text(encoding="utf-8"))
+        now = time.time()
+        return {str(k).upper(): float(v) for k, v in data.items() if float(v) > now}
+    except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError, ValueError):
+        return {}
+
+
+_trend_cooldowns: dict[str, float] = _load_trend_cooldowns()
+
+
+def _save_trend_cooldowns() -> None:
+    temp = _TREND_COOLDOWN_PATH.with_suffix(".tmp")
+    temp.write_text(json.dumps(_trend_cooldowns, indent=2), encoding="utf-8")
+    temp.replace(_TREND_COOLDOWN_PATH)
+
+
+def _timeframe_seconds(timeframe: str) -> int:
+    return {
+        "M1": 60, "M5": 300, "M15": 900, "M30": 1800,
+        "H1": 3600, "H4": 14400, "D1": 86400, "W1": 604800,
+    }.get(timeframe.upper(), 3600)
+
+
+def _start_trend_cooldown(pos: dict) -> None:
+    """Start a persistent cooldown only for positions opened by trend strategy."""
+    if not _is_bot_position(pos) or str(pos.get("comment") or "").lower() != "mb|trend":
+        return
+    bars = max(0, int(settings.trend_cooldown_bars))
+    if bars == 0:
+        return
+    symbol = str(pos.get("symbol") or "").upper()
+    if not symbol:
+        return
+    timeframe = _symbol_timeframe(symbol)
+    _trend_cooldowns[symbol] = time.time() + bars * _timeframe_seconds(timeframe)
+    try:
+        _save_trend_cooldowns()
+    except OSError as e:
+        log.error("Cannot persist trend cooldown: %s", e)
+    log.info("Trend cooldown started for %s: %d %s bars", symbol, bars, timeframe)
+
+
+def _trend_cooldown_remaining(symbol: str) -> float:
+    key = symbol.upper()
+    expires = _trend_cooldowns.get(key, 0.0)
+    remaining = expires - time.time()
+    if expires and remaining <= 0:
+        _trend_cooldowns.pop(key, None)
+        try:
+            _save_trend_cooldowns()
+        except OSError:
+            pass
+        return 0.0
+    return max(0.0, remaining)
+
+
+def _load_position_state() -> dict[str, dict]:
+    try:
+        data = json.loads(_POSITION_STATE_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_position_state(state: dict[str, dict]) -> None:
+    """Persist management markers atomically so a restart cannot partial-close twice."""
+    temp = _POSITION_STATE_PATH.with_suffix(".tmp")
+    temp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp.replace(_POSITION_STATE_PATH)
+
+
+def _is_managed_position(pos: dict) -> bool:
+    """Manage MetaBot trades and, when enabled, trades opened manually in MT5."""
+    group = market_group(pos.get("symbol", ""))
+    manual_setting = f"{group}_manage_manual_positions"
+    manage_manual = bool(getattr(settings, manual_setting, settings.manage_manual_positions))
+    return _is_bot_position(pos) or (
+        manage_manual and int(pos.get("magic") or 0) == 0
+    )
+
+
+def _management_value(pos: dict, name: str) -> float:
+    """Return a market-specific management value, falling back to global."""
+    group = market_group(pos.get("symbol", ""))
+    group_key = f"{group}_{name}"
+    if hasattr(settings, group_key):
+        return float(getattr(settings, group_key))
+    return float(getattr(settings, name))
 
 
 def send_telegram_notification(text: str) -> None:
@@ -232,6 +328,7 @@ async def position_monitor_loop() -> None:
     breakeven_set: set[int] = set()
     peak_prices: dict[int, float] = {}      # ticket → best price seen (max for BUY, min for SELL)
     original_sl_map: dict[int, float] = {}  # ticket → SL price at time of first detection
+    management_state = _load_position_state()
     session_equity_high: float | None = None
     equity_alert_cooldown = 0
     last_summary_date = None
@@ -258,12 +355,45 @@ async def position_monitor_loop() -> None:
                     breakeven_set.discard(ticket)
                     peak_prices.pop(ticket, None)
                     original_sl_map.pop(ticket, None)
+                    _start_trend_cooldown(old)
                     try:
                         await _to_thread(_notify_position_closed, old)
                     except Exception as e:
                         log.error("Close notify error ticket %s: %s", ticket, e)
 
             known_positions = current
+
+            # Capture the immutable initial risk and volume before moving any SL.
+            # Ticket + open time prevents an old persisted marker being applied
+            # if the broker eventually reuses a ticket number.
+            state_changed = False
+            # Keep state for every still-open ticket, even if manual management
+            # is temporarily switched off. Re-enabling it must not partial-close
+            # the same position a second time.
+            open_keys: set[str] = {str(ticket) for ticket in current}
+            for ticket, pos in current.items():
+                if not _is_managed_position(pos):
+                    continue
+                key = str(ticket)
+                opened = int(pos.get("time_utc") or 0)
+                saved = management_state.get(key)
+                if not saved or int(saved.get("time_utc") or 0) != opened:
+                    management_state[key] = {
+                        "time_utc": opened,
+                        "initial_sl": float(pos.get("sl") or 0.0),
+                        "initial_volume": float(pos.get("volume") or 0.0),
+                        "partial_status": "pending",
+                    }
+                    state_changed = True
+            for key in list(management_state):
+                if key not in open_keys:
+                    management_state.pop(key, None)
+                    state_changed = True
+            if state_changed:
+                try:
+                    _save_position_state(management_state)
+                except OSError as e:
+                    log.error("Cannot persist position-management state: %s", e)
 
             # ---- Crypto time-stop -----------------------------------------------
             # Crypto swap on XM is ~4%/night, so force-close bot crypto positions
@@ -316,9 +446,69 @@ async def position_monitor_loop() -> None:
                             log.error("Forex time-stop failed %s #%s: %s", pos["symbol"], ticket, e)
 
             # ---- Breakeven SL management ----------------------------------------
-            if settings.breakeven_r > 0 and current:
+            # Partial close runs first at the configured R threshold. Its state is
+            # persisted before order_send, favouring no duplicate close if the
+            # process is interrupted while MT5 is executing the deal.
+            if current:
                 for ticket, pos in current.items():
-                    if not _is_bot_position(pos) or ticket in breakeven_set:
+                    if not _is_managed_position(pos):
+                        continue
+                    partial_close_r = _management_value(pos, "partial_close_r")
+                    partial_close_pct = _management_value(pos, "partial_close_pct")
+                    if partial_close_r <= 0 or partial_close_pct <= 0:
+                        continue
+                    key = str(ticket)
+                    saved = management_state.get(key) or {}
+                    if saved.get("partial_status") != "pending":
+                        continue
+                    entry = float(pos["price_open"])
+                    initial_sl = float(saved.get("initial_sl") or 0.0)
+                    cur = float(pos["price_current"])
+                    risk = abs(entry - initial_sl)
+                    if risk <= 0:
+                        continue
+                    triggered = (
+                        pos["type"] == "BUY" and cur - entry >= risk * partial_close_r
+                        or pos["type"] == "SELL" and entry - cur >= risk * partial_close_r
+                    )
+                    if not triggered:
+                        continue
+                    saved["partial_status"] = "processing"
+                    try:
+                        _save_position_state(management_state)
+                        initial_volume = float(saved.get("initial_volume") or pos["volume"])
+                        close_volume = initial_volume * min(partial_close_pct, 99.0) / 100.0
+                        res = await _to_thread(mt5_client.close_position, ticket, 20, close_volume)
+                        if res.get("ok"):
+                            saved["partial_status"] = "done"
+                            saved["partial_volume"] = float(res.get("volume") or close_volume)
+                            msg = f"Partial close {partial_close_pct:g}% → {pos['symbol']} #{ticket} at {partial_close_r:g}R"
+                            log.info(msg)
+                            log_store.push("info", "partial_close", msg, {"symbol": pos["symbol"], "ticket": ticket, "volume": saved["partial_volume"]})
+                            await _to_thread(send_telegram_notification, f"💰 *Partial close*\n`{pos['symbol']}` #{ticket}  `{partial_close_pct:g}%` at `{partial_close_r:g}R`")
+                        elif res.get("skipped"):
+                            # 0.01-lot positions commonly cannot be split. Mark it
+                            # handled so the monitor does not retry every 15 seconds.
+                            saved["partial_status"] = "skipped"
+                            log.info("Partial close skipped %s #%s: %s", pos["symbol"], ticket, res.get("comment"))
+                        else:
+                            saved["partial_status"] = "pending"
+                            log.warning("Partial close failed %s #%s: %s", pos["symbol"], ticket, res.get("comment"))
+                    except Exception as e:
+                        saved["partial_status"] = "pending"
+                        log.error("Partial close failed %s #%s: %s", pos["symbol"], ticket, e)
+                    finally:
+                        try:
+                            _save_position_state(management_state)
+                        except OSError as e:
+                            log.error("Cannot persist partial-close state: %s", e)
+
+            if current:
+                for ticket, pos in current.items():
+                    if not _is_managed_position(pos) or ticket in breakeven_set:
+                        continue
+                    breakeven_r = _management_value(pos, "breakeven_r")
+                    if breakeven_r <= 0:
                         continue
                     entry = pos["price_open"]
                     sl = pos.get("sl") or 0.0
@@ -328,9 +518,9 @@ async def position_monitor_loop() -> None:
                         continue  # no SL or already at breakeven
                     sl_dist = abs(entry - sl)
                     triggered = (
-                        pos["type"] == "BUY"  and cur - entry >= sl_dist * settings.breakeven_r and sl < entry
+                        pos["type"] == "BUY"  and cur - entry >= sl_dist * breakeven_r and sl < entry
                         or
-                        pos["type"] == "SELL" and entry - cur >= sl_dist * settings.breakeven_r and sl > entry
+                        pos["type"] == "SELL" and entry - cur >= sl_dist * breakeven_r and sl > entry
                     )
                     if triggered:
                         try:
@@ -351,9 +541,12 @@ async def position_monitor_loop() -> None:
             # ---- End breakeven SL -----------------------------------------------
 
             # ---- Trailing Stop --------------------------------------------------
-            if settings.trailing_stop_r > 0 and current:
+            if current:
                 for ticket, pos in current.items():
-                    if not _is_bot_position(pos):
+                    if not _is_managed_position(pos):
+                        continue
+                    trailing_stop_r = _management_value(pos, "trailing_stop_r")
+                    if trailing_stop_r <= 0:
                         continue
 
                     entry = pos["price_open"]
@@ -362,8 +555,12 @@ async def position_monitor_loop() -> None:
                     cur   = pos["price_current"]
 
                     # Record original SL on first sight
-                    if ticket not in original_sl_map and sl > 0:
-                        original_sl_map[ticket] = sl
+                    if ticket not in original_sl_map:
+                        saved_initial_sl = (management_state.get(str(ticket)) or {}).get("initial_sl")
+                        if saved_initial_sl:
+                            original_sl_map[ticket] = float(saved_initial_sl)
+                        elif sl > 0:
+                            original_sl_map[ticket] = sl
 
                     orig_sl = original_sl_map.get(ticket, 0.0)
                     if sl == 0 or orig_sl == 0:
@@ -384,7 +581,7 @@ async def position_monitor_loop() -> None:
                     try:
                         if pos["type"] == "BUY":
                             profit_dist = peak - entry
-                            if profit_dist < settings.trailing_stop_r * sl_dist:
+                            if profit_dist < trailing_stop_r * sl_dist:
                                 continue  # not yet at trigger point
                             trail_sl = round(peak - sl_dist, 6)
                             if trail_sl > sl:
@@ -397,7 +594,7 @@ async def position_monitor_loop() -> None:
                                     log.debug("Trail SL failed for %s #%d: %s", pos["symbol"], ticket, res.get("comment"))
                         elif pos["type"] == "SELL":
                             profit_dist = entry - peak
-                            if profit_dist < settings.trailing_stop_r * sl_dist:
+                            if profit_dist < trailing_stop_r * sl_dist:
                                 continue
                             trail_sl = round(peak + sl_dist, 6)
                             if trail_sl < sl:
@@ -588,6 +785,13 @@ async def auto_trade_loop() -> None:
                             continue
 
                         # Double entry prevention
+                        if _symbol_strategy(symbol).lower() == "trend":
+                            cooldown_remaining = _trend_cooldown_remaining(symbol)
+                            if cooldown_remaining > 0:
+                                cycle_skipped_dup += 1
+                                log.debug("Trend cooldown %s: %.0fs remaining", symbol, cooldown_remaining)
+                                continue
+
                         ok, reason = can_open_new_trade(symbol)
                         if not ok:
                             cycle_skipped_dup += 1

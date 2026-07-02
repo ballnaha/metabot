@@ -43,6 +43,11 @@ const CRYPTO_DEFAULTS = {
   bot_enabled: true,
   use_ai: false,
   telegram_enabled: true,
+  crypto_partial_close_r: 1.5,
+  crypto_partial_close_pct: 30,
+  crypto_breakeven_r: 1.5,
+  crypto_trailing_stop_r: 2.0,
+  crypto_manage_manual_positions: true,
 };
 
 type StrategyInfo = {
@@ -65,6 +70,11 @@ type BotSettingsForm = {
   use_ai?: boolean;
   bot_enabled: boolean;
   telegram_enabled?: boolean;
+  crypto_partial_close_r: number;
+  crypto_partial_close_pct: number;
+  crypto_breakeven_r: number;
+  crypto_trailing_stop_r: number;
+  crypto_manage_manual_positions: boolean;
 };
 
 type CryptoBotSettingsProps = {
@@ -559,6 +569,25 @@ export default function CryptoBotSettings({
                 <Typography sx={{ fontSize: "0.65rem", color: "#475569", lineHeight: 1.4 }}>
                   ตั้งค่าใน Global Settings — ใช้กับทุก asset group
                 </Typography>
+              </Box>
+            </Box>
+
+            <Box sx={{ p: 2, bgcolor: "rgba(139,92,246,0.035)", border: "1px solid rgba(139,92,246,0.14)", borderRadius: 1 }}>
+              <Typography variant="caption" sx={{ color: "#c4b5fd", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", mb: 1.5 }}>
+                จัดการกำไร Crypto อัตโนมัติ
+              </Typography>
+              <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
+                <QuickNumberInput label="ปิดบางส่วนเมื่อถึง (R)" value={settingsForm.crypto_partial_close_r ?? 1.5} onChange={(val) => patchSettings({ crypto_partial_close_r: val })} step={0.1} min={0} precision={1} helperText="Crypto default: 1.5R" />
+                <QuickNumberInput label="สัดส่วนที่ปิด (%)" value={settingsForm.crypto_partial_close_pct ?? 30} onChange={(val) => patchSettings({ crypto_partial_close_pct: val })} step={5} min={1} max={99} precision={0} helperText="Crypto default: 30%" />
+                <QuickNumberInput label="เลื่อน SL ไปทุนเมื่อถึง (R)" value={settingsForm.crypto_breakeven_r ?? 1.5} onChange={(val) => patchSettings({ crypto_breakeven_r: val })} step={0.1} min={0} precision={1} />
+                <QuickNumberInput label="เริ่ม Trailing Stop เมื่อถึง (R)" value={settingsForm.crypto_trailing_stop_r ?? 2} onChange={(val) => patchSettings({ crypto_trailing_stop_r: val })} step={0.1} min={0} precision={1} />
+              </Box>
+              <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mt: 2, px: 1.25, py: 1, bgcolor: "rgba(255,255,255,0.015)", borderRadius: 1 }}>
+                <Box>
+                  <Typography variant="body2" sx={{ fontWeight: 650 }}>รวมออเดอร์ Manual</Typography>
+                  <Typography variant="caption" color="text.secondary">จัดการเฉพาะออเดอร์ Crypto ที่ Magic Number = 0</Typography>
+                </Box>
+                <Switch checked={settingsForm.crypto_manage_manual_positions ?? true} onChange={(e) => patchSettings({ crypto_manage_manual_positions: e.target.checked })} color="secondary" />
               </Box>
             </Box>
 

@@ -7,6 +7,7 @@ terminal.
 from __future__ import annotations
 
 import threading
+import math
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -465,7 +466,12 @@ def order_send(
     }
 
 
-def close_position(ticket: int, deviation: int = 20) -> Dict[str, Any]:
+def close_position(ticket: int, deviation: int = 20, volume: Optional[float] = None) -> Dict[str, Any]:
+    """Close all or part of an open position.
+
+    A partial close is rejected when broker volume constraints would leave a
+    non-tradeable remainder. This is safer than silently closing the full lot.
+    """
     _require_mt5()
     with _lock:
         pos = mt5.positions_get(ticket=ticket)
@@ -479,10 +485,26 @@ def close_position(ticket: int, deviation: int = 20) -> Dict[str, Any]:
         else:
             order_type = mt5.ORDER_TYPE_BUY
             price = tick.ask
+        close_volume = float(p.volume)
+        if volume is not None:
+            s = mt5.symbol_info(p.symbol)
+            step = float(s.volume_step or 0.01)
+            minimum = float(s.volume_min or step)
+            requested = min(float(volume), float(p.volume))
+            steps = math.floor((requested + step * 1e-9) / step)
+            close_volume = round(steps * step, 10)
+            remainder = round(float(p.volume) - close_volume, 10)
+            if close_volume < minimum or (0 < remainder < minimum):
+                return {
+                    "ok": False,
+                    "skipped": True,
+                    "retcode": None,
+                    "comment": "Position volume is too small for a partial close",
+                }
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
             "symbol": p.symbol,
-            "volume": p.volume,
+            "volume": close_volume,
             "type": order_type,
             "position": p.ticket,
             "price": price,
@@ -496,10 +518,12 @@ def close_position(ticket: int, deviation: int = 20) -> Dict[str, Any]:
     if result is None:
         code, msg = mt5.last_error()
         raise MT5Error(f"close order_send returned None ({code}): {msg}")
+    done_codes = {mt5.TRADE_RETCODE_DONE, getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", -1)}
     return {
-        "ok": result.retcode == mt5.TRADE_RETCODE_DONE,
+        "ok": result.retcode in done_codes,
         "retcode": result.retcode,
         "comment": result.comment,
+        "volume": close_volume,
     }
 
 
