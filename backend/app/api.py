@@ -183,6 +183,9 @@ async def scan(req: ScanRequest):
                 "technical_confidence": rec.indicators.strategy_confidence,
                 "risk_blocked": rec.risk_blocked,
                 "risk_reason": rec.risk_reason,
+                "required_stake_budget": rec.required_stake_budget,
+                "required_equity": rec.required_equity,
+                "risk_budget_currency": rec.risk_budget_currency,
                 "price": rec.price,
                 "summary": rec.summary,
             }

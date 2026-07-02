@@ -423,6 +423,20 @@ class TradeManager:
         # Expose contract size so clients can show the position's notional value.
         rec.contract_size = info.get("trade_contract_size", 1.0) or 1.0
 
+        # Expose the minimum policy budgets implied by the broker minimum lot.
+        min_lot = float(info.get("volume_min") or 0.0)
+        min_lot_notional = min_lot * self._notional_per_lot(info, rec.price)
+        rec.risk_budget_currency = str(acct.get("currency") or "USD")
+        if min_lot_notional > 0:
+            if settings.min_lot_stake_multiple > 0:
+                rec.required_stake_budget = (
+                    min_lot_notional / settings.min_lot_stake_multiple
+                )
+            if settings.max_notional_to_equity > 0:
+                rec.required_equity = (
+                    min_lot_notional / settings.max_notional_to_equity
+                )
+
         risk_pct, max_lot = risk_limits_for_symbol(symbol)
 
         # Freqtrade-style equal slots division sizing

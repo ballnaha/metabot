@@ -161,6 +161,9 @@ type ScanResult = {
   technical_confidence?: number;
   risk_blocked?: boolean;
   risk_reason?: string;
+  required_stake_budget?: number | null;
+  required_equity?: number | null;
+  risk_budget_currency?: string;
   price: number;
   summary: string;
 };
@@ -668,8 +671,30 @@ export default function GoldPage() {
           bars: 220,
         }),
       });
-      setScanResults(data.results || []);
-      if (notify) toastr.success("สแกนสัญญาณทองเรียบร้อย");
+      const results: ScanResult[] = data.results || [];
+      setScanResults(results);
+      if (notify) {
+        const blocked = results.filter((result) => result.risk_blocked);
+        if (blocked.length) {
+          blocked.forEach((result) => {
+            const currency = result.risk_budget_currency || "USD";
+            const minimums = [
+              result.required_stake_budget != null
+                ? `งบต่อไม้ขั้นต่ำ ${currency} ${result.required_stake_budget.toFixed(2)}`
+                : null,
+              result.required_equity != null
+                ? `Equity ขั้นต่ำ ${currency} ${result.required_equity.toFixed(2)}`
+                : null,
+            ].filter(Boolean).join(" · ");
+            toastr.warning(
+              result.symbol + ": SKIP Risk — " + (minimums || result.risk_reason || "ไม่ผ่านเงื่อนไขความเสี่ยง"),
+              7000
+            );
+          });
+        } else {
+          toastr.success("สแกนสัญญาณทองเรียบร้อย");
+        }
+      }
     } catch (e: any) {
       if (notify) toastr.error(`สแกนทองไม่สำเร็จ: ${e.message}`);
     } finally {

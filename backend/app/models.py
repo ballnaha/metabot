@@ -83,6 +83,10 @@ class Recommendation(BaseModel):
     # Distinguish a technical HOLD from an actionable signal vetoed by sizing.
     risk_blocked: bool = False
     risk_reason: str = ""
+    # Minimum sizing thresholds implied by the broker minimum lot and risk guards.
+    required_stake_budget: Optional[float] = None
+    required_equity: Optional[float] = None
+    risk_budget_currency: str = "USD"
     # Broker contract size for the symbol, so clients can show the position's
     # notional value (lot × price × contract_size) before confirming.
     contract_size: Optional[float] = None
